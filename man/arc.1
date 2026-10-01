@@ -1,0 +1,87 @@
+.TH ARC 1 "October 2026" "FreeArc 1.0" "User Commands"
+.SH NAME
+arc \- FreeArc high-compression archive manager
+.SH SYNOPSIS
+.B arc
+\fIcommand\fR [\fIoptions\fR] \fIarchive\fR[\fI.arc\fR] [\fIfiles...\fR]
+.SH DESCRIPTION
+.B arc
+is a modern native C/C++ implementation of the FreeArc archiver. It provides
+high compression ratios through advanced algorithms (LZMA, PPMD, GRZip, Tornado,
+TTA) combined with intelligent preprocessors (REP, DICT, DELTA, BCJ/EXE, MM).
+.SH COMMANDS
+.TP
+.B a
+Add files to archive (default).
+.TP
+.B u
+Update newer files and add new files.
+.TP
+.B f
+Freshen existing files in archive (no new files added).
+.TP
+.B d
+Delete files or patterns from archive.
+.TP
+.B m
+Move files to archive (delete from disk after archiving).
+.TP
+.B l
+Display archive file listing.
+.TP
+.B v
+Display verbose archive file listing with Unix attributes and CRCs.
+.TP
+.B t
+Test archive integrity.
+.TP
+.B e
+Extract files without pathnames.
+.TP
+.B x
+Extract files with pathnames.
+.TP
+.B p
+Extract files to standard output (pipe).
+.TP
+.B s
+Convert an existing archive to a standalone self-extracting executable (SFX).
+.SH OPTIONS
+.TP
+.BI \-m \ METHOD
+Select compression method or level (e.g. \fBstoring\fR, \fBlzma\fR, \fBtor\fR, \fBppmd\fR, \fBgrzip\fR, \fBtta\fR, \fB-m0\fR..\fB-m5\fR, \fB-mx\fR).
+.TP
+.B \-sfx\fR[\fB=\fISTUB\fR]
+Create a standalone self-extracting executable (.sfx or .run).
+.TP
+.B \-s\fR, \fB\-s-
+Create solid archive (default) or non-solid archive.
+.TP
+.B \-r\fR, \fB\-r-
+Recurse subdirectories (default) or disable recursion.
+.TP
+.BI \-p \ PASS
+Encrypt archive data blocks using password.
+.TP
+.BI \-hp \ PASS
+Encrypt archive headers and data using password.
+.TP
+.BI \-ae \ ALG
+Encryption algorithm: \fBaes\fR (default), \fBblowfish\fR, \fBtwofish\fR, or \fBserpent\fR.
+.TP
+.BI \-v SIZE
+Create multi-volume archive (e.g. \fB-v10m\fR, \fB-v1440k\fR).
+.TP
+.BI \-x \ PATTERN
+Exclude files matching pattern (@listfile supported).
+.TP
+.BI \-i \ PATTERN
+Include only files matching pattern (@listfile supported).
+.TP
+.B \-so
+Write extracted files to stdout.
+.TP
+.B \-ep
+Store basenames only (strip directories).
+.SH AUTHOR
+Modern native C/C++ port by seb3773. Original FreeArc format by Bulat Ziganshin.

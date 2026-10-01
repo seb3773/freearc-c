@@ -1,0 +1,3 @@
+Hello ARC world!
+This is a test of the ARC compression format.
+by seb3773

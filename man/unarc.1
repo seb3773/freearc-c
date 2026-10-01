@@ -1,0 +1,57 @@
+.TH UNARC 1 "October 2026" "FreeArc 1.0" "User Commands"
+.SH NAME
+unarc \- FreeArc high-compression archive unpacker
+.SH SYNOPSIS
+.B unarc
+\fIcommand\fR [\fIoptions\fR] \fIarchive\fR[\fI.arc\fR] [\fIfilenames...\fR]
+.SH DESCRIPTION
+.B unarc
+is a lightweight, standalone decompression utility for FreeArc archives (.arc).
+It supports testing, listing, and extracting files created with all FreeArc
+compression algorithms and encryption schemes.
+.SH COMMANDS
+.TP
+.B l
+Display archive file listing.
+.TP
+.B v
+Display verbose archive file listing with file attributes and CRCs.
+.TP
+.B t
+Test archive integrity.
+.TP
+.B e
+Extract files into current directory without pathnames.
+.TP
+.B x
+Extract files with pathnames.
+.TP
+.B p
+Extract files to standard output (pipe).
+.SH OPTIONS
+.TP
+.BI \-dp \ PATH\fR,\ \fB\-d \ PATH
+Set destination directory for extracted files.
+.TP
+.BI \-p \ PASS
+Specify archive password for decryption.
+.TP
+.B \-o+\fR, \fB\-y
+Overwrite existing files without prompting.
+.TP
+.B \-o-\fR, \fB\-n
+Do not overwrite existing files.
+.TP
+.B \-s\fR, \fB\-q
+Silent mode (suppress output except errors).
+.TP
+.BI \-x \ PATTERN
+Exclude files matching pattern (@listfile supported).
+.TP
+.BI \-i \ PATTERN
+Include only files matching pattern (@listfile supported).
+.TP
+.B \-so
+Write extracted file contents to stdout.
+.SH AUTHOR
+Modern native C/C++ port by seb3773. Original FreeArc format by Bulat Ziganshin.
