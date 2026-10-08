@@ -145,9 +145,9 @@ void SetDateTimeAttr(const char* Filename, time_t t)
 */
 
 
-CFILENAME GetExeName (CFILENAME buf, int bufsize)
+FILENAME GetExeName (FILENAME buf, int bufsize)
 {
-  GetModuleFileNameW (NULL, buf, bufsize);
+  GetModuleFileNameA (NULL, buf, bufsize);
   return buf;
 }
 
@@ -263,12 +263,12 @@ int GetProcessorsCount (void)
 void FormatDateTime (char *buf, int bufsize, time_t t)
 {
   struct tm *p;
-  if (t==-1)  t=0;  // Èíà÷å ïîëó÷èì âûëåò :(
+  if (t==-1)  t=0;  // Ð˜Ð½Ð°Ñ‡Ðµ Ð¿Ð¾Ð»ÑƒÑ‡Ð¸Ð¼ Ð²Ñ‹Ð»ÐµÑ‚ :(
   p = localtime(&t);
   strftime( buf, bufsize, "%Y-%m-%d %H:%M:%S", p);
 }
 
-// Ìàêñèìàëüíàÿ äëèíà èìåíè ôàéëà
+// ÐœÐ°ÐºÑÐ¸Ð¼Ð°Ð»ÑŒÐ½Ð°Ñ Ð´Ð»Ð¸Ð½Ð° Ð¸Ð¼ÐµÐ½Ð¸ Ñ„Ð°Ð¹Ð»Ð°
 int long_path_size (void)
 {
   return MY_FILENAME_MAX;
@@ -319,7 +319,7 @@ uint UpdateCRC( void *Addr, uint Size, uint StartCRC)
   return(StartCRC);
 }
 
-// Âû÷èñëèòü CRC áëîêà äàííûõ
+// Ð’Ñ‹Ñ‡Ð¸ÑÐ»Ð¸Ñ‚ÑŒ CRC Ð±Ð»Ð¾ÐºÐ° Ð´Ð°Ð½Ð½Ñ‹Ñ…
 uint CalcCRC( void *Addr, uint Size)
 {
   return UpdateCRC (Addr, Size, INIT_CRC) ^ INIT_CRC;
@@ -327,7 +327,7 @@ uint CalcCRC( void *Addr, uint Size)
 
 
 
-// Îò-xor-èòü äâà áëîêà äàííûõ
+// ÐžÑ‚-xor-Ð¸Ñ‚ÑŒ Ð´Ð²Ð° Ð±Ð»Ð¾ÐºÐ° Ð´Ð°Ð½Ð½Ñ‹Ñ…
 void memxor (char *dest, char *src, uint size)
 {
   if (size) do
@@ -335,7 +335,7 @@ void memxor (char *dest, char *src, uint size)
   while (--size);
 }
 
-// Âåðíóòü èìÿ ôàéëà áåç èìåíè êàòàëîãà
+// Ð’ÐµÑ€Ð½ÑƒÑ‚ÑŒ Ð¸Ð¼Ñ Ñ„Ð°Ð¹Ð»Ð° Ð±ÐµÐ· Ð¸Ð¼ÐµÐ½Ð¸ ÐºÐ°Ñ‚Ð°Ð»Ð¾Ð³Ð°
 FILENAME basename (FILENAME fullname)
 {
   char *basename = fullname;
@@ -364,12 +364,13 @@ FILENAME basename (FILENAME fullname)
 #define addRandomValue(value)    addRandomLong((long) value)
 
 
-/* Map a value that may be 32 or 64 bits depending on the platform to a long */
+/* Map a value that may be 32 or 64 bits depending on the platform */
 #if defined( _MSC_VER ) && ( _MSC_VER >= 1400 )
   #define addRandomHandle( handle ) \
 		  addRandomLong( PtrToUlong( handle ) )
 #else
-  #define addRandomHandle	addRandomValue
+  #define addRandomHandle( handle ) \
+		  addRandomLong( (uintptr_t)(handle) )
 #endif /* 32- vs. 64-bit VC++ */
 
 
@@ -380,7 +381,11 @@ int systemRandomData (char *rand_buf, int rand_size)
 #ifdef FREEARC_WIN
 
 	FILETIME  creationTime, exitTime, kernelTime, userTime;
+#ifdef _WIN64
+	SIZE_T minimumWorkingSetSize, maximumWorkingSetSize;
+#else
 	DWORD minimumWorkingSetSize, maximumWorkingSetSize;
+#endif
 	LARGE_INTEGER performanceCount;
 	MEMORYSTATUS memoryStatus;
 	HANDLE handle;

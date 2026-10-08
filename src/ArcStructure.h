@@ -11,6 +11,7 @@
 
 #include "Environment.h"
 #include "Compression/Compression.h"
+#include "WinCompat.h"
 
 #define aSIGNATURE make4byte(65,114,67,1)  /* ��������� ������� FreeArc: ArC */
 #define MAX_FOOTER_DESCRIPTOR_SIZE 4096    /* ������������ ������ ����������� ����� ������ */

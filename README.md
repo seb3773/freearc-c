@@ -65,7 +65,7 @@ This project fills this 15-year gap by providing a **100% native C/C++ suite** t
 * **Autonomous Linux SFX Engine**:
   * Create standalone `.sfx` or `.run` executables (`arc a -sfx setup.run ...`).
   * Direct archive conversion (`arc s archive.arc installer.run`).
-  * Concatenation support (`cat bin/arc.sfx my.arc > my.run && chmod +x my.run`).
+  * Concatenation support (`cat build/linux/arc.sfx my.arc > my.run && chmod +x my.run`).
 * **Full POSIX Fidelity**:
   * Preserves exact Unix file modes and permissions (`chmod 0755`, etc.).
   * Restores symbolic links (`symlink -> target`) transparently.
@@ -79,11 +79,20 @@ This project fills this 15-year gap by providing a **100% native C/C++ suite** t
 
 ## Generated Binaries
 
+Binaries are organized cleanly by target platform:
+
+### Linux (x86_64) — `./build/linux/`
 | Binary | Size | Description |
 |---|---|---|
-| `bin/arc` | ~427 KB | Full archiver and archive manager (create, update, freshen, delete, move, SFX conversion) |
-| `bin/unarc` | ~197 KB | Standalone unpacker, lister, and integrity tester |
-| `bin/arc.sfx` | ~194 KB | Standalone Linux ELF stub for self-extracting packages (`.sfx` / `.run`) |
+| `build/linux/arc` | ~427 KB | Full archiver and archive manager (create, update, freshen, delete, move, SFX conversion) |
+| `build/linux/unarc` | ~197 KB | Standalone unpacker, lister, and integrity tester |
+| `build/linux/arc.sfx` | ~194 KB | Standalone Linux ELF stub for self-extracting packages (`.sfx` / `.run`) |
+
+### Windows (x86_64) — `./build/win64/`
+| Binary | Size | Description |
+|---|---|---|
+| `build/win64/arc.exe` | ~682 KB | Standalone Windows 64-bit archiver (static MinGW, zero runtime DLL dependencies) |
+| `build/win64/unarc.exe` | ~429 KB | Standalone Windows 64-bit unpacker and integrity tester |
 
 ---
 
@@ -96,11 +105,23 @@ This project fills this 15-year gap by providing a **100% native C/C++ suite** t
 git clone https://github.com/seb3773/freearc-c.git
 cd freearc-c
 
-# Compile production binaries
+# Compile Linux production binaries (into ./build/linux/)
 make
 
-# Run the automated 23-test validation suite
+# Compile Windows 64-bit native binaries (into ./build/win64/)
+make win64
+
+# (Or compile both simultaneously)
+make both
+
+# Run the automated Linux validation suite (23 tests)
 make test
+
+# Run the automated Windows 64-bit validation suite (23 tests under Wine, bit-for-bit exact)
+make test-win64
+
+# Run both test suites
+make test-all
 
 # (Optional) Build standalone Debian .deb package
 make deb
@@ -195,23 +216,26 @@ unarc p backup.arc README.txt | grep "version"
 
 ```
 .
-├── bin/                 # Compiled standalone binaries (arc, unarc, arc.sfx)
+├── build/
+│   ├── linux/           # Linux 64-bit binaries (arc, unarc, arc.sfx)
+│   └── win64/           # Windows 64-bit binaries (arc.exe, unarc.exe)
 ├── build.sh             # Fast multi-mode build script
 ├── build_deb.sh         # Complete build + test + Debian .deb packager
-├── Makefile             # Root Makefile (all, debug, clean, test, deb, install)
+├── Makefile             # Root Makefile (all, win64, both, debug, clean, test, test-win64, deb, install)
 ├── README.md            # Project documentation
 ├── LICENSE              # GPL-2.0 License
 ├── man/                 # Standard roff manual pages (arc.1, unarc.1)
-├── src/ -> unarc/       # Symlink to source directory
-├── unarc/               # Core C++ source files, headers, and codecs
+├── src/                 # Native C/C++ source code, headers, and codecs
 │   ├── arc.cpp          # Archiver CLI & management logic
 │   ├── unarc.cpp        # Unpacker CLI & extraction logic
 │   ├── ArcStructure.h   # FreeArc archive format structures & parser
 │   ├── ArcProcess.h     # High-level archive processing routines
 │   ├── ArcCommand.h     # CLI options parser & dispatcher
+│   ├── WinCompat.h      # Windows 64-bit POSIX compatibility shims
 │   └── Compression/     # Compression codecs (LZMA, PPMD, GRZip, Tornado, TTA, Filters)
 ├── tests/
-│   └── run_tests.sh     # Comprehensive 23-test automated test suite
+│   ├── run_tests.sh       # Comprehensive Linux automated test suite (23 tests)
+│   └── run_tests_win64.sh # Automated Windows 64-bit & cross-platform test suite (23 tests)
 └── tests_files/         # Test artifacts
     ├── corpus/          # Standard test corpus (binaries, text, code, nested dirs)
     └── samples_legacy/  # Legacy FreeArc .arc archives (example.arc, data2.arc)

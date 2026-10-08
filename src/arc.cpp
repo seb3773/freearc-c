@@ -16,6 +16,7 @@
 
 #include "Environment.h"
 #include "Compression/Compression.h"
+#include "WinCompat.h"
 #ifdef stat
 #undef stat
 #endif
@@ -562,12 +563,21 @@ static std::string find_unarc_binary(const char *argv0) {
     size_t slash = s.rfind('/');
     if (slash != std::string::npos) {
       std::string path = s.substr(0, slash + 1) + "unarc";
+#ifdef _WIN32
+      if (access((path + ".exe").c_str(), 0) == 0) return path + ".exe";
+#endif
       if (access(path.c_str(), X_OK) == 0) return path;
     }
   }
-  if (access("bin/unarc", X_OK) == 0) return "bin/unarc";
+#ifdef _WIN32
+  if (access("build/win64/unarc.exe", 0) == 0) return "build/win64/unarc.exe";
+  if (access("../build/win64/unarc.exe", 0) == 0) return "../build/win64/unarc.exe";
+  if (access("./unarc.exe", 0) == 0) return "./unarc.exe";
+#else
+  if (access("build/linux/unarc", X_OK) == 0) return "build/linux/unarc";
+  if (access("../build/linux/unarc", X_OK) == 0) return "../build/linux/unarc";
   if (access("./unarc", X_OK) == 0) return "./unarc";
-  if (access("../bin/unarc", X_OK) == 0) return "../bin/unarc";
+#endif
   return "unarc";
 }
 
@@ -577,6 +587,18 @@ static std::string find_sfx_stub(const char *argv0, const std::string &custom) {
     fprintf(stderr, "WARNING: specified SFX stub '%s' not found, searching defaults...\n", custom.c_str());
   }
   char self_exe[PATH_MAX];
+#ifdef _WIN32
+  DWORD len = GetModuleFileNameA(NULL, self_exe, sizeof(self_exe) - 1);
+  if (len > 0) {
+    self_exe[len] = '\0';
+    std::string s = self_exe;
+    size_t slash = s.find_last_of("\\/");
+    if (slash != std::string::npos) {
+      std::string path = s.substr(0, slash + 1) + "arc.sfx.exe";
+      if (access(path.c_str(), 0) == 0) return path;
+    }
+  }
+#else
   ssize_t len = readlink("/proc/self/exe", self_exe, sizeof(self_exe) - 1);
   if (len > 0) {
     self_exe[len] = '\0';
@@ -587,6 +609,7 @@ static std::string find_sfx_stub(const char *argv0, const std::string &custom) {
       if (access(path.c_str(), R_OK) == 0) return path;
     }
   }
+#endif
   if (argv0) {
     std::string s = argv0;
     size_t slash = s.rfind('/');
@@ -595,9 +618,9 @@ static std::string find_sfx_stub(const char *argv0, const std::string &custom) {
       if (access(path.c_str(), R_OK) == 0) return path;
     }
   }
-  if (access("bin/arc.sfx", R_OK) == 0) return "bin/arc.sfx";
+  if (access("build/linux/arc.sfx", R_OK) == 0) return "build/linux/arc.sfx";
   if (access("./arc.sfx", R_OK) == 0) return "./arc.sfx";
-  if (access("../bin/arc.sfx", R_OK) == 0) return "../bin/arc.sfx";
+  if (access("../build/linux/arc.sfx", R_OK) == 0) return "../build/linux/arc.sfx";
   if (access("/usr/local/lib/freearc/arc.sfx", R_OK) == 0) return "/usr/local/lib/freearc/arc.sfx";
   if (access("/usr/lib/freearc/arc.sfx", R_OK) == 0) return "/usr/lib/freearc/arc.sfx";
   if (access("/usr/local/lib/arc/arc.sfx", R_OK) == 0) return "/usr/local/lib/arc/arc.sfx";
@@ -666,7 +689,24 @@ static void read_listfile(const char *list, std::vector<std::string> &paths) {
 }
 
 static bool same_file(const struct stat &a, const struct stat &b) {
-  return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+  if (a.st_ino != 0 && b.st_ino != 0)
+    return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+  return false;
+}
+
+static bool is_same_file_path(const char *path1, const char *path2) {
+  if (!path1 || !path2) return false;
+#ifdef _WIN32
+  char f1[MAX_PATH], f2[MAX_PATH];
+  if (GetFullPathNameA(path1, MAX_PATH, f1, NULL) && GetFullPathNameA(path2, MAX_PATH, f2, NULL))
+    return _stricmp(f1, f2) == 0;
+  return _stricmp(path1, path2) == 0;
+#else
+  struct stat st1, st2;
+  if (stat(path1, &st1) == 0 && stat(path2, &st2) == 0)
+    return same_file(st1, st2);
+  return strcmp(path1, path2) == 0;
+#endif
 }
 
 static void add_entry(std::vector<FileRec> &files, std::set<std::string> &seen,
@@ -726,7 +766,8 @@ static void walk_path(std::vector<FileRec> &files, std::set<std::string> &seen,
                       const struct stat *skip_arc, int recurse, int ep,
                       const std::vector<std::string> &ex,
                       const std::vector<std::string> &inc,
-                      const std::string &ap) {
+                      const std::string &ap,
+                      const char *skip_arc_path = NULL) {
   struct stat st;
   if (lstat(fspath, &st) != 0) {
     msg("WARNING: skip %s (%s)\n", fspath, strerror(errno));
@@ -734,6 +775,9 @@ static void walk_path(std::vector<FileRec> &files, std::set<std::string> &seen,
   }
   if (skip_arc && S_ISREG(st.st_mode) && same_file(st, *skip_arc))
     return;
+  if (skip_arc_path && S_ISREG(st.st_mode) && is_same_file_path(fspath, skip_arc_path))
+    return;
+#ifndef _WIN32
   if (S_ISLNK(st.st_mode)) {
     char target[PATH_MAX];
     ssize_t len = readlink(fspath, target, sizeof(target) - 1);
@@ -745,6 +789,7 @@ static void walk_path(std::vector<FileRec> &files, std::set<std::string> &seen,
     }
     return;
   }
+#endif
   if (S_ISREG(st.st_mode)) {
     add_entry(files, seen, fspath, stored, st, 0, ep, ex, inc, ap);
     return;
@@ -771,7 +816,7 @@ static void walk_path(std::vector<FileRec> &files, std::set<std::string> &seen,
       continue;
     std::string child_fs = std::string(fspath) + "/" + e->d_name;
     walk_path(files, seen, child_fs.c_str(), join_stored(stored, e->d_name),
-              skip_arc, recurse, ep, ex, inc, ap);
+              skip_arc, recurse, ep, ex, inc, ap, skip_arc_path);
   }
   closedir(d);
 }
@@ -1018,7 +1063,9 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
   out_total_written = out.total_written;
   out.close();
   if (!sfx_stub.empty()) {
+#ifndef _WIN32
     chmod(arcname.c_str(), 0755);
+#endif
   }
   return true;
 }
@@ -1027,21 +1074,40 @@ static void create_dir_recursive(const std::string &path) {
   char buf[PATH_MAX];
   snprintf(buf, sizeof(buf), "%s", path.c_str());
   for (char *p = buf + 1; *p; p++) {
-    if (*p == '/') {
+    if (*p == '/' || *p == '\\') {
+      char save = *p;
       *p = '\0';
+#ifdef _WIN32
+      mkdir(buf);
+#else
       mkdir(buf, 0777);
-      *p = '/';
+#endif
+      *p = save;
     }
   }
+#ifdef _WIN32
+  mkdir(buf);
+#else
   mkdir(buf, 0777);
+#endif
 }
 
 static std::string make_temp_dir() {
+#ifdef _WIN32
+  char tmp_path[MAX_PATH];
+  GetTempPathA(MAX_PATH, tmp_path);
+  char tmp_file[MAX_PATH];
+  GetTempFileNameA(tmp_path, "arc", 0, tmp_file);
+  DeleteFileA(tmp_file);
+  CreateDirectoryA(tmp_file, NULL);
+  return std::string(tmp_file);
+#else
   char tmpl[PATH_MAX];
   snprintf(tmpl, sizeof(tmpl), "/tmp/arc_mod_XXXXXX");
   char *d = mkdtemp(tmpl);
   CHECK(d, (s, "ERROR: can't create temporary directory %s", tmpl));
   return std::string(d);
+#endif
 }
 
 static void remove_dir_recursive(const std::string &path) {
@@ -1301,21 +1367,27 @@ static bool extract_preserved_files(const std::string &arcname, const std::strin
         if (dir.isdir[i]) {
           std::string d = dest_dir + "/" + fn;
           create_dir_recursive(d);
+#ifndef _WIN32
           if (dir.mode[i])
             chmod(d.c_str(), dir.mode[i] & 07777);
+#endif
         } else if (dir.issymlink[i]) {
           std::string f = dest_dir + "/" + fn;
           BuildPathTo((char*)f.c_str());
+#ifndef _WIN32
           unlink(f.c_str());
           symlink(dir.symlink_target[i], f.c_str());
+#endif
         } else if (dir.size[i] == 0) {
           std::string f = dest_dir + "/" + fn;
           BuildPathTo((char*)f.c_str());
           FILE *fp = fopen(f.c_str(), "wb");
           if (fp) fclose(fp);
           SetFileDateTime((char*)f.c_str(), dir.time[i]);
+#ifndef _WIN32
           if (dir.mode[i])
             chmod(f.c_str(), dir.mode[i] & 07777);
+#endif
         }
       }
     }
@@ -1555,7 +1627,7 @@ int main(int argc, char **argv) {
         sfx_dest += ".sfx";
     }
     std::string stub = find_sfx_stub(argv[0], sfx_stub_path);
-    CHECK(!stub.empty(), (s, "ERROR: SFX stub 'arc.sfx' not found. Ensure bin/arc.sfx exists or specify -sfx=<stub>"));
+    CHECK(!stub.empty(), (s, "ERROR: SFX stub 'arc.sfx' not found. Ensure build/linux/arc.sfx exists or specify -sfx=<stub>"));
 
     std::string tmp_dest = sfx_dest + ".tmp_sfx";
     FILE *fout = fopen(tmp_dest.c_str(), "wb");
@@ -1592,7 +1664,7 @@ int main(int argc, char **argv) {
   if (create_sfx || (archive_exists && existing_info.is_sfx)) {
     active_sfx_stub = find_sfx_stub(argv[0], sfx_stub_path);
     CHECK(!active_sfx_stub.empty(),
-          (s, "ERROR: SFX stub 'arc.sfx' not found. Ensure bin/arc.sfx exists or specify -sfx=<stub>"));
+          (s, "ERROR: SFX stub 'arc.sfx' not found. Ensure build/linux/arc.sfx exists or specify -sfx=<stub>"));
   }
 
   if (cmd == 'd') {
@@ -1688,7 +1760,7 @@ int main(int argc, char **argv) {
       const char *path = inputs[i].c_str();
       std::string stored = normalize_stored(path);
       if (stored.empty()) continue;
-      walk_path(disk_files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix);
+      walk_path(disk_files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
     }
     std::map<std::string, ExistingFile> arc_map;
     for (size_t i = 0; i < existing_info.files.size(); i++) {
@@ -1782,7 +1854,7 @@ int main(int argc, char **argv) {
       const char *path = inputs[i].c_str();
       std::string stored = normalize_stored(path);
       if (stored.empty()) continue;
-      walk_path(disk_files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix);
+      walk_path(disk_files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
     }
     std::map<std::string, ExistingFile> arc_map;
     for (size_t i = 0; i < existing_info.files.size(); i++) {
@@ -1881,7 +1953,7 @@ int main(int argc, char **argv) {
       const char *path = inputs[i].c_str();
       std::string stored = normalize_stored(path);
       if (stored.empty()) continue;
-      walk_path(disk_files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix);
+      walk_path(disk_files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
     }
     std::set<std::string> disk_set;
     for (size_t i = 0; i < disk_files.size(); i++) {
@@ -1962,7 +2034,7 @@ int main(int argc, char **argv) {
       msg("WARNING: skip %s\n", path);
       continue;
     }
-    walk_path(files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix);
+    walk_path(files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
   }
   CHECK(!files.empty(), (s, "ERROR: no files to archive"));
 

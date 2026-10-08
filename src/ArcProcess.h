@@ -76,14 +76,18 @@ void PROCESS::outfile_open (PASS pass)
         if (cmd->cmd!='e') {
           BuildPathTo (outfile.filename);
           create_dir (outfile.filename);
+#ifndef _WIN32
           if (dir->mode[curfile])
             chmod (outfile.filename, dir->mode[curfile] & 07777);
+#endif
         }
       } else if (dir->issymlink[curfile]) {
         if (cmd->cmd!='e') {
           BuildPathTo (outfile.filename);
+#ifndef _WIN32
           unlink (outfile.filename);
           symlink (dir->symlink_target[curfile], outfile.filename);
+#endif
         }
       } else {
         if (outfile.exists()) {
@@ -137,8 +141,10 @@ void PROCESS::outfile_close()
     } else if (cmd->cmd!='t' && !dir->isdir[curfile] && !dir->issymlink[curfile]) {
       outfile.close();
       outfile.SetFileDateTime (dir->time[curfile]);
+#ifndef _WIN32
       if (dir->mode[curfile])
         chmod (outfile.filename, dir->mode[curfile] & 07777);
+#endif
     }
   }
   included = FALSE;

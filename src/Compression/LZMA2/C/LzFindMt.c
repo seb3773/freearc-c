@@ -161,7 +161,7 @@ static void GetHeadsHt4(const Byte *p, UInt32 pos, UInt32 *hash, UInt32 hashMask
   {
     const UInt32 value = (*(UInt32*)p * 1234567891) >> shiftBits;
     p++;
-    *heads++ = (UInt32) &(hash[value*cutValue]);   // First entry in hash table to check      ////64-bit!
+    *heads++ = (UInt32)(uintptr_t) &(hash[value*cutValue]);   // First entry in hash table to check      ////64-bit!
   }
 }
 

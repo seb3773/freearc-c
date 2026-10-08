@@ -10,12 +10,12 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-ARC="$ROOT_DIR/bin/arc"
-UNARC="$ROOT_DIR/bin/unarc"
-SFX_STUB="$ROOT_DIR/bin/arc.sfx"
+ARC="$ROOT_DIR/build/linux/arc"
+UNARC="$ROOT_DIR/build/linux/unarc"
+SFX_STUB="$ROOT_DIR/build/linux/arc.sfx"
 
 if [ ! -x "$ARC" ] || [ ! -x "$UNARC" ]; then
-    echo "ERROR: Binaries not found in $ROOT_DIR/bin. Run 'make' first."
+    echo "ERROR: Binaries not found in $ROOT_DIR/build/linux. Run 'make' first."
     exit 1
 fi
 

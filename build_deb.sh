@@ -7,7 +7,7 @@ VERSION="1.0-1"
 ARCH="amd64"
 DEB_NAME="freearc_${VERSION}_${ARCH}.deb"
 
-echo "=== Building FreeArc Native Suite from source ==="
+echo "=== Building FreeArc Native from source ==="
 cd "${SCRIPT_DIR}"
 make clean
 make -j$(nproc) all
@@ -25,13 +25,13 @@ mkdir -p "${PKG_DIR}/usr/share/doc/freearc"
 mkdir -p "${PKG_DIR}/DEBIAN"
 
 # Install binaries (already fully stripped and optimized during build)
-cp -f "${SCRIPT_DIR}/bin/arc" "${PKG_DIR}/usr/bin/arc"
+cp -f "${SCRIPT_DIR}/build/linux/arc" "${PKG_DIR}/usr/bin/arc"
 chmod 755 "${PKG_DIR}/usr/bin/arc"
 
-cp -f "${SCRIPT_DIR}/bin/unarc" "${PKG_DIR}/usr/bin/unarc"
+cp -f "${SCRIPT_DIR}/build/linux/unarc" "${PKG_DIR}/usr/bin/unarc"
 chmod 755 "${PKG_DIR}/usr/bin/unarc"
 
-cp -f "${SCRIPT_DIR}/bin/arc.sfx" "${PKG_DIR}/usr/lib/freearc/arc.sfx"
+cp -f "${SCRIPT_DIR}/build/linux/arc.sfx" "${PKG_DIR}/usr/lib/freearc/arc.sfx"
 chmod 755 "${PKG_DIR}/usr/lib/freearc/arc.sfx"
 
 # Symlink compatibility for /usr/lib/arc/arc.sfx
@@ -75,7 +75,6 @@ Description: Modern native C/C++ archiver, unpacker, and SFX engine
   - Smart preprocessors: REP, DICT, DELTA, BCJ/EXE, MM
   - Strong encryption: AES-128/256, Blowfish, Twofish, Serpent
   - Native POSIX permissions, symlinks, directory traversal, and Unix pipes.
- Packaged for Trinity Desktop Environment (TDE) / TdeZip companion tools.
 CTRL_EOF
 
 # Build DEB

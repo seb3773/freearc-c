@@ -165,18 +165,14 @@ COMMAND::COMMAND (int argc, char *argv[])
 #if defined(FREEARC_WIN) && !defined(FREEARC_LIBRARY)
   // Instead of those ANSI-codepage encoded argv[] strings provide true UTF-8 data!
   WCHAR **argv_w = CommandLineToArgvW (GetCommandLineW(), &argc);
-  argv_w[0] = (WCHAR*) malloc (MY_FILENAME_MAX * 4);
-  GetExeName (argv_w[0], MY_FILENAME_MAX * 2);
-
   argv = (char**) malloc ((argc+1) * sizeof(*argv));
   for (int i=0; i<argc; i++)
   {
-    argv[i] = (char*) malloc (_tcslen (argv_w[i]) * 4 + 1);
+    argv[i] = (char*) malloc (wcslen (argv_w[i]) * 4 + 1);
     utf16_to_utf8 (argv_w[i], argv[i]);
     argv[i] = (char*) realloc (argv[i], strlen(argv[i]) + 1);
   }
   argv[argc] = NULL;
-  free (argv_w[0]);
 #endif
 // Register external compressors using arc.ini in the same dir as argv[0]
   RegisterExternalCompressors(argv[0]);

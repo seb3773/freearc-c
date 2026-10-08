@@ -593,8 +593,9 @@ FARPROC LoadFromDLL (char *funcname)
     GetModuleFileNameW (NULL, path, MY_FILENAME_MAX);
 
     // Replace basename part with "facompress.dll"
-    wchar_t *basename = _tcsrchr (path,L'\\')+1;
-    _tcscpy (basename, L"facompress.dll");
+    wchar_t *basename = wcsrchr (path, L'\\');
+    if (basename)
+      wcscpy (basename + 1, L"facompress.dll");
 
     // Load facompress.dll from the same directory as executable
     dll = LoadLibraryW(path);

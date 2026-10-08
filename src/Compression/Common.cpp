@@ -5,7 +5,7 @@
 // Used in 4x4 only: read entire input buffer before compression begins, allocate output buffer large enough to hold entire compressed output
 int compress_all_at_once = 0;
 
-// Для обработки ошибок во вложенных процедурах - longjmp сигнализирует процедуре верхнего уровня о произошедшей ошибке
+// Р”Р»СЏ РѕР±СЂР°Р±РѕС‚РєРё РѕС€РёР±РѕРє РІРѕ РІР»РѕР¶РµРЅРЅС‹С… РїСЂРѕС†РµРґСѓСЂР°С… - longjmp СЃРёРіРЅР°Р»РёР·РёСЂСѓРµС‚ РїСЂРѕС†РµРґСѓСЂРµ РІРµСЂС…РЅРµРіРѕ СѓСЂРѕРІРЅСЏ Рѕ РїСЂРѕРёР·РѕС€РµРґС€РµР№ РѕС€РёР±РєРµ
 int jmpready = FALSE;
 jmp_buf jumper;
 
@@ -114,19 +114,19 @@ void BigFree(void *address) throw()
 
 
 // ****************************************************************************
-// Функции парсинга и арифметики **********************************************
+// Р¤СѓРЅРєС†РёРё РїР°СЂСЃРёРЅРіР° Рё Р°СЂРёС„РјРµС‚РёРєРё **********************************************
 // ****************************************************************************
 
-// Копирует строчку from в to, но не более len символов
+// РљРѕРїРёСЂСѓРµС‚ СЃС‚СЂРѕС‡РєСѓ from РІ to, РЅРѕ РЅРµ Р±РѕР»РµРµ len СЃРёРјРІРѕР»РѕРІ
 void strncopy( char *to, char *from, int len ) {
   for (int i = len; --i && *from; )     *to++ = *from++;
   *to = '\0';
 }
 
-// Разбить строку str на подстроки, разделённые символом splitter.
-// Результат - в строке str splitter заменяется на '\0'
-//   и массив result заполняется ссылками на выделенные в str подстроки + NULL (аналогично argv)
-// Возвращает число найденных подстрок
+// Р Р°Р·Р±РёС‚СЊ СЃС‚СЂРѕРєСѓ str РЅР° РїРѕРґСЃС‚СЂРѕРєРё, СЂР°Р·РґРµР»С‘РЅРЅС‹Рµ СЃРёРјРІРѕР»РѕРј splitter.
+// Р РµР·СѓР»СЊС‚Р°С‚ - РІ СЃС‚СЂРѕРєРµ str splitter Р·Р°РјРµРЅСЏРµС‚СЃСЏ РЅР° '\0'
+//   Рё РјР°СЃСЃРёРІ result Р·Р°РїРѕР»РЅСЏРµС‚СЃСЏ СЃСЃС‹Р»РєР°РјРё РЅР° РІС‹РґРµР»РµРЅРЅС‹Рµ РІ str РїРѕРґСЃС‚СЂРѕРєРё + NULL (Р°РЅР°Р»РѕРіРёС‡РЅРѕ argv)
+// Р’РѕР·РІСЂР°С‰Р°РµС‚ С‡РёСЃР»Рѕ РЅР°Р№РґРµРЅРЅС‹С… РїРѕРґСЃС‚СЂРѕРє
 int split (char *str, char splitter, char **result_base, int result_size)
 {
   char **result      = result_base;
@@ -144,8 +144,8 @@ int split (char *str, char splitter, char **result_base, int result_size)
   return result-result_base;
 }
 
-// Заменяет в строке original все вхождения from на to,
-// возвращая вновь выделенную new строку и освобождая оригинал, если была хоть одна замена
+// Р—Р°РјРµРЅСЏРµС‚ РІ СЃС‚СЂРѕРєРµ original РІСЃРµ РІС…РѕР¶РґРµРЅРёСЏ from РЅР° to,
+// РІРѕР·РІСЂР°С‰Р°СЏ РІРЅРѕРІСЊ РІС‹РґРµР»РµРЅРЅСѓСЋ new СЃС‚СЂРѕРєСѓ Рё РѕСЃРІРѕР±РѕР¶РґР°СЏ РѕСЂРёРіРёРЅР°Р», РµСЃР»Рё Р±С‹Р»Р° С…РѕС‚СЊ РѕРґРЅР° Р·Р°РјРµРЅР°
 char *subst (char *original, char *from, char *to)
 {
   while(1) {
@@ -160,7 +160,7 @@ char *subst (char *original, char *from, char *to)
   }
 }
 
-// Пропускает пробелы в начале строки и убирает их в конце, модифицируя строку
+// РџСЂРѕРїСѓСЃРєР°РµС‚ РїСЂРѕР±РµР»С‹ РІ РЅР°С‡Р°Р»Рµ СЃС‚СЂРѕРєРё Рё СѓР±РёСЂР°РµС‚ РёС… РІ РєРѕРЅС†Рµ, РјРѕРґРёС„РёС†РёСЂСѓСЏ СЃС‚СЂРѕРєСѓ
 char *trim_spaces(char *s)
 {
   while(isspace(*s)) s++;
@@ -300,18 +300,17 @@ char *oem_to_utf8 (const char  *oem, char *utf8)
 //*****************************************************************************
 
 // Directory for temporary files
-static CFILENAME TempDir = 0;
+static char *TempDir = 0;
 
 // Set temporary files directory
 void SetTempDir (const CFILENAME dir)
 {
-  if (dir && TempDir && _tcscmp(dir,TempDir)==0)
+  if (dir && TempDir && strcmp(dir,TempDir)==0)
     return;  // the same string
-  FreeAndNil(TempDir);
+  if (TempDir) { free(TempDir); TempDir = NULL; }
   if (dir && *dir)
   {
-    TempDir = (CFILENAME) malloc_msg ((_tcslen(dir)+1) * sizeof(*dir));
-    _tcscpy (TempDir, dir);
+    TempDir = strdup(dir);
   }
 }
 
@@ -321,9 +320,9 @@ CFILENAME GetTempDir (void)
   if (!TempDir)
   {
 #ifdef FREEARC_WIN
-    TempDir = (CFILENAME) malloc_msg();
-    GetTempPathW(MY_FILENAME_MAX, TempDir);
-    realloc (TempDir, (_tcslen(TempDir)+1) * sizeof(*TempDir));
+    TempDir = (char*) malloc_msg();
+    GetTempPathA(MY_FILENAME_MAX, TempDir);
+    TempDir = (char*) realloc (TempDir, (strlen(TempDir)+1));
 #else
     TempDir = tempnam(NULL,NULL);
     CFILENAME basename = drop_dirname(TempDir);
@@ -340,23 +339,25 @@ CFILENAME GetTempDir (void)
 
 void SetFileDateTime (const CFILENAME Filename, time_t mtime)
 {
-  struct _stat st;
-    _tstat (Filename, &st);
+  WCHAR wname[MY_FILENAME_MAX];
+  utf8_to_utf16 (Filename, wname);
+  struct _stat64 st;
+  _wstat64 (wname, &st);
   struct _utimbuf times;
-    times.actime  = st.st_atime;
-    times.modtime = mtime;
-  _tutime (Filename, &times);
+  times.actime  = st.st_atime;
+  times.modtime = mtime;
+  _wutime (wname, &times);
 }
 
 // Execute program `filename` in the directory `curdir` optionally waiting until it finished
 void RunProgram (const CFILENAME filename, const CFILENAME curdir, int wait_finish)
 {
-  STARTUPINFO si;
+  STARTUPINFOA si;
   PROCESS_INFORMATION pi;
   ZeroMemory (&si, sizeof(si));
   si.cb = sizeof(si);
   ZeroMemory (&pi, sizeof(pi));
-  BOOL process_created = CreateProcessW (filename, NULL, NULL, NULL, FALSE, 0, NULL, curdir, &si, &pi);
+  BOOL process_created = CreateProcessA (filename, NULL, NULL, NULL, FALSE, 0, NULL, curdir, &si, &pi);
 
   if (process_created && wait_finish)
       WaitForSingleObject (pi.hProcess, INFINITE);
@@ -368,14 +369,16 @@ void RunProgram (const CFILENAME filename, const CFILENAME curdir, int wait_fini
 // Execute `command` in the directory `curdir` optionally waiting until it finished
 int RunCommand (const CFILENAME command, const CFILENAME curdir, int wait_finish)
 {
-  STARTUPINFO si;
+  STARTUPINFOA si;
   PROCESS_INFORMATION pi;
   ZeroMemory (&si, sizeof(si));
   si.cb = sizeof(si);
   ZeroMemory (&pi, sizeof(pi));
-  DWORD ExitCode = 0;  // код возврата вызываемой программы
+  DWORD ExitCode = 0;  // РєРѕРґ РІРѕР·РІСЂР°С‚Р° РІС‹Р·С‹РІР°РµРјРѕР№ РїСЂРѕРіСЂР°РјРјС‹
 
-  BOOL process_created = CreateProcessW (NULL, command, NULL, NULL, FALSE, 0, NULL, curdir, &si, &pi);
+  char cmd_buf[MY_FILENAME_MAX];
+  snprintf(cmd_buf, sizeof(cmd_buf), "%s", command);
+  BOOL process_created = CreateProcessA (NULL, cmd_buf, NULL, NULL, FALSE, 0, NULL, curdir, &si, &pi);
   if (process_created)
   {
     if (wait_finish)
@@ -390,19 +393,20 @@ int RunCommand (const CFILENAME command, const CFILENAME curdir, int wait_finish
 // Execute file `filename` in the directory `curdir` optionally waiting until it finished
 void RunFile (const CFILENAME filename, const CFILENAME curdir, int wait_finish)
 {
-  SHELLEXECUTEINFO sei;
-  ZeroMemory(&sei, sizeof(SHELLEXECUTEINFO));
-  sei.cbSize = sizeof(SHELLEXECUTEINFO);
+  SHELLEXECUTEINFOA sei;
+  ZeroMemory(&sei, sizeof(SHELLEXECUTEINFOA));
+  sei.cbSize = sizeof(SHELLEXECUTEINFOA);
   sei.fMask = (wait_finish? SEE_MASK_NOCLOSEPROCESS : 0);
   sei.hwnd = GetActiveWindow();
   sei.lpFile = filename;
   sei.lpDirectory = curdir;
   sei.nShow = SW_SHOW;
 
-  DWORD rc = ShellExecuteEx(&sei);
-  if (rc && wait_finish)
-    WaitForSingleObject(sei.hProcess, INFINITE),
+  BOOL rc = ShellExecuteExA(&sei);
+  if (rc && wait_finish && sei.hProcess) {
+    WaitForSingleObject(sei.hProcess, INFINITE);
     CloseHandle (sei.hProcess);
+  }
 }
 
 #else // For Unix:
@@ -444,29 +448,29 @@ void RunFile (const CFILENAME filename, const CFILENAME curdir, int wait_finish)
 #endif // Windows/Unix
 
 
-// Создать каталоги на пути к name
+// РЎРѕР·РґР°С‚СЊ РєР°С‚Р°Р»РѕРіРё РЅР° РїСѓС‚Рё Рє name
 void BuildPathTo (CFILENAME name)
 {
-  CFILENAME path_ptr = NULL;
-  for (CFILENAME p = _tcschr(name,0); --p >= name;)
+  if (!name || !*name) return;
+  char buf[MY_FILENAME_MAX];
+  snprintf(buf, sizeof(buf), "%s", name);
+  char *path_ptr = NULL;
+  for (char *p = _tcschr(buf,0); --p >= buf;)
     if (_tcschr (_T(DIRECTORY_DELIMITERS), *p))
       {path_ptr=p; break;}
   if (path_ptr==NULL)  return;
 
-  TCHAR oldc = *path_ptr;
   *path_ptr = 0;
-
-  if (! file_exists (name))
+  if (! file_exists (buf))
   {
-    BuildPathTo (name);
-    create_dir  (name);
+    BuildPathTo (buf);
+    create_dir  (buf);
   }
-  *path_ptr = oldc;
 }
 
 
 // ****************************************************************************************************************************
-// ПОДДЕРЖКА СПИСКА ВРЕМЕННЫХ ФАЙЛОВ И УДАЛЕНИЕ ИХ ПРИ АВАРИЙНОМ ВЫХОДЕ ИЗ ПРОГРАММЫ ******************************************
+// РџРћР”Р”Р•Р Р–РљРђ РЎРџРРЎРљРђ Р’Р Р•РњР•РќРќР«РҐ Р¤РђР™Р›РћР’ Р РЈР”РђР›Р•РќРР• РРҐ РџР Р РђР’РђР РР™РќРћРњ Р’Р«РҐРћР”Р• РР— РџР РћР“Р РђРњРњР« ******************************************
 // ****************************************************************************************************************************
 
 // Table of temporary files that should be deleted on ^Break
@@ -505,7 +509,7 @@ void removeTemporaryFiles (void)
 #ifndef FREEARC_NO_TIMING
 
 //*****************************************************************************
-// Вывод заголовка окна *******************************************************
+// Р’С‹РІРѕРґ Р·Р°РіРѕР»РѕРІРєР° РѕРєРЅР° *******************************************************
 //*****************************************************************************
 
 #ifdef FREEARC_WIN
@@ -514,7 +518,7 @@ void removeTemporaryFiles (void)
 TCHAR Saved_Title[MY_FILENAME_MAX];
 bool Saved = FALSE;
 
-// Установить заголовок консольного окна
+// РЈСЃС‚Р°РЅРѕРІРёС‚СЊ Р·Р°РіРѕР»РѕРІРѕРє РєРѕРЅСЃРѕР»СЊРЅРѕРіРѕ РѕРєРЅР°
 void EnvSetConsoleTitle (TCHAR *title)
 {
   if (!Saved) {
@@ -524,7 +528,7 @@ void EnvSetConsoleTitle (TCHAR *title)
   SetConsoleTitle (title);
 }
 
-// Восстановить заголовок, который был в начале работы программы
+// Р’РѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ Р·Р°РіРѕР»РѕРІРѕРє, РєРѕС‚РѕСЂС‹Р№ Р±С‹Р» РІ РЅР°С‡Р°Р»Рµ СЂР°Р±РѕС‚С‹ РїСЂРѕРіСЂР°РјРјС‹
 void EnvResetConsoleTitle (void)
 {
   if (Saved) {

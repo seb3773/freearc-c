@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SRC_ROOT="$(cd "$(dirname "$0")" && pwd)"
-cd "$SRC_ROOT/unarc"
+cd "$SRC_ROOT/src"
 
 MODE="release"
 MAKE_ARGS=()
@@ -25,9 +25,9 @@ done
 
 echo "=========================================================="
 if [ "$MODE" = "debug" ]; then
-    echo "  Building FreeArc Native Suite (DEBUG mode)"
+    echo "  Building FreeArc Native (DEBUG mode)"
 else
-    echo "  Building FreeArc Native Suite (PRODUCTION - Aggressive)"
+    echo "  Building FreeArc Native (PRODUCTION - Aggressive)"
 fi
 echo "=========================================================="
 
@@ -36,5 +36,5 @@ make -j"$(nproc)" "${MAKE_ARGS[@]}"
 
 echo ""
 echo "=== Summary of Generated Binaries ==="
-ls -lh "$SRC_ROOT/bin/arc" "$SRC_ROOT/bin/unarc" "$SRC_ROOT/bin/arc.sfx"
+ls -lh "$SRC_ROOT/build/linux/arc" "$SRC_ROOT/build/linux/unarc" "$SRC_ROOT/build/linux/arc.sfx"
 echo "Done."

@@ -157,8 +157,9 @@ static inline char *drop_dirname (char *filename)
 #include <io.h>
 #include <fcntl.h>
 #include <tchar.h>
-typedef TCHAR* CFILENAME;
-static inline int create_dir (CFILENAME name)   {return _tmkdir(name);}
+typedef const char* CFILENAME;
+WCHAR *utf8_to_utf16 (const char *utf8, WCHAR *utf16);
+char  *utf16_to_utf8 (const WCHAR *utf16, char *utf8);
 #define set_flen(stream,new_size)               (chsize( file_no(stream), new_size ))
 #define get_flen(stream)                        (_filelengthi64(fileno(stream)))
 #define myeof(file)                             (feof(file))
@@ -223,18 +224,52 @@ static inline off_t myfilelength (int h)
 #define file_read(file, buf, size)              fread  (buf, 1, size, file)
 #define file_write(file, buf, size)             fwrite (buf, 1, size, file)
 
-static inline int remove_dir  (CFILENAME name)  {return _trmdir(name);}
-static inline int remove_file (CFILENAME name)  {return _tremove(name);}
-static inline int file_exists (CFILENAME name)  {return _taccess(name,0) == 0;}
-
-static inline int rename_file (CFILENAME oldname, CFILENAME newname)  {return _trename(oldname,newname);}
-
-static inline int dir_exists (const TCHAR *name)
-{
-  struct _stat st;
-  _tstat(name,&st);
+#ifdef FREEARC_WIN
+static inline int create_dir (CFILENAME name) {
+  WCHAR wname[MY_FILENAME_MAX];
+  utf8_to_utf16(name, wname);
+  return _wmkdir(wname);
+}
+static inline int remove_dir (CFILENAME name) {
+  WCHAR wname[MY_FILENAME_MAX];
+  utf8_to_utf16(name, wname);
+  return _wrmdir(wname);
+}
+static inline int remove_file (CFILENAME name) {
+  WCHAR wname[MY_FILENAME_MAX];
+  utf8_to_utf16(name, wname);
+  return _wremove(wname);
+}
+static inline int file_exists (CFILENAME name) {
+  WCHAR wname[MY_FILENAME_MAX];
+  utf8_to_utf16(name, wname);
+  return _waccess(wname, 0) == 0;
+}
+static inline int rename_file (CFILENAME oldname, CFILENAME newname) {
+  WCHAR wold[MY_FILENAME_MAX], wnew[MY_FILENAME_MAX];
+  utf8_to_utf16(oldname, wold);
+  utf8_to_utf16(newname, wnew);
+  return _wrename(wold, wnew);
+}
+static inline int dir_exists (CFILENAME name) {
+  WCHAR wname[MY_FILENAME_MAX];
+  utf8_to_utf16(name, wname);
+  struct _stat64 st;
+  if (_wstat64(wname, &st) != 0) return 0;
   return (st.st_mode & S_IFDIR) != 0;
 }
+#else
+static inline int remove_dir  (CFILENAME name)  {return rmdir(name);}
+static inline int remove_file (CFILENAME name)  {return remove(name);}
+static inline int file_exists (CFILENAME name)  {return access(name,0) == 0;}
+static inline int rename_file (CFILENAME oldname, CFILENAME newname)  {return rename(oldname,newname);}
+static inline int dir_exists (const char *name)
+{
+  struct stat st;
+  stat(name,&st);
+  return (st.st_mode & S_IFDIR) != 0;
+}
+#endif
 
 void BuildPathTo(CFILENAME name);  // ������� �������� �� ���� � name
 void SetFileDateTime (const CFILENAME Filename, time_t t); // ���������� �����/���� ����������� �����
@@ -665,7 +700,7 @@ struct MYFILE
   void mark_as_temporary()           {registerTemporaryFile(*this); is_temp = TRUE;}
 
   int handle;
-  TCHAR *filename;
+  char *filename;
   char *utf8name, *utf8lastname, *oemname;
 
   void SetBaseDir (char *utf8dir)    // Set base dir
@@ -677,24 +712,8 @@ struct MYFILE
     utf8lastname = str_end(utf8name);
   }
 
-#ifdef FREEARC_WIN
-#  ifdef FREEARC_GUI                 // Win32 GUI *****************************************
-  void setname (const FILENAME _filename)  {strcpy (utf8lastname, _filename);
-                                      utf8_to_utf16 (utf8name, filename);}
-  CFILENAME displayname (void)       {return filename;}
-
-#  else                              // Win32 console *************************************
-  void setname (const FILENAME _filename)  {strcpy (utf8lastname, _filename);
-                                      utf8_to_utf16 (utf8name, filename);
-                                      CharToOemW (filename, oemname);}
-  FILENAME displayname (void)        {return oemname;}
-#  endif
-
-#else                                // Linux *********************************************
   void setname (const FILENAME _filename)  {strcpy (utf8lastname, _filename);  filename = utf8name;}
   FILENAME displayname (void)        {return utf8name;}
-
-#endif                               // END ***********************************************
 
   // Multi-volume support
   struct VolumeEntry {
@@ -771,12 +790,10 @@ struct MYFILE
                                            cur_vol_idx = -1;
                                            virt_pos = 0;
                                            total_virt_size = 0;
-#ifdef FREEARC_WIN
-                                           filename = (TCHAR*) malloc_msg (MY_FILENAME_MAX*4);
-#endif
                                            oemname  = (char*)  malloc_msg (MY_FILENAME_MAX);
                                            utf8name = (char*)  malloc_msg (MY_FILENAME_MAX*4);
                                            utf8lastname = utf8name;
+                                           filename = utf8name;
                                            setname("");}
 
   void setname (MYFILE &base, FILENAME filename) {SetBaseDir (base.utf8name); setname (filename);}
@@ -788,7 +805,6 @@ struct MYFILE
   virtual void done()                     {tryClose();
                                            if (is_temp)  remove(), unregisterTemporaryFile(*this), is_temp = FALSE;}
   virtual ~MYFILE()                       {done();
-                                           if ((char*)filename!=utf8name)  free(filename);
                                            free(oemname); free(utf8name);}
   // File operations
   virtual bool exists ()
@@ -811,7 +827,9 @@ struct MYFILE
     if (mode==WRITE_MODE) {
       BuildPathTo (filename);
 #ifdef FREEARC_WIN
-      handle = ::_wopen (filename, O_WRONLY|O_BINARY|O_CREAT|O_TRUNC, S_IREAD|S_IWRITE);
+      WCHAR wfn[MY_FILENAME_MAX];
+      utf8_to_utf16 (filename, wfn);
+      handle = ::_wopen (wfn, O_WRONLY|O_BINARY|O_CREAT|O_TRUNC, S_IREAD|S_IWRITE);
 #else
       handle =   ::open (filename, O_WRONLY|O_CREAT|O_TRUNC, S_IREAD|S_IWRITE);
 #endif
@@ -836,6 +854,17 @@ struct MYFILE
         for (int i = 0; i < num_vols; i++) {
           snprintf(test_name, sizeof(test_name), pat_buf, start_num + i);
           vols[i].name = strdup(test_name);
+#ifdef FREEARC_WIN
+          WCHAR wvol[MY_FILENAME_MAX];
+          utf8_to_utf16 (vols[i].name, wvol);
+          int vh = ::_wopen (wvol, O_RDONLY|O_BINARY);
+          if (vh >= 0) {
+            vols[i].size = (FILESIZE)_filelengthi64(vh);
+            ::close(vh);
+          } else {
+            vols[i].size = 0;
+          }
+#else
           int vh = ::open(vols[i].name, O_RDONLY);
           if (vh >= 0) {
             vols[i].size = (FILESIZE)myfilelength(vh);
@@ -843,18 +872,27 @@ struct MYFILE
           } else {
             vols[i].size = 0;
           }
+#endif
           vols[i].start_pos = cur_start;
           cur_start += vols[i].size;
         }
         total_virt_size = cur_start;
         virt_pos = 0;
         cur_vol_idx = 0;
+#ifdef FREEARC_WIN
+        WCHAR wvol0[MY_FILENAME_MAX];
+        utf8_to_utf16 (vols[0].name, wvol0);
+        handle = ::_wopen (wvol0, O_RDONLY|O_BINARY);
+#else
         handle = ::open(vols[0].name, O_RDONLY);
+#endif
         return handle >= 0;
       }
     }
 #ifdef FREEARC_WIN
-    handle = ::_wopen (filename, O_RDONLY|O_BINARY, S_IREAD|S_IWRITE);
+    WCHAR wfn[MY_FILENAME_MAX];
+    utf8_to_utf16 (filename, wfn);
+    handle = ::_wopen (wfn, O_RDONLY|O_BINARY, S_IREAD|S_IWRITE);
 #else
     handle =   ::open (filename, O_RDONLY, S_IREAD|S_IWRITE);
 #endif
@@ -910,7 +948,9 @@ struct MYFILE
       }
       if (cur_vol_idx != target) {
         if (handle >= 0) ::close(handle);
-        handle = ::open(vols[target].name, O_RDONLY);
+        WCHAR wvol[MY_FILENAME_MAX];
+        utf8_to_utf16 (vols[target].name, wvol);
+        handle = ::_wopen(wvol, O_RDONLY|O_BINARY);
         CHECK(handle >= 0, (s,"ERROR: can't open volume %s", vols[target].name));
         cur_vol_idx = target;
       }
@@ -963,7 +1003,13 @@ struct MYFILE
           if (v + 1 >= num_vols) break;
           cur_vol_idx = v + 1;
           if (handle >= 0) ::close(handle);
+#ifdef FREEARC_WIN
+          WCHAR wvol[MY_FILENAME_MAX];
+          utf8_to_utf16 (vols[cur_vol_idx].name, wvol);
+          handle = ::_wopen(wvol, O_RDONLY|O_BINARY);
+#else
           handle = ::open(vols[cur_vol_idx].name, O_RDONLY);
+#endif
           CHECK(handle >= 0, (s,"ERROR: can't open volume %s", vols[cur_vol_idx].name));
 #ifdef FREEARC_WIN
           _lseeki64(handle, 0, SEEK_SET);
@@ -1001,13 +1047,7 @@ struct MYDIR : MYFILE
   // Make it a temporary directory, removed automatically by destructor
   bool create_tempdir()
   {
-#ifdef FREEARC_WIN
-    utf16_to_utf8 (GetTempDir(), utf8name);
-#elif defined(FREEARC_UNIX)
     strcpy(utf8name, GetTempDir());
-#else
-    ???
-#endif
     SetBaseDir (utf8name);
     for (unsigned i = time_based_random(), cnt=0; cnt<1000; cnt++)
     {
