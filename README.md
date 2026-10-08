@@ -223,6 +223,7 @@ unarc p backup.arc README.txt | grep "version"
 ├── build_deb.sh         # Complete build + test + Debian .deb packager
 ├── Makefile             # Root Makefile (all, win64, both, debug, clean, test, test-win64, deb, install)
 ├── README.md            # Project documentation
+├── FORMAT.md            # FreeArc .arc container technical specification
 ├── LICENSE              # GPL-2.0 License
 ├── man/                 # Standard roff manual pages (arc.1, unarc.1)
 ├── src/                 # Native C/C++ source code, headers, and codecs
