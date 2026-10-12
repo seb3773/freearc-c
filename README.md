@@ -264,11 +264,11 @@ Build a standard `.deb` package with a single command:
 ```bash
 ./build_deb.sh
 ```
-This automatically compiles the suite, validates the test suite, and installs stripped binaries, manpages, and documentation into a standalone Debian package (`freearc_1.0-1_amd64.deb`).
+This automatically compiles the suite, validates the test suite, and installs stripped binaries, manpages, and documentation into a standalone Debian package (`freearc_1.1.0-1_amd64.deb`).
 
 To install the generated package:
 ```bash
-sudo dpkg -i freearc_1.0-1_amd64.deb
+sudo dpkg -i freearc_1.1.0-1_amd64.deb
 ```
 
 ---
