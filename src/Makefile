@@ -2,7 +2,7 @@ CXX ?= g++
 CXX_WIN64 ?= x86_64-w64-mingw32-g++
 
 # Build mode configuration:
-#   make (or make DEBUG=0) -> Production build: aggressive optimization (-O2, LTO, gc-sections, sstrip)
+#   make (or make DEBUG=0) -> Production build: aggressive optimization (-O3, LTO, gc-sections, sstrip)
 #   make DEBUG=1           -> Debug build: full debug symbols (-g), assertions, no LTO, no stripping
 #   make debug             -> Convenience alias for make DEBUG=1
 DEBUG ?= 0
@@ -18,8 +18,8 @@ ifeq ($(DEBUG), 1)
     MODE_LDFLAGS = -g
     STRIP_CMD    = true
 else
-    MODE_DESC    = [PRODUCTION BUILD - Aggressive optimization + LTO + gc-sections + sstrip]
-    MODE_CFLAGS  = -O2 -flto=auto -fstrict-aliasing \
+    MODE_DESC    = [PRODUCTION BUILD - Aggressive optimization (-O3) + LTO + gc-sections + sstrip]
+    MODE_CFLAGS  = -O3 -flto=auto -fstrict-aliasing \
                    -ffunction-sections -fdata-sections \
                    -fno-ident -fno-plt -fomit-frame-pointer \
                    -fno-stack-protector -fno-math-errno \
@@ -40,10 +40,10 @@ ENC_CFLAGS_NO_SA = $(CODE_FLAGS) $(MODE_CFLAGS) $(DEFINES) -ICompression -fno-st
 
 # --- Win64 configuration ---
 WIN64_DEFINES = -DFREEARC_WIN -DFREEARC_INTEL_BYTE_ORDER -DFREEARC_64BIT
-WIN64_CFLAGS           = $(CODE_FLAGS) -O2 $(WIN64_DEFINES) $(Extractor_DEFINES) -I. -ICompression
-WIN64_CFLAGS_NO_SA     = $(CODE_FLAGS) -O2 $(WIN64_DEFINES) $(Extractor_DEFINES) -I. -ICompression -fno-strict-aliasing
-WIN64_ENC_CFLAGS       = $(CODE_FLAGS) -O2 $(WIN64_DEFINES) -I. -ICompression
-WIN64_ENC_CFLAGS_NO_SA = $(CODE_FLAGS) -O2 $(WIN64_DEFINES) -I. -ICompression -fno-strict-aliasing
+WIN64_CFLAGS           = $(CODE_FLAGS) -O3 $(WIN64_DEFINES) $(Extractor_DEFINES) -I. -ICompression
+WIN64_CFLAGS_NO_SA     = $(CODE_FLAGS) -O3 $(WIN64_DEFINES) $(Extractor_DEFINES) -I. -ICompression -fno-strict-aliasing
+WIN64_ENC_CFLAGS       = $(CODE_FLAGS) -O3 $(WIN64_DEFINES) -I. -ICompression
+WIN64_ENC_CFLAGS_NO_SA = $(CODE_FLAGS) -O3 $(WIN64_DEFINES) -I. -ICompression -fno-strict-aliasing
 WIN64_LINK_FLAGS       = -static -static-libgcc -static-libstdc++ -lkernel32 -luser32 -lshell32 -ladvapi32 -lole32 -s
 
 DEC_OBJDIR       = dec

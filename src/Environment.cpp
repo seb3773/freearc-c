@@ -279,7 +279,8 @@ int long_path_size (void)
  ************* CRC-32 subroutines ***************************************
  ************************************************************************/
 
-uint CRCTab[256];
+uint CRCTable[8][256];
+#define CRCTab (CRCTable[0])
 
 void InitCRC()
 {
@@ -288,35 +289,82 @@ void InitCRC()
     uint C=I;
     for (int J=0;J<8;J++)
       C=(C & 1) ? (C>>1)^0xEDB88320L : (C>>1);
-    CRCTab[I]=C;
+    CRCTable[0][I]=C;
+  }
+  for (int K=1; K<8; K++)
+  {
+    for (int I=0; I<256; I++)
+    {
+      CRCTable[K][I] = (CRCTable[K-1][I] >> 8) ^ CRCTable[0][CRCTable[K-1][I] & 0xFF];
+    }
   }
 }
 
+static struct CRCAutoInit {
+  CRCAutoInit() { InitCRC(); }
+} g_crc_auto_init;
+
 uint UpdateCRC( void *Addr, uint Size, uint StartCRC)
 {
-  if (CRCTab[1]==0)
+  if (CRCTable[0][1]==0)
     InitCRC();
-  uint8 *Data=(uint8 *)Addr;
-#if defined(FREEARC_INTEL_BYTE_ORDER) && defined(PRESENT_UINT32)
-  while (Size>=8)
+  const uint8 *Data = (const uint8 *)Addr;
+
+  while (Size >= 16)
   {
-    StartCRC^=*(uint32 *)Data;
-    StartCRC=CRCTab[(uint8)StartCRC]^(StartCRC>>8);
-    StartCRC=CRCTab[(uint8)StartCRC]^(StartCRC>>8);
-    StartCRC=CRCTab[(uint8)StartCRC]^(StartCRC>>8);
-    StartCRC=CRCTab[(uint8)StartCRC]^(StartCRC>>8);
-    StartCRC^=*(uint32 *)(Data+4);
-    StartCRC=CRCTab[(uint8)StartCRC]^(StartCRC>>8);
-    StartCRC=CRCTab[(uint8)StartCRC]^(StartCRC>>8);
-    StartCRC=CRCTab[(uint8)StartCRC]^(StartCRC>>8);
-    StartCRC=CRCTab[(uint8)StartCRC]^(StartCRC>>8);
-    Data+=8;
-    Size-=8;
+    uint32 one, two;
+    memcpy(&one, Data, 4);
+    memcpy(&two, Data + 4, 4);
+    one ^= StartCRC;
+    StartCRC = CRCTable[7][(uint8)(one)]
+             ^ CRCTable[6][(uint8)(one >> 8)]
+             ^ CRCTable[5][(uint8)(one >> 16)]
+             ^ CRCTable[4][(uint8)(one >> 24)]
+             ^ CRCTable[3][(uint8)(two)]
+             ^ CRCTable[2][(uint8)(two >> 8)]
+             ^ CRCTable[1][(uint8)(two >> 16)]
+             ^ CRCTable[0][(uint8)(two >> 24)];
+
+    memcpy(&one, Data + 8, 4);
+    memcpy(&two, Data + 12, 4);
+    one ^= StartCRC;
+    StartCRC = CRCTable[7][(uint8)(one)]
+             ^ CRCTable[6][(uint8)(one >> 8)]
+             ^ CRCTable[5][(uint8)(one >> 16)]
+             ^ CRCTable[4][(uint8)(one >> 24)]
+             ^ CRCTable[3][(uint8)(two)]
+             ^ CRCTable[2][(uint8)(two >> 8)]
+             ^ CRCTable[1][(uint8)(two >> 16)]
+             ^ CRCTable[0][(uint8)(two >> 24)];
+
+    Data += 16;
+    Size -= 16;
   }
-#endif
-  for (int I=0;I<Size;I++)
-    StartCRC=CRCTab[(uint8)(StartCRC^Data[I])]^(StartCRC>>8);
-  return(StartCRC);
+
+  while (Size >= 8)
+  {
+    uint32 one, two;
+    memcpy(&one, Data, 4);
+    memcpy(&two, Data + 4, 4);
+    one ^= StartCRC;
+    StartCRC = CRCTable[7][(uint8)(one)]
+             ^ CRCTable[6][(uint8)(one >> 8)]
+             ^ CRCTable[5][(uint8)(one >> 16)]
+             ^ CRCTable[4][(uint8)(one >> 24)]
+             ^ CRCTable[3][(uint8)(two)]
+             ^ CRCTable[2][(uint8)(two >> 8)]
+             ^ CRCTable[1][(uint8)(two >> 16)]
+             ^ CRCTable[0][(uint8)(two >> 24)];
+    Data += 8;
+    Size -= 8;
+  }
+
+  while (Size > 0)
+  {
+    StartCRC = CRCTable[0][(uint8)(StartCRC ^ *Data++)] ^ (StartCRC >> 8);
+    Size--;
+  }
+  return StartCRC;
 }
 
 // Вычислить CRC блока данных
