@@ -776,9 +776,9 @@ int count_desc_order (const int *a, const int *b)   { return *b-*a; }
 
 void detect_datatype (BYTE *buf, int bufsize, char *type)
 {
-    // Вычисляем распределение частот символов и одновременно..
+    // Г‚Г»Г·ГЁГ±Г«ГїГҐГ¬ Г°Г Г±ГЇГ°ГҐГ¤ГҐГ«ГҐГ­ГЁГҐ Г·Г Г±ГІГ®ГІ Г±ГЁГ¬ГўГ®Г«Г®Гў ГЁ Г®Г¤Г­Г®ГўГ°ГҐГ¬ГҐГ­Г­Г®..
     int count[256];  iterate(256, count[i]=0);
-    // ..ищем матчи с помощью простой LZ-схемы и определяем долю REPDIST кодов среди них
+    // ..ГЁГ№ГҐГ¬ Г¬Г ГІГ·ГЁ Г± ГЇГ®Г¬Г®Г№ГјГѕ ГЇГ°Г®Г±ГІГ®Г© LZ-Г±ГµГҐГ¬Г» ГЁ Г®ГЇГ°ГҐГ¤ГҐГ«ГїГҐГ¬ Г¤Г®Г«Гѕ REPDIST ГЄГ®Г¤Г®Гў Г±Г°ГҐГ¤ГЁ Г­ГЁГµ
     int matches=0, repdists=0, sumlen=0, dist[4]={0,0,0,0};
 #define TABLE_SIZE 16384
 #define hash(p)  (value16(p) % TABLE_SIZE)
@@ -786,7 +786,7 @@ void detect_datatype (BYTE *buf, int bufsize, char *type)
     if (bufsize>10) for (BYTE *p=buf; p<buf+bufsize-10; p++) {
        BYTE *q = table[hash(p)];
        if (q && value16(p)==value16(q)) {
-           if (p-q<256) {  // собираем статистику только по матчам с дистанцией <256
+           if (p-q<256) {  // Г±Г®ГЎГЁГ°Г ГҐГ¬ Г±ГІГ ГІГЁГ±ГІГЁГЄГі ГІГ®Г«ГјГЄГ® ГЇГ® Г¬Г ГІГ·Г Г¬ Г± Г¤ГЁГ±ГІГ Г­Г¶ГЁГҐГ© <256
                matches++;
                int x=p-q;
                for (int i=0; i<elements(dist); i++) {
@@ -794,7 +794,7 @@ void detect_datatype (BYTE *buf, int bufsize, char *type)
                    if (x==p-q)  {repdists++; break;}
                }
            }
-           // Пропускаем найденный матч, не забывая обновлять счётчик/поисковый хеш
+           // ГЏГ°Г®ГЇГіГ±ГЄГ ГҐГ¬ Г­Г Г©Г¤ГҐГ­Г­Г»Г© Г¬Г ГІГ·, Г­ГҐ Г§Г ГЎГ»ГўГ Гї Г®ГЎГ­Г®ГўГ«ГїГІГј Г±Г·ВёГІГ·ГЁГЄ/ГЇГ®ГЁГ±ГЄГ®ГўГ»Г© ГµГҐГё
            BYTE *o=p;
            while (value32(p)==value32(q)  &&  p<buf+bufsize-10)
               count[p[0]]++, table[hash(p+0)]=p,
@@ -805,7 +805,7 @@ void detect_datatype (BYTE *buf, int bufsize, char *type)
            while (*p==*q  &&  p<buf+bufsize-10)  count[*p]++, table[hash(p)]=p, p++, q++;  count[*p]++;
            if (o-q<256)  sumlen += p-o;
        } else {
-           count[*p]++,  table[hash(p)] = p;    // матч не найден
+           count[*p]++,  table[hash(p)] = p;    // Г¬Г ГІГ· Г­ГҐ Г­Г Г©Г¤ГҐГ­
        }
 
     }
@@ -813,7 +813,7 @@ void detect_datatype (BYTE *buf, int bufsize, char *type)
 #undef TABLE_SIZE
 #undef hash
 
-    // Сжатие order-0 моделью
+    // Г‘Г¦Г ГІГЁГҐ order-0 Г¬Г®Г¤ГҐГ«ГјГѕ
     double order0=0;
     for (int i=0; i<256; i++)
     {
@@ -821,7 +821,7 @@ void detect_datatype (BYTE *buf, int bufsize, char *type)
             order0 += count[i] * log(double(bufsize/count[i]))/log(double(2)) / 8;
     }
 
-    // Кол-во символов, занимающих 90% объёма текста
+    // ГЉГ®Г«-ГўГ® Г±ГЁГ¬ГўГ®Г«Г®Гў, Г§Г Г­ГЁГ¬Г ГѕГ№ГЁГµ 90% Г®ГЎГєВёГ¬Г  ГІГҐГЄГ±ГІГ 
     int sums=0, total=bufsize, normal_chars=256;
     qsort (count, 256, sizeof(*count),
            (int (*)(const void*, const void*)) count_desc_order);
@@ -836,8 +836,8 @@ void detect_datatype (BYTE *buf, int bufsize, char *type)
         }
     }
 
-    // Тип данных: $compressed если не сжимается ни order-0 ни lz77.
-    //             $text если активных символов от 17 до 80, число повторов дистанций невелико и lz-матчи составляют хотя бы 10% данных
+    // Г’ГЁГЇ Г¤Г Г­Г­Г»Гµ: $compressed ГҐГ±Г«ГЁ Г­ГҐ Г±Г¦ГЁГ¬Г ГҐГІГ±Гї Г­ГЁ order-0 Г­ГЁ lz77.
+    //             $text ГҐГ±Г«ГЁ Г ГЄГІГЁГўГ­Г»Гµ Г±ГЁГ¬ГўГ®Г«Г®Гў Г®ГІ 17 Г¤Г® 80, Г·ГЁГ±Г«Г® ГЇГ®ГўГІГ®Г°Г®Гў Г¤ГЁГ±ГІГ Г­Г¶ГЁГ© Г­ГҐГўГҐГ«ГЁГЄГ® ГЁ lz-Г¬Г ГІГ·ГЁ Г±Г®Г±ГІГ ГўГ«ГїГѕГІ ГµГ®ГІГї ГЎГ» 10% Г¤Г Г­Г­Г»Гµ
     strcpy (type, buf==NULL                                 ? "$compressed $text" :  // list of data types this procedure is able to recognize
 
                   order0 > 0.95*bufsize
@@ -867,7 +867,7 @@ void detect_datatype (BYTE *buf, int bufsize, char *type)
 // demonstrates more complex technique of gathering statistics
 // while processing file in small chunks
 
-// Вычисление времени работы алгоритма
+// Г‚Г»Г·ГЁГ±Г«ГҐГ­ГЁГҐ ГўГ°ГҐГ¬ГҐГ­ГЁ Г°Г ГЎГ®ГІГ» Г Г«ГЈГ®Г°ГЁГІГ¬Г 
 #include <io.h>
 #include <windows.h>
 static LARGE_INTEGER Frequency, PerformanceCountStart, PerformanceCountEnd;

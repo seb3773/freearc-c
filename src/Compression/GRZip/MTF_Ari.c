@@ -214,6 +214,9 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
 
   Init_Models();
 
+  uint8 MTF_Pos[ARI_MaxByte];
+  for (i=0; i<ARI_MaxByte; i++) MTF_Pos[i] = (uint8)i;
+
   uint32 Mask,Log2RunSize,RunSize,WFCMTF_Rank,PredChar,Char=0;
 
   while (Input<InputEnd)
@@ -230,13 +233,16 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
     RunSize=1;
     while ((Input<InputEnd)&&(*Input==Char)) RunSize++,Input++;
 
-    WFCMTF_Rank=0; while (MTF_List[WFCMTF_Rank]!=Char) WFCMTF_Rank++;
+    WFCMTF_Rank = MTF_Pos[Char];
 
     if (WFCMTF_Rank)
     {
-      sint32 Tmp=WFCMTF_Rank;
-      do MTF_List[Tmp]=MTF_List[Tmp-1]; while (--Tmp);
-      MTF_List[0]=Char;
+      sint32 Tmp = WFCMTF_Rank;
+      do {
+        MTF_Pos[MTF_List[Tmp] = MTF_List[Tmp-1]] = (uint8)Tmp;
+      } while (--Tmp);
+      MTF_List[0] = Char;
+      MTF_Pos[Char] = 0;
     }
 
     WFCMTF_Rank=(WFCMTF_Rank-1)&0xFF;

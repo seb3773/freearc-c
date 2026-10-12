@@ -300,15 +300,131 @@ void InitCRC()
   }
 }
 
-static struct CRCAutoInit {
-  CRCAutoInit() { InitCRC(); }
-} g_crc_auto_init;
+#if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) && (defined(__GNUC__) || defined(__clang__))
+#include <stdint.h>
+#include <emmintrin.h>
+#include <smmintrin.h>
+#include <wmmintrin.h>
+
+__attribute__((__target__("sse4.2,pclmul")))
+static uint32 crc32_sse42_simd_(const unsigned char *buf, size_t len, uint32 crc) {
+  static const uint64_t __attribute__((aligned(16))) k1k2[] = { 0x0154442bd4ULL, 0x01c6e41596ULL };
+  static const uint64_t __attribute__((aligned(16))) k3k4[] = { 0x01751997d0ULL, 0x00ccaa009eULL };
+  static const uint64_t __attribute__((aligned(16))) k5k0[] = { 0x0163cd6124ULL, 0x0000000000ULL };
+  static const uint64_t __attribute__((aligned(16))) poly[] = { 0x01db710641ULL, 0x01f7011641ULL };
+
+  __m128i x0, x1, x2, x3, x4, x5, x6, x7, x8, y5, y6, y7, y8;
+
+  x1 = _mm_loadu_si128((const __m128i *)(buf + 0x00));
+  x2 = _mm_loadu_si128((const __m128i *)(buf + 0x10));
+  x3 = _mm_loadu_si128((const __m128i *)(buf + 0x20));
+  x4 = _mm_loadu_si128((const __m128i *)(buf + 0x30));
+
+  x1 = _mm_xor_si128(x1, _mm_cvtsi32_si128((int)crc));
+  x0 = _mm_load_si128((const __m128i *)k1k2);
+
+  buf += 64;
+  len -= 64;
+
+  while (len >= 64) {
+    x5 = _mm_clmulepi64_si128(x1, x0, 0x00);
+    x6 = _mm_clmulepi64_si128(x2, x0, 0x00);
+    x7 = _mm_clmulepi64_si128(x3, x0, 0x00);
+    x8 = _mm_clmulepi64_si128(x4, x0, 0x00);
+
+    x1 = _mm_clmulepi64_si128(x1, x0, 0x11);
+    x2 = _mm_clmulepi64_si128(x2, x0, 0x11);
+    x3 = _mm_clmulepi64_si128(x3, x0, 0x11);
+    x4 = _mm_clmulepi64_si128(x4, x0, 0x11);
+
+    y5 = _mm_loadu_si128((const __m128i *)(buf + 0x00));
+    y6 = _mm_loadu_si128((const __m128i *)(buf + 0x10));
+    y7 = _mm_loadu_si128((const __m128i *)(buf + 0x20));
+    y8 = _mm_loadu_si128((const __m128i *)(buf + 0x30));
+
+    x1 = _mm_xor_si128(x1, x5);
+    x2 = _mm_xor_si128(x2, x6);
+    x3 = _mm_xor_si128(x3, x7);
+    x4 = _mm_xor_si128(x4, x8);
+
+    x1 = _mm_xor_si128(x1, y5);
+    x2 = _mm_xor_si128(x2, y6);
+    x3 = _mm_xor_si128(x3, y7);
+    x4 = _mm_xor_si128(x4, y8);
+
+    buf += 64;
+    len -= 64;
+  }
+
+  x0 = _mm_load_si128((const __m128i *)k3k4);
+
+  x5 = _mm_clmulepi64_si128(x1, x0, 0x00);
+  x1 = _mm_clmulepi64_si128(x1, x0, 0x11);
+  x1 = _mm_xor_si128(x1, x2);
+  x1 = _mm_xor_si128(x1, x5);
+
+  x5 = _mm_clmulepi64_si128(x1, x0, 0x00);
+  x1 = _mm_clmulepi64_si128(x1, x0, 0x11);
+  x1 = _mm_xor_si128(x1, x3);
+  x1 = _mm_xor_si128(x1, x5);
+
+  x5 = _mm_clmulepi64_si128(x1, x0, 0x00);
+  x1 = _mm_clmulepi64_si128(x1, x0, 0x11);
+  x1 = _mm_xor_si128(x1, x4);
+  x1 = _mm_xor_si128(x1, x5);
+
+  while (len >= 16) {
+    x2 = _mm_loadu_si128((const __m128i *)buf);
+    x5 = _mm_clmulepi64_si128(x1, x0, 0x00);
+    x1 = _mm_clmulepi64_si128(x1, x0, 0x11);
+    x1 = _mm_xor_si128(x1, x2);
+    x1 = _mm_xor_si128(x1, x5);
+    buf += 16;
+    len -= 16;
+  }
+
+  x2 = _mm_clmulepi64_si128(x1, x0, 0x10);
+  x3 = _mm_setr_epi32(~0, 0, ~0, 0);
+  x1 = _mm_srli_si128(x1, 8);
+  x1 = _mm_xor_si128(x1, x2);
+
+  x0 = _mm_loadl_epi64((const __m128i*)k5k0);
+
+  x2 = _mm_srli_si128(x1, 4);
+  x1 = _mm_and_si128(x1, x3);
+  x1 = _mm_clmulepi64_si128(x1, x0, 0x00);
+  x1 = _mm_xor_si128(x1, x2);
+
+  x0 = _mm_load_si128((const __m128i*)poly);
+
+  x2 = _mm_and_si128(x1, x3);
+  x2 = _mm_clmulepi64_si128(x2, x0, 0x10);
+  x2 = _mm_and_si128(x2, x3);
+  x2 = _mm_clmulepi64_si128(x2, x0, 0x00);
+  x1 = _mm_xor_si128(x1, x2);
+
+  return (uint32)_mm_extract_epi32(x1, 1);
+}
+#endif
 
 uint UpdateCRC( void *Addr, uint Size, uint StartCRC)
 {
   if (CRCTable[0][1]==0)
     InitCRC();
   const uint8 *Data = (const uint8 *)Addr;
+
+#if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) && (defined(__GNUC__) || defined(__clang__))
+  static int s_has_pclmul = -1;
+  if (s_has_pclmul < 0) {
+    s_has_pclmul = __builtin_cpu_supports("pclmul") ? 1 : 0;
+  }
+  if (s_has_pclmul && Size >= 64) {
+    size_t chunk_size = Size & ~15ULL;
+    StartCRC = crc32_sse42_simd_(Data, chunk_size, StartCRC);
+    Data += chunk_size;
+    Size -= (uint)chunk_size;
+  }
+#endif
 
   while (Size >= 16)
   {
@@ -378,9 +494,34 @@ uint CalcCRC( void *Addr, uint Size)
 // От-xor-ить два блока данных
 void memxor (char *dest, char *src, uint size)
 {
-  if (size) do
-      *dest++ ^= *src++;
-  while (--size);
+  while (size >= 16) {
+    uint64 a, b, c, d;
+    memcpy(&a, dest, 8);
+    memcpy(&b, src, 8);
+    memcpy(&c, dest + 8, 8);
+    memcpy(&d, src + 8, 8);
+    a ^= b;
+    c ^= d;
+    memcpy(dest, &a, 8);
+    memcpy(dest + 8, &c, 8);
+    dest += 16;
+    src += 16;
+    size -= 16;
+  }
+  while (size >= 8) {
+    uint64 a, b;
+    memcpy(&a, dest, 8);
+    memcpy(&b, src, 8);
+    a ^= b;
+    memcpy(dest, &a, 8);
+    dest += 8;
+    src += 8;
+    size -= 8;
+  }
+  while (size > 0) {
+    *dest++ ^= *src++;
+    size--;
+  }
 }
 
 // Вернуть имя файла без имени каталога

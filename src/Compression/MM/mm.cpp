@@ -18,44 +18,110 @@ extern "C" {
 // Run through buffer diffing 8-bit elements
 void diff1 (void *buf, int bufsize, int N, void *_base)
 {
-    byte *base=(byte*)_base, x;
-    for (byte *p=(byte*)buf; p+N<=(byte*)buf+bufsize; p+=N)
-/*
-        if (N==3) {
-          int b=p[0], g=p[1], r=p[2];
-          b-=g, r-=g;
-          //int y = (r+2*g+b)/4; b-=g, r-=g; g=y;
-
-			int tmp;
-
-			g = r - b; // Co
-			tmp = b + (p[1] >> 1);
-			b = g - tmp; // Cg
-			r = tmp + (p[0] >> 1); // Y
-
-          p[0]=b-base[0], p[1]=g-base[1], p[2]=r-base[2];
-          base[0]=b, base[1]=g, base[2]=r;
-
-
-
-          int fb=p[0], y=p[1], fr=p[2];
-          //fb+=fr*7/8, fr-=fb*17/32, fb+=y, y-=fb*3/8;
-          fr-=y, y+=fr/2, fb-=y, y+=fb*3/8;
-          p[0]=fb-base[0], p[1]=y-base[1], p[2]=fr-base[2];
-          base[0]=fb, base[1]=y, base[2]=fr;
-        } else
-*/
-        for (int i=0; i<N; i++)
-            x=p[i], p[i]-=base[i], base[i]=x;
+    byte *base=(byte*)_base;
+    byte *p=(byte*)buf;
+    byte *end = (byte*)buf + bufsize;
+    switch (N) {
+    case 1: {
+        byte b0 = base[0];
+        while (p + 1 <= end) {
+            byte x0 = p[0];
+            p[0] = x0 - b0;
+            b0 = x0;
+            p += 1;
+        }
+        base[0] = b0;
+        break;
+    }
+    case 2: {
+        byte b0 = base[0], b1 = base[1];
+        while (p + 2 <= end) {
+            byte x0 = p[0], x1 = p[1];
+            p[0] = x0 - b0;
+            p[1] = x1 - b1;
+            b0 = x0; b1 = x1;
+            p += 2;
+        }
+        base[0] = b0; base[1] = b1;
+        break;
+    }
+    case 3: {
+        byte b0 = base[0], b1 = base[1], b2 = base[2];
+        while (p + 3 <= end) {
+            byte x0 = p[0], x1 = p[1], x2 = p[2];
+            p[0] = x0 - b0;
+            p[1] = x1 - b1;
+            p[2] = x2 - b2;
+            b0 = x0; b1 = x1; b2 = x2;
+            p += 3;
+        }
+        base[0] = b0; base[1] = b1; base[2] = b2;
+        break;
+    }
+    case 4: {
+        byte b0 = base[0], b1 = base[1], b2 = base[2], b3 = base[3];
+        while (p + 4 <= end) {
+            byte x0 = p[0], x1 = p[1], x2 = p[2], x3 = p[3];
+            p[0] = x0 - b0;
+            p[1] = x1 - b1;
+            p[2] = x2 - b2;
+            p[3] = x3 - b3;
+            b0 = x0; b1 = x1; b2 = x2; b3 = x3;
+            p += 4;
+        }
+        base[0] = b0; base[1] = b1; base[2] = b2; base[3] = b3;
+        break;
+    }
+    default:
+        for (; p + N <= end; p += N)
+            for (int i = 0; i < N; i++) {
+                byte x = p[i];
+                p[i] -= base[i];
+                base[i] = x;
+            }
+        break;
+    }
 }
 
 // Run through buffer diffing 16-bit elements
 void diff2 (void *buf, int bufsize, int N, void *_base)
 {
-    uint16 *base=(uint16*)_base, x;
-    for (uint16 *p=(uint16*)buf; p+N<=(uint16*)((char*)buf+bufsize); p+=N)
-        for (int i=0; i<N; i++)
-            x=p[i], p[i]-=base[i], base[i]=x;
+    uint16 *base=(uint16*)_base;
+    uint16 *p=(uint16*)buf;
+    uint16 *end = (uint16*)((char*)buf + bufsize);
+    switch (N) {
+    case 1: {
+        uint16 b0 = base[0];
+        while (p + 1 <= end) {
+            uint16 x0 = p[0];
+            p[0] = x0 - b0;
+            b0 = x0;
+            p += 1;
+        }
+        base[0] = b0;
+        break;
+    }
+    case 2: {
+        uint16 b0 = base[0], b1 = base[1];
+        while (p + 2 <= end) {
+            uint16 x0 = p[0], x1 = p[1];
+            p[0] = x0 - b0;
+            p[1] = x1 - b1;
+            b0 = x0; b1 = x1;
+            p += 2;
+        }
+        base[0] = b0; base[1] = b1;
+        break;
+    }
+    default:
+        for (; p + N <= end; p += N)
+            for (int i = 0; i < N; i++) {
+                uint16 x = p[i];
+                p[i] -= base[i];
+                base[i] = x;
+            }
+        break;
+    }
 }
 
 // Run through buffer diffing 24-bit elements
@@ -70,10 +136,42 @@ void diff3 (void *buf, int bufsize, int N, void *_base)
 // Run through buffer diffing 32-bit elements
 void diff4 (void *buf, int bufsize, int N, void *_base)
 {
-    uint32 *base=(uint32*)_base, x;
-    for (uint32 *p=(uint32*)buf; p+N<=(uint32*)((char*)buf+bufsize); p+=N)
-        for (int i=0; i<N; i++)
-            x=p[i], p[i]-=base[i], base[i]=x;
+    uint32 *base=(uint32*)_base;
+    uint32 *p=(uint32*)buf;
+    uint32 *end = (uint32*)((char*)buf + bufsize);
+    switch (N) {
+    case 1: {
+        uint32 b0 = base[0];
+        while (p + 1 <= end) {
+            uint32 x0 = p[0];
+            p[0] = x0 - b0;
+            b0 = x0;
+            p += 1;
+        }
+        base[0] = b0;
+        break;
+    }
+    case 2: {
+        uint32 b0 = base[0], b1 = base[1];
+        while (p + 2 <= end) {
+            uint32 x0 = p[0], x1 = p[1];
+            p[0] = x0 - b0;
+            p[1] = x1 - b1;
+            b0 = x0; b1 = x1;
+            p += 2;
+        }
+        base[0] = b0; base[1] = b1;
+        break;
+    }
+    default:
+        for (; p + N <= end; p += N)
+            for (int i = 0; i < N; i++) {
+                uint32 x = p[i];
+                p[i] -= base[i];
+                base[i] = x;
+            }
+        break;
+    }
 }
 
 // Reorder buffer contents so that data for each byte of each channel are placed continuosly
@@ -103,18 +201,91 @@ BYTE* reorder_words (BYTE *buf, int bufsize, int N, int width)
 void undiff1 (void *buf, int bufsize, int N, void *_base)
 {
     char *base=(char*)_base;
-    for (char *p=(char*)buf; p+N<=(char*)buf+bufsize; p+=N)
-        for (int i=0; i<N; i++)
-            p[i] = base[i] += p[i];
+    char *p=(char*)buf;
+    char *end = (char*)buf + bufsize;
+    switch (N) {
+    case 1: {
+        char b0 = base[0];
+        while (p + 1 <= end) {
+            b0 = (p[0] += b0);
+            p += 1;
+        }
+        base[0] = b0;
+        break;
+    }
+    case 2: {
+        char b0 = base[0], b1 = base[1];
+        while (p + 2 <= end) {
+            b0 = (p[0] += b0);
+            b1 = (p[1] += b1);
+            p += 2;
+        }
+        base[0] = b0; base[1] = b1;
+        break;
+    }
+    case 3: {
+        char b0 = base[0], b1 = base[1], b2 = base[2];
+        while (p + 3 <= end) {
+            b0 = (p[0] += b0);
+            b1 = (p[1] += b1);
+            b2 = (p[2] += b2);
+            p += 3;
+        }
+        base[0] = b0; base[1] = b1; base[2] = b2;
+        break;
+    }
+    case 4: {
+        char b0 = base[0], b1 = base[1], b2 = base[2], b3 = base[3];
+        while (p + 4 <= end) {
+            b0 = (p[0] += b0);
+            b1 = (p[1] += b1);
+            b2 = (p[2] += b2);
+            b3 = (p[3] += b3);
+            p += 4;
+        }
+        base[0] = b0; base[1] = b1; base[2] = b2; base[3] = b3;
+        break;
+    }
+    default:
+        for (; p + N <= end; p += N)
+            for (int i = 0; i < N; i++)
+                p[i] = base[i] += p[i];
+        break;
+    }
 }
 
 // Run through buffer undiffing 16-bit elements
 void undiff2 (void *buf, int bufsize, int N, void *_base)
 {
     uint16 *base=(uint16*)_base;
-    for (uint16 *p=(uint16*)buf; p+N<=(uint16*)((char*)buf+bufsize); p+=N)
-        for (int i=0; i<N; i++)
-            p[i] = base[i] += p[i];
+    uint16 *p=(uint16*)buf;
+    uint16 *end = (uint16*)((char*)buf + bufsize);
+    switch (N) {
+    case 1: {
+        uint16 b0 = base[0];
+        while (p + 1 <= end) {
+            b0 = (p[0] += b0);
+            p += 1;
+        }
+        base[0] = b0;
+        break;
+    }
+    case 2: {
+        uint16 b0 = base[0], b1 = base[1];
+        while (p + 2 <= end) {
+            b0 = (p[0] += b0);
+            b1 = (p[1] += b1);
+            p += 2;
+        }
+        base[0] = b0; base[1] = b1;
+        break;
+    }
+    default:
+        for (; p + N <= end; p += N)
+            for (int i = 0; i < N; i++)
+                p[i] = base[i] += p[i];
+        break;
+    }
 }
 
 // Run through buffer undiffing 24-bit elements
@@ -130,9 +301,34 @@ void undiff3 (void *buf, int bufsize, int N, void *_base)
 void undiff4 (void *buf, int bufsize, int N, void *_base)
 {
     uint32 *base=(uint32*)_base;
-    for (uint32 *p=(uint32*)buf; p+N<=(uint32*)((char*)buf+bufsize); p+=N)
-        for (int i=0; i<N; i++)
-            p[i] = base[i] += p[i];
+    uint32 *p=(uint32*)buf;
+    uint32 *end = (uint32*)((char*)buf + bufsize);
+    switch (N) {
+    case 1: {
+        uint32 b0 = base[0];
+        while (p + 1 <= end) {
+            b0 = (p[0] += b0);
+            p += 1;
+        }
+        base[0] = b0;
+        break;
+    }
+    case 2: {
+        uint32 b0 = base[0], b1 = base[1];
+        while (p + 2 <= end) {
+            b0 = (p[0] += b0);
+            b1 = (p[1] += b1);
+            p += 2;
+        }
+        base[0] = b0; base[1] = b1;
+        break;
+    }
+    default:
+        for (; p + N <= end; p += N)
+            for (int i = 0; i < N; i++)
+                p[i] = base[i] += p[i];
+        break;
+    }
 }
 
 
@@ -146,9 +342,9 @@ int mm_compress (int mode, int skip_header, int is_float, int num_chan, int word
     BYTE* buf = (BYTE*) malloc(BUFSIZE+1);  // buffer for data processed, 1 more byte for diff24 safeness
     void* base = NULL;                      // previous values for all channels what will be substracted from next ones
 
-    int errcode,                            // êîä, âîçâðàù¸ííûé ïîñëåäíåé îïåðàöèåé ÷òåíèÿ/çàïèñè
+    int errcode,                            // ÃªÃ®Ã¤, Ã¢Ã®Ã§Ã¢Ã°Ã Ã¹Â¸Ã­Ã­Ã»Ã© Ã¯Ã®Ã±Ã«Ã¥Ã¤Ã­Ã¥Ã© Ã®Ã¯Ã¥Ã°Ã Ã¶Ã¨Ã¥Ã© Ã·Ã²Ã¥Ã­Ã¨Ã¿/Ã§Ã Ã¯Ã¨Ã±Ã¨
         bytes;                              // how many bytes was read to buf
-    // Ïðî÷èòàåì ïåðâûé ìåãàáàéò äëÿ äåòåêòèðîâàíèÿ òèïà ìóëüòèìåäèè
+    // ÃÃ°Ã®Ã·Ã¨Ã²Ã Ã¥Ã¬ Ã¯Ã¥Ã°Ã¢Ã»Ã© Ã¬Ã¥Ã£Ã Ã¡Ã Ã©Ã² Ã¤Ã«Ã¿ Ã¤Ã¥Ã²Ã¥ÃªÃ²Ã¨Ã°Ã®Ã¢Ã Ã­Ã¨Ã¿ Ã²Ã¨Ã¯Ã  Ã¬Ã³Ã«Ã¼Ã²Ã¨Ã¬Ã¥Ã¤Ã¨Ã¨
     if ((errcode = bytes = callback ("read", buf, BUFSIZE, auxdata)) <= 0)  goto finished;   // temporary! BUFFER_SIZE will be enough
 
    {// Select parameters of check depending on speed mode setting
@@ -177,7 +373,7 @@ int mm_compress (int mode, int skip_header, int is_float, int num_chan, int word
     int chunk =  roundDown(BUFSIZE,N);   // How many bytes should be processed each time
     int rest = bytes;
     bytes -= offset;                // First 'offset' bytes will be copied intact w/o any processing
-    bytes = roundDown(bytes,N);     // Íå îáðàáàòûâàòü ïåðâûé áëîê äàííûõ öåëèêîì, åñëè îí ñîäåðæèò íåöåëîå ÷èñëî îòñ÷¸òîâ. Âìåñòî ýòîãî îñòàâøèåñÿ áàéòû áóäóò âêëþ÷åíû âî âòîðîé áëîê
+    bytes = roundDown(bytes,N);     // ÃÃ¥ Ã®Ã¡Ã°Ã Ã¡Ã Ã²Ã»Ã¢Ã Ã²Ã¼ Ã¯Ã¥Ã°Ã¢Ã»Ã© Ã¡Ã«Ã®Ãª Ã¤Ã Ã­Ã­Ã»Ãµ Ã¶Ã¥Ã«Ã¨ÃªÃ®Ã¬, Ã¥Ã±Ã«Ã¨ Ã®Ã­ Ã±Ã®Ã¤Ã¥Ã°Ã¦Ã¨Ã² Ã­Ã¥Ã¶Ã¥Ã«Ã®Ã¥ Ã·Ã¨Ã±Ã«Ã® Ã®Ã²Ã±Ã·Â¸Ã²Ã®Ã¢. Ã‚Ã¬Ã¥Ã±Ã²Ã® Ã½Ã²Ã®Ã£Ã® Ã®Ã±Ã²Ã Ã¢Ã¸Ã¨Ã¥Ã±Ã¿ Ã¡Ã Ã©Ã²Ã» Ã¡Ã³Ã¤Ã³Ã² Ã¢ÃªÃ«Ã¾Ã·Ã¥Ã­Ã» Ã¢Ã® Ã¢Ã²Ã®Ã°Ã®Ã© Ã¡Ã«Ã®Ãª
     rest -= offset+bytes;           // how many bytes will remain unprocessed at end of buf
     base = calloc (num_chan, byte_size==3? 4:byte_size);   // previous values for all channels what will be substracted from next ones
     BYTE *ptr = buf + offset;       // In first block we should skip already copied data, in the following blocks ptr==buf
@@ -202,7 +398,7 @@ int mm_compress (int mode, int skip_header, int is_float, int num_chan, int word
         WRITE  (base, roundUp(3+4+offset,N) - (3+4+offset));
     }
 
-    // Öèêë ÷òåíèÿ/ïðåïðîöåññèíãà/çàïèñè áëîêîâ äàííûõ
+    // Ã–Ã¨ÃªÃ« Ã·Ã²Ã¥Ã­Ã¨Ã¿/Ã¯Ã°Ã¥Ã¯Ã°Ã®Ã¶Ã¥Ã±Ã±Ã¨Ã­Ã£Ã /Ã§Ã Ã¯Ã¨Ã±Ã¨ Ã¡Ã«Ã®ÃªÃ®Ã¢ Ã¤Ã Ã­Ã­Ã»Ãµ
     for(;;) {
         switch (byte_size) {
         case 1 : diff1 (ptr, bytes, num_chan, base);  break;
@@ -233,7 +429,7 @@ int mm_compress (int mode, int skip_header, int is_float, int num_chan, int word
 finished:
     FreeAndNil(base);
     FreeAndNil(buf);
-    return errcode;         // 0, åñëè âñ¸ â ïîðÿäêå, è êîä îøèáêè èíà÷å
+    return errcode;         // 0, Ã¥Ã±Ã«Ã¨ Ã¢Ã±Â¸ Ã¢ Ã¯Ã®Ã°Ã¿Ã¤ÃªÃ¥, Ã¨ ÃªÃ®Ã¤ Ã®Ã¸Ã¨Ã¡ÃªÃ¨ Ã¨Ã­Ã Ã·Ã¥
 }
 #endif  // !defined (FREEARC_DECOMPRESS_ONLY)
 
@@ -244,7 +440,7 @@ int mm_decompress (CALLBACK_FUNC *callback, void *auxdata)
     BYTE* buf  = (BYTE*) malloc (BUFFER_SIZE+1);  // buffer for data processed
     void* buf1 = NULL;
     void* base = NULL;                            // room for previous values for all channels what will be substracted from next ones
-    int errcode,                                  // êîä, âîçâðàù¸ííûé ïîñëåäíåé îïåðàöèåé ÷òåíèÿ/çàïèñè
+    int errcode,                                  // ÃªÃ®Ã¤, Ã¢Ã®Ã§Ã¢Ã°Ã Ã¹Â¸Ã­Ã­Ã»Ã© Ã¯Ã®Ã±Ã«Ã¥Ã¤Ã­Ã¥Ã© Ã®Ã¯Ã¥Ã°Ã Ã¶Ã¨Ã¥Ã© Ã·Ã²Ã¥Ã­Ã¨Ã¿/Ã§Ã Ã¯Ã¨Ã±Ã¨
         bytes;                                    // how many bytes was read to buf
 
     READ (header,1);
@@ -299,7 +495,7 @@ finished:
     FreeAndNil (base);
     FreeAndNil (buf1);
     FreeAndNil (buf);
-    return errcode;         // 0, åñëè âñ¸ â ïîðÿäêå, è êîä îøèáêè èíà÷å
+    return errcode;         // 0, Ã¥Ã±Ã«Ã¨ Ã¢Ã±Â¸ Ã¢ Ã¯Ã®Ã°Ã¿Ã¤ÃªÃ¥, Ã¨ ÃªÃ®Ã¤ Ã®Ã¸Ã¨Ã¡ÃªÃ¨ Ã¨Ã­Ã Ã·Ã¥
 }
 
 
@@ -363,7 +559,7 @@ int writeFILE (/*void* param,*/ void* buf, int size)
     return size;
 }
 
-// Ðàçáîð êîìàíäíîé ñòðîêè, ÷òåíèå âõîäíûõ äàííûõ, âûçîâ encode/decode, è çàïèñü âûõîäíûõ äàííûõ
+// ÃÃ Ã§Ã¡Ã®Ã° ÃªÃ®Ã¬Ã Ã­Ã¤Ã­Ã®Ã© Ã±Ã²Ã°Ã®ÃªÃ¨, Ã·Ã²Ã¥Ã­Ã¨Ã¥ Ã¢ÃµÃ®Ã¤Ã­Ã»Ãµ Ã¤Ã Ã­Ã­Ã»Ãµ, Ã¢Ã»Ã§Ã®Ã¢ encode/decode, Ã¨ Ã§Ã Ã¯Ã¨Ã±Ã¼ Ã¢Ã»ÃµÃ®Ã¤Ã­Ã»Ãµ Ã¤Ã Ã­Ã­Ã»Ãµ
 int main (int argc, char **argv)
 {
     int mode        = 9;  // Detection speed mode (1 - fastest, 9 - most accurate)
@@ -421,7 +617,7 @@ int main (int argc, char **argv)
         exit(2);
     }
 
-    // Çàïèñàòü âûõîäíûå äàííûå, åñëè áûë óêàçàí âûõîäíîé ôàéë
+    // Ã‡Ã Ã¯Ã¨Ã±Ã Ã²Ã¼ Ã¢Ã»ÃµÃ®Ã¤Ã­Ã»Ã¥ Ã¤Ã Ã­Ã­Ã»Ã¥, Ã¥Ã±Ã«Ã¨ Ã¡Ã»Ã« Ã³ÃªÃ Ã§Ã Ã­ Ã¢Ã»ÃµÃ®Ã¤Ã­Ã®Ã© Ã´Ã Ã©Ã«
     fout = fopen (argc==3? argv[2] : "NUL", "wb");
     if (fout == NULL) {
         printf ("\n Can't open %s for write\n", argv[2]);
@@ -433,7 +629,7 @@ int main (int argc, char **argv)
     stime = time(NULL);
     data_size = filelength(fileno(fin));
 
-    // Ïðîèçâåñòè óïàêîâêó èëè ðàñïàêîâêó
+    // ÃÃ°Ã®Ã¨Ã§Ã¢Ã¥Ã±Ã²Ã¨ Ã³Ã¯Ã ÃªÃ®Ã¢ÃªÃ³ Ã¨Ã«Ã¨ Ã°Ã Ã±Ã¯Ã ÃªÃ®Ã¢ÃªÃ³
     !unpack
       ? mm_compress   (mode, skip_header, is_float, num_chan, word_size, offset, reorder, readFILE, writeFILE)
       : mm_decompress (readFILE, writeFILE);

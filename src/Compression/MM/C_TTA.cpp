@@ -10,10 +10,10 @@ extern "C" {
 
 
 /*-------------------------------------------------*/
-/* Реализация класса TTA_METHOD                    */
+/* ГђГҐГ Г«ГЁГ§Г Г¶ГЁГї ГЄГ«Г Г±Г±Г  TTA_METHOD                    */
 /*-------------------------------------------------*/
 
-// Конструктор, присваивающий параметрам метода сжатия значения по умолчанию
+// ГЉГ®Г­Г±ГІГ°ГіГЄГІГ®Г°, ГЇГ°ГЁГ±ГўГ ГЁГўГ ГѕГ№ГЁГ© ГЇГ Г°Г Г¬ГҐГІГ°Г Г¬ Г¬ГҐГІГ®Г¤Г  Г±Г¦Г ГІГЁГї Г§Г­Г Г·ГҐГ­ГЁГї ГЇГ® ГіГ¬Г®Г«Г·Г Г­ГЁГѕ
 TTA_METHOD::TTA_METHOD()
 {
   level       = 3;
@@ -25,7 +25,7 @@ TTA_METHOD::TTA_METHOD()
   raw_data    = 0;
 }
 
-// Функция распаковки
+// Г”ГіГ­ГЄГ¶ГЁГї Г°Г Г±ГЇГ ГЄГ®ГўГЄГЁ
 int TTA_METHOD::decompress (CALLBACK_FUNC *callback, void *auxdata)
 {
   // Use faster function from DLL if possible
@@ -37,7 +37,7 @@ int TTA_METHOD::decompress (CALLBACK_FUNC *callback, void *auxdata)
 
 #ifndef FREEARC_DECOMPRESS_ONLY
 
-// Функция упаковки
+// Г”ГіГ­ГЄГ¶ГЁГї ГіГЇГ ГЄГ®ГўГЄГЁ
 int TTA_METHOD::compress (CALLBACK_FUNC *callback, void *auxdata)
 {
   // Use faster function from DLL if possible
@@ -48,7 +48,7 @@ int TTA_METHOD::compress (CALLBACK_FUNC *callback, void *auxdata)
                           (level, skip_header, is_float, num_chan, word_size, offset, raw_data, callback, auxdata);
 }
 
-// Записать в buf[MAX_METHOD_STRLEN] строку, описывающую метод сжатия и его параметры (функция, обратная к parse_TTA)
+// Г‡Г ГЇГЁГ±Г ГІГј Гў buf[MAX_METHOD_STRLEN] Г±ГІГ°Г®ГЄГі, Г®ГЇГЁГ±Г»ГўГ ГѕГ№ГіГѕ Г¬ГҐГІГ®Г¤ Г±Г¦Г ГІГЁГї ГЁ ГҐГЈГ® ГЇГ Г°Г Г¬ГҐГІГ°Г» (ГґГіГ­ГЄГ¶ГЁГї, Г®ГЎГ°Г ГІГ­Г Гї ГЄ parse_TTA)
 void TTA_METHOD::ShowCompressionMethod (char *buf)
 {
     TTA_METHOD defaults;  char eStr[100], cStr[100], rStr[100];
@@ -65,21 +65,21 @@ void TTA_METHOD::ShowCompressionMethod (char *buf)
 
 #endif  // !defined (FREEARC_DECOMPRESS_ONLY)
 
-// Конструирует объект типа TTA_METHOD с заданными параметрами упаковки
-// или возвращает NULL, если это другой метод сжатия или допущена ошибка в параметрах
+// ГЉГ®Г­Г±ГІГ°ГіГЁГ°ГіГҐГІ Г®ГЎГєГҐГЄГІ ГІГЁГЇГ  TTA_METHOD Г± Г§Г Г¤Г Г­Г­Г»Г¬ГЁ ГЇГ Г°Г Г¬ГҐГІГ°Г Г¬ГЁ ГіГЇГ ГЄГ®ГўГЄГЁ
+// ГЁГ«ГЁ ГўГ®Г§ГўГ°Г Г№Г ГҐГІ NULL, ГҐГ±Г«ГЁ ГЅГІГ® Г¤Г°ГіГЈГ®Г© Г¬ГҐГІГ®Г¤ Г±Г¦Г ГІГЁГї ГЁГ«ГЁ Г¤Г®ГЇГіГ№ГҐГ­Г  Г®ГёГЁГЎГЄГ  Гў ГЇГ Г°Г Г¬ГҐГІГ°Г Гµ
 COMPRESSION_METHOD* parse_TTA (char** parameters)
 {
   if (strcmp (parameters[0], "tta") == 0) {
-    // Если название метода (нулевой параметр) - "tta", то разберём остальные параметры
+    // Г…Г±Г«ГЁ Г­Г Г§ГўГ Г­ГЁГҐ Г¬ГҐГІГ®Г¤Г  (Г­ГіГ«ГҐГўГ®Г© ГЇГ Г°Г Г¬ГҐГІГ°) - "tta", ГІГ® Г°Г Г§ГЎГҐГ°ВёГ¬ Г®Г±ГІГ Г«ГјГ­Г»ГҐ ГЇГ Г°Г Г¬ГҐГІГ°Г»
 
     TTA_METHOD *p = new TTA_METHOD;
-    int error = 0;  // Признак того, что при разборе параметров произошла ошибка
+    int error = 0;  // ГЏГ°ГЁГ§Г­Г ГЄ ГІГ®ГЈГ®, Г·ГІГ® ГЇГ°ГЁ Г°Г Г§ГЎГ®Г°ГҐ ГЇГ Г°Г Г¬ГҐГІГ°Г®Гў ГЇГ°Г®ГЁГ§Г®ГёГ«Г  Г®ГёГЁГЎГЄГ 
 
-    // Переберём все параметры метода (или выйдем раньше при возникновении ошибки при разборе очередного параметра)
+    // ГЏГҐГ°ГҐГЎГҐГ°ВёГ¬ ГўГ±ГҐ ГЇГ Г°Г Г¬ГҐГІГ°Г» Г¬ГҐГІГ®Г¤Г  (ГЁГ«ГЁ ГўГ»Г©Г¤ГҐГ¬ Г°Г Г­ГјГёГҐ ГЇГ°ГЁ ГўГ®Г§Г­ГЁГЄГ­Г®ГўГҐГ­ГЁГЁ Г®ГёГЁГЎГЄГЁ ГЇГ°ГЁ Г°Г Г§ГЎГ®Г°ГҐ Г®Г·ГҐГ°ГҐГ¤Г­Г®ГЈГ® ГЇГ Г°Г Г¬ГҐГІГ°Г )
     while (*++parameters && !error)
     {
       char* param = *parameters;
-      switch (*param) {                    // Параметры, содержащие значения
+      switch (*param) {                    // ГЏГ Г°Г Г¬ГҐГІГ°Г», Г±Г®Г¤ГҐГ°Г¦Г Г№ГЁГҐ Г§Г­Г Г·ГҐГ­ГЁГї
         case 'm':  p->level       = parseInt (param+1, &error); continue;
         case 's':  p->skip_header = 1;                          continue;
         case 'f':  p->is_float    = 1;                          continue;
@@ -88,10 +88,10 @@ COMPRESSION_METHOD* parse_TTA (char** parameters)
         case 'o':  p->offset      = parseInt (param+1, &error); continue;
         case 'r':  p->raw_data    = parseInt (param+1, &error); continue;
       }
-      // Сюда мы попадаем, если в параметре не указано его название
-      // Если этот параметр удастся разобрать как c*w,
-      // то используем эти значения для полей num_chan и word_size.
-      // Дополнительный символ 'f' означает, что это данные в FP-формате
+      // Г‘ГѕГ¤Г  Г¬Г» ГЇГ®ГЇГ Г¤Г ГҐГ¬, ГҐГ±Г«ГЁ Гў ГЇГ Г°Г Г¬ГҐГІГ°ГҐ Г­ГҐ ГіГЄГ Г§Г Г­Г® ГҐГЈГ® Г­Г Г§ГўГ Г­ГЁГҐ
+      // Г…Г±Г«ГЁ ГЅГІГ®ГІ ГЇГ Г°Г Г¬ГҐГІГ° ГіГ¤Г Г±ГІГ±Гї Г°Г Г§Г®ГЎГ°Г ГІГј ГЄГ ГЄ c*w,
+      // ГІГ® ГЁГ±ГЇГ®Г«ГјГ§ГіГҐГ¬ ГЅГІГЁ Г§Г­Г Г·ГҐГ­ГЁГї Г¤Г«Гї ГЇГ®Г«ГҐГ© num_chan ГЁ word_size.
+      // Г„Г®ГЇГ®Г«Г­ГЁГІГҐГ«ГјГ­Г»Г© Г±ГЁГ¬ГўГ®Г« 'f' Г®Г§Г­Г Г·Г ГҐГІ, Г·ГІГ® ГЅГІГ® Г¤Г Г­Г­Г»ГҐ Гў FP-ГґГ®Г°Г¬Г ГІГҐ
       int a, b;  char s[MAX_METHOD_STRLEN];
       if (sscanf (param, "%d*%d%s", &a, &b, s)==3  &&  strequ(s,"f"))
           p->is_float = 1, p->num_chan=a, p->word_size=b;
@@ -99,10 +99,10 @@ COMPRESSION_METHOD* parse_TTA (char** parameters)
           p->is_float = 0, p->num_chan=a, p->word_size=b;
       else error=1;
     }
-    if (error)  {delete p; return NULL;}  // Ошибка при парсинге параметров метода
+    if (error)  {delete p; return NULL;}  // ГЋГёГЁГЎГЄГ  ГЇГ°ГЁ ГЇГ Г°Г±ГЁГ­ГЈГҐ ГЇГ Г°Г Г¬ГҐГІГ°Г®Гў Г¬ГҐГІГ®Г¤Г 
     return p;
   } else
-    return NULL;   // Это не метод TTA
+    return NULL;   // ГќГІГ® Г­ГҐ Г¬ГҐГІГ®Г¤ TTA
 }
 
-static int TTA_x = AddCompressionMethod (parse_TTA);   // Зарегистрируем парсер метода TTA
+static int TTA_x = AddCompressionMethod (parse_TTA);   // Г‡Г Г°ГҐГЈГЁГ±ГІГ°ГЁГ°ГіГҐГ¬ ГЇГ Г°Г±ГҐГ° Г¬ГҐГІГ®Г¤Г  TTA

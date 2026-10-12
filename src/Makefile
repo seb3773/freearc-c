@@ -185,7 +185,7 @@ $(DEC_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h 
 $(DEC_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
-$(DEC_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h $(HEADERS) | $(DEC_OBJDIR)
+$(DEC_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h Compression/Delta/Delta.cpp $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
 $(DEC_OBJDIR)/C_REP.o: Compression/REP/C_REP.cpp Compression/REP/C_REP.h Compression/REP/rep.cpp $(HEADERS) | $(DEC_OBJDIR)
@@ -197,7 +197,7 @@ $(DEC_OBJDIR)/C_LZP.o: Compression/LZP/C_LZP.cpp Compression/LZP/C_LZP.h $(HEADE
 $(DEC_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS_NO_SA) -o $@ $<
 
-$(DEC_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h $(HEADERS) | $(DEC_OBJDIR)
+$(DEC_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
 $(DEC_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h $(HEADERS) | $(DEC_OBJDIR)
@@ -241,7 +241,7 @@ $(ENC_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h 
 $(ENC_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
-$(ENC_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h $(HEADERS) | $(ENC_OBJDIR)
+$(ENC_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h Compression/Delta/Delta.cpp $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
 $(ENC_OBJDIR)/C_REP.o: Compression/REP/C_REP.cpp Compression/REP/C_REP.h Compression/REP/rep.cpp $(HEADERS) | $(ENC_OBJDIR)
@@ -253,7 +253,7 @@ $(ENC_OBJDIR)/C_LZP.o: Compression/LZP/C_LZP.cpp Compression/LZP/C_LZP.h $(HEADE
 $(ENC_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS_NO_SA) -o $@ $<
 
-$(ENC_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h $(HEADERS) | $(ENC_OBJDIR)
+$(ENC_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
 $(ENC_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h $(HEADERS) | $(ENC_OBJDIR)
@@ -307,7 +307,7 @@ $(DEC_WIN64_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_L
 $(DEC_WIN64_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
-$(DEC_WIN64_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
+$(DEC_WIN64_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h Compression/Delta/Delta.cpp $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
 $(DEC_WIN64_OBJDIR)/C_REP.o: Compression/REP/C_REP.cpp Compression/REP/C_REP.h Compression/REP/rep.cpp $(HEADERS) | $(DEC_WIN64_OBJDIR)
@@ -319,7 +319,7 @@ $(DEC_WIN64_OBJDIR)/C_LZP.o: Compression/LZP/C_LZP.cpp Compression/LZP/C_LZP.h $
 $(DEC_WIN64_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS_NO_SA) -o $@ $<
 
-$(DEC_WIN64_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
+$(DEC_WIN64_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
 $(DEC_WIN64_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
@@ -363,7 +363,7 @@ $(ENC_WIN64_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_L
 $(ENC_WIN64_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
-$(ENC_WIN64_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
+$(ENC_WIN64_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h Compression/Delta/Delta.cpp $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/C_REP.o: Compression/REP/C_REP.cpp Compression/REP/C_REP.h Compression/REP/rep.cpp $(HEADERS) | $(ENC_WIN64_OBJDIR)
@@ -375,7 +375,7 @@ $(ENC_WIN64_OBJDIR)/C_LZP.o: Compression/LZP/C_LZP.cpp Compression/LZP/C_LZP.h $
 $(ENC_WIN64_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS_NO_SA) -o $@ $<
 
-$(ENC_WIN64_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
+$(ENC_WIN64_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h $(HEADERS) | $(ENC_WIN64_OBJDIR)

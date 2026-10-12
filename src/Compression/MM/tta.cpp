@@ -193,7 +193,25 @@ static long write_wave (long **data, long byte_size, long num_chan, unsigned lon
 #ifndef FREEARC_DECOMPRESS_ONLY
 void split_int (long *data, long frame_len, long num_chan, long **buffer)
 {
-    long    i, j, n;
+    long i, j, n;
+
+    if (num_chan == 1) {
+        memcpy(buffer[0], data, frame_len * sizeof(long));
+        return;
+    }
+
+    if (num_chan == 2) {
+        long *b0 = buffer[0];
+        long *b1 = buffer[1];
+        for (i = 0; i < frame_len; i++) {
+            long d0 = data[2 * i];
+            long d1 = data[2 * i + 1];
+            long diff = d1 - d0;
+            b0[i] = diff;
+            b1[i] = d1 - (diff / 2);
+        }
+        return;
+    }
 
     for (i = 0; i < frame_len; i++)
     for (j = 0; j < num_chan; j++) {
@@ -211,7 +229,23 @@ void split_int (long *data, long frame_len, long num_chan, long **buffer)
 
 void combine_int (long frame_len, long num_chan, long **buffer)
 {
-    long    i, j, n;
+    long i, j, n;
+
+    if (num_chan == 1) {
+        return;
+    }
+
+    if (num_chan == 2) {
+        long *b0 = buffer[0];
+        long *b1 = buffer[1];
+        for (i = 0; i < frame_len; i++) {
+            long diff = b0[i];
+            long mid  = b1[i] + (diff / 2);
+            b1[i] = mid;
+            b0[i] = mid - diff;
+        }
+        return;
+    }
 
     if (num_chan > 1)
     for (i = 0, n = (num_chan - 1); i < frame_len; i++) {
@@ -519,7 +553,7 @@ finished:
 // 3. cobalp?
 // 4. class Buffer?
 
-// ХОЗЧАСТЬ ************************************************************************
+// Г•ГЋГ‡Г—ГЂГ‘Г’Гњ ************************************************************************
 #include <stdlib.h>
 #include <stdio.h>
 #include <io.h>
@@ -590,7 +624,7 @@ int writeFILE (/*void* param,*/ void* buf, int size)
     return 0;
 }
 
-// Разбор командной строки, чтение входных данных, вызов encode/decode, и запись выходных данных
+// ГђГ Г§ГЎГ®Г° ГЄГ®Г¬Г Г­Г¤Г­Г®Г© Г±ГІГ°Г®ГЄГЁ, Г·ГІГҐГ­ГЁГҐ ГўГµГ®Г¤Г­Г»Гµ Г¤Г Г­Г­Г»Гµ, ГўГ»Г§Г®Гў encode/decode, ГЁ Г§Г ГЇГЁГ±Гј ГўГ»ГµГ®Г¤Г­Г»Гµ Г¤Г Г­Г­Г»Гµ
 int main (int argc, char **argv)
 {
     int tta_level   = 3;  // Compression level (1..3, higher means tighter and slower compression)
@@ -648,7 +682,7 @@ int main (int argc, char **argv)
         exit(2);
     }
 
-    // Записать выходные данные, если был указан выходной файл
+    // Г‡Г ГЇГЁГ±Г ГІГј ГўГ»ГµГ®Г¤Г­Г»ГҐ Г¤Г Г­Г­Г»ГҐ, ГҐГ±Г«ГЁ ГЎГ»Г« ГіГЄГ Г§Г Г­ ГўГ»ГµГ®Г¤Г­Г®Г© ГґГ Г©Г«
     fout = fopen( argc==3? argv[2] : "NUL", "wb" );
     if (fout == NULL) {
         printf( "\n Can't open %s for write\n", argv[2]);
@@ -660,7 +694,7 @@ int main (int argc, char **argv)
     stime = time(NULL);
     data_size = filelength(fileno(fin));
 
-    // Произвести упаковку или распаковку
+    // ГЏГ°Г®ГЁГ§ГўГҐГ±ГІГЁ ГіГЇГ ГЄГ®ГўГЄГі ГЁГ«ГЁ Г°Г Г±ГЇГ ГЄГ®ГўГЄГі
     !unpack
       ? tta_compress   (tta_level, skip_header, is_float, num_chan, word_size, offset, raw_data, readFILE, fin, writeFILE, fout)
       : tta_decompress (readFILE, fin, writeFILE, fout);

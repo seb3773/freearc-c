@@ -5,11 +5,11 @@
 
 #ifdef __cplusplus
 
-// Реализация стандартного интерфейса методов сжатия COMPRESSION_METHOD
+// ГђГҐГ Г«ГЁГ§Г Г¶ГЁГї Г±ГІГ Г­Г¤Г Г°ГІГ­Г®ГЈГ® ГЁГ­ГІГҐГ°ГґГҐГ©Г±Г  Г¬ГҐГІГ®Г¤Г®Гў Г±Г¦Г ГІГЁГї COMPRESSION_METHOD
 class TTA_METHOD : public COMPRESSION_METHOD
 {
 public:
-  // Параметры этого метода сжатия
+  // ГЏГ Г°Г Г¬ГҐГІГ°Г» ГЅГІГ®ГЈГ® Г¬ГҐГІГ®Г¤Г  Г±Г¦Г ГІГЁГї
   int level;        // Compression level (1..3, higher means tighter and slower compression)
   int skip_header;  // Skip WAV header detection
   int is_float;     // Floating-point data format
@@ -18,25 +18,25 @@ public:
   int offset;       // File offset where MM data start (header is copied intact)
   int raw_data ;    // Write raw predictor's output without using entropy encoder
 
-  // Конструктор, присваивающий параметрам метода сжатия значения по умолчанию
+  // ГЉГ®Г­Г±ГІГ°ГіГЄГІГ®Г°, ГЇГ°ГЁГ±ГўГ ГЁГўГ ГѕГ№ГЁГ© ГЇГ Г°Г Г¬ГҐГІГ°Г Г¬ Г¬ГҐГІГ®Г¤Г  Г±Г¦Г ГІГЁГї Г§Г­Г Г·ГҐГ­ГЁГї ГЇГ® ГіГ¬Г®Г«Г·Г Г­ГЁГѕ
   TTA_METHOD();
-  // Универсальный метод: возвращаем различные простые характеристики метода сжатия
+  // Г“Г­ГЁГўГҐГ°Г±Г Г«ГјГ­Г»Г© Г¬ГҐГІГ®Г¤: ГўГ®Г§ГўГ°Г Г№Г ГҐГ¬ Г°Г Г§Г«ГЁГ·Г­Г»ГҐ ГЇГ°Г®Г±ГІГ»ГҐ ГµГ Г°Г ГЄГІГҐГ°ГЁГ±ГІГЁГЄГЁ Г¬ГҐГІГ®Г¤Г  Г±Г¦Г ГІГЁГї
   virtual int doit (char *what, int param, void *data, CALLBACK_FUNC *callback)
   {
-      // Запретить солид-сжатие, если кодируются 2+ байтовые значения или пропускаются байты в начале каждого файла
+      // Г‡Г ГЇГ°ГҐГІГЁГІГј Г±Г®Г«ГЁГ¤-Г±Г¦Г ГІГЁГҐ, ГҐГ±Г«ГЁ ГЄГ®Г¤ГЁГ°ГіГѕГІГ±Гї 2+ ГЎГ Г©ГІГ®ГўГ»ГҐ Г§Г­Г Г·ГҐГ­ГЁГї ГЁГ«ГЁ ГЇГ°Г®ГЇГіГ±ГЄГ ГѕГІГ±Гї ГЎГ Г©ГІГ» Гў Г­Г Г·Г Г«ГҐ ГЄГ Г¦Г¤Г®ГЈГ® ГґГ Г©Г«Г 
       if (strequ (what,"nosolid?"))   return word_size!=8 || offset!=0;
       else return COMPRESSION_METHOD::doit (what, param, data, callback);
   }
 
-  // Функции распаковки и упаковки
+  // Г”ГіГ­ГЄГ¶ГЁГЁ Г°Г Г±ГЇГ ГЄГ®ГўГЄГЁ ГЁ ГіГЇГ ГЄГ®ГўГЄГЁ
   virtual int decompress (CALLBACK_FUNC *callback, void *auxdata);
 #ifndef FREEARC_DECOMPRESS_ONLY
   virtual int compress   (CALLBACK_FUNC *callback, void *auxdata);
 
-  // Записать в buf[MAX_METHOD_STRLEN] строку, описывающую метод сжатия и его параметры (функция, обратная к parse_TTA)
+  // Г‡Г ГЇГЁГ±Г ГІГј Гў buf[MAX_METHOD_STRLEN] Г±ГІГ°Г®ГЄГі, Г®ГЇГЁГ±Г»ГўГ ГѕГ№ГіГѕ Г¬ГҐГІГ®Г¤ Г±Г¦Г ГІГЁГї ГЁ ГҐГЈГ® ГЇГ Г°Г Г¬ГҐГІГ°Г» (ГґГіГ­ГЄГ¶ГЁГї, Г®ГЎГ°Г ГІГ­Г Гї ГЄ parse_TTA)
   virtual void ShowCompressionMethod (char *buf);
 
-  // Получить/установить объём памяти, используемой при упаковке/распаковке, размер словаря или размер блока
+  // ГЏГ®Г«ГіГ·ГЁГІГј/ГіГ±ГІГ Г­Г®ГўГЁГІГј Г®ГЎГєВёГ¬ ГЇГ Г¬ГїГІГЁ, ГЁГ±ГЇГ®Г«ГјГ§ГіГҐГ¬Г®Г© ГЇГ°ГЁ ГіГЇГ ГЄГ®ГўГЄГҐ/Г°Г Г±ГЇГ ГЄГ®ГўГЄГҐ, Г°Г Г§Г¬ГҐГ° Г±Г«Г®ГўГ Г°Гї ГЁГ«ГЁ Г°Г Г§Г¬ГҐГ° ГЎГ«Г®ГЄГ 
   virtual MemSize GetCompressionMem     (void)         {return 2*mb;}
   virtual MemSize GetDictionary         (void)         {return 0;}
   virtual MemSize GetBlockSize          (void)         {return 0;}
@@ -48,7 +48,7 @@ public:
   virtual MemSize GetDecompressionMem   (void)         {return 1*mb;}
 };
 
-// Разборщик строки метода сжатия TTA
+// ГђГ Г§ГЎГ®Г°Г№ГЁГЄ Г±ГІГ°Г®ГЄГЁ Г¬ГҐГІГ®Г¤Г  Г±Г¦Г ГІГЁГї TTA
 COMPRESSION_METHOD* parse_TTA (char** parameters);
 
 #endif  // __cplusplus

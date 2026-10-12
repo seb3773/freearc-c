@@ -243,9 +243,6 @@ void
 filters_compress (long *data, unsigned long len, long level, long byte_size) {
     fltst fst1, fst2, fst3;
 
-    long *p = data;
-    long tmp, last;
-
     int *f1 = flt_set[0][level-1][byte_size-1];
     int *f2 = flt_set[1][level-1][byte_size-1];
     int *f3 = flt_set[2][level-1][byte_size-1];
@@ -254,20 +251,32 @@ filters_compress (long *data, unsigned long len, long level, long byte_size) {
     filter_init (&fst2, f2[0], f2[1], f2[2]);
     filter_init (&fst3, f3[0], f3[1], f3[2]);
 
-    for (last = 0; p < data + len; p++) {
+    // compress stage 1: fixed order 1 prediction
+    if (len > 0) {
+        if (byte_size == 4) {
+            for (unsigned long i = len - 1; i > 0; i--) {
+                data[i] -= data[i - 1];
+            }
+        } else {
+            long k = (byte_size == 1) ? 4 : 5;
+            for (unsigned long i = len - 1; i > 0; i--) {
+                data[i] -= PREDICTOR1(data[i - 1], k);
+            }
+        }
+    }
 
-        // compress stage 1: fixed order 1 prediction
-        tmp = *p; switch (byte_size) {
-        case 1: *p -= PREDICTOR1(last, 4); break;   // bps 8
-        case 2: *p -= PREDICTOR1(last, 5); break;   // bps 16
-        case 3: *p -= PREDICTOR1(last, 5); break;   // bps 24
-        case 4: *p -= last; break;                  // bps 32
-        } last = tmp;
-
-        // compress stage 2: adaptive hybrid filters
-        if (fst1.order) filter_compress (&fst1, p);
-        if (fst2.order) filter_compress (&fst2, p);
-        if (fst3.order) filter_compress (&fst3, p);
+    // compress stage 2: adaptive hybrid filters
+    if (fst1.order) {
+        for (unsigned long i = 0; i < len; i++)
+            filter_compress (&fst1, &data[i]);
+    }
+    if (fst2.order) {
+        for (unsigned long i = 0; i < len; i++)
+            filter_compress (&fst2, &data[i]);
+    }
+    if (fst3.order) {
+        for (unsigned long i = 0; i < len; i++)
+            filter_compress (&fst3, &data[i]);
     }
 }
 
@@ -275,9 +284,6 @@ void
 filters_decompress (long *data, unsigned long len, long level, long byte_size) {
     fltst fst1, fst2, fst3;
 
-    long *p = data;
-    long last;
-
     int *f1 = flt_set[0][level-1][byte_size-1];
     int *f2 = flt_set[1][level-1][byte_size-1];
     int *f3 = flt_set[2][level-1][byte_size-1];
@@ -286,20 +292,32 @@ filters_decompress (long *data, unsigned long len, long level, long byte_size) {
     filter_init (&fst2, f2[0], f2[1], f2[2]);
     filter_init (&fst3, f3[0], f3[1], f3[2]);
 
-    for (last = 0; p < data + len; p++) {
+    // decompress stage 1: adaptive hybrid filters
+    if (fst3.order) {
+        for (unsigned long i = 0; i < len; i++)
+            filter_decompress (&fst3, &data[i]);
+    }
+    if (fst2.order) {
+        for (unsigned long i = 0; i < len; i++)
+            filter_decompress (&fst2, &data[i]);
+    }
+    if (fst1.order) {
+        for (unsigned long i = 0; i < len; i++)
+            filter_decompress (&fst1, &data[i]);
+    }
 
-        // decompress stage 1: adaptive hybrid filters
-        if (fst3.order) filter_decompress (&fst3, p);
-        if (fst2.order) filter_decompress (&fst2, p);
-        if (fst1.order) filter_decompress (&fst1, p);
-
-        // decompress stage 2: fixed order 1 prediction
-        switch (byte_size) {
-        case 1: *p += PREDICTOR1(last, 4); break;   // bps 8
-        case 2: *p += PREDICTOR1(last, 5); break;   // bps 16
-        case 3: *p += PREDICTOR1(last, 5); break;   // bps 24
-        case 4: *p += last; break;                  // bps 32
-        } last = *p;
+    // decompress stage 2: fixed order 1 prediction
+    if (len > 0) {
+        if (byte_size == 4) {
+            for (unsigned long i = 1; i < len; i++) {
+                data[i] += data[i - 1];
+            }
+        } else {
+            long k = (byte_size == 1) ? 4 : 5;
+            for (unsigned long i = 1; i < len; i++) {
+                data[i] += PREDICTOR1(data[i - 1], k);
+            }
+        }
     }
 }
 

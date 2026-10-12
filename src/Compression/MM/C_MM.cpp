@@ -6,10 +6,10 @@ extern "C" {
 
 
 /*-------------------------------------------------*/
-/* Реализация класса MM_METHOD                     */
+/* ГђГҐГ Г«ГЁГ§Г Г¶ГЁГї ГЄГ«Г Г±Г±Г  MM_METHOD                     */
 /*-------------------------------------------------*/
 
-// Конструктор, присваивающий параметрам метода сжатия значения по умолчанию
+// ГЉГ®Г­Г±ГІГ°ГіГЄГІГ®Г°, ГЇГ°ГЁГ±ГўГ ГЁГўГ ГѕГ№ГЁГ© ГЇГ Г°Г Г¬ГҐГІГ°Г Г¬ Г¬ГҐГІГ®Г¤Г  Г±Г¦Г ГІГЁГї Г§Г­Г Г·ГҐГ­ГЁГї ГЇГ® ГіГ¬Г®Г«Г·Г Г­ГЁГѕ
 MM_METHOD::MM_METHOD()
 {
     mode        = 9;
@@ -21,7 +21,7 @@ MM_METHOD::MM_METHOD()
     reorder     = 0;
 }
 
-// Функция распаковки
+// Г”ГіГ­ГЄГ¶ГЁГї Г°Г Г±ГЇГ ГЄГ®ГўГЄГЁ
 int MM_METHOD::decompress (CALLBACK_FUNC *callback, void *auxdata)
 {
     return mm_decompress (callback, auxdata);
@@ -29,13 +29,13 @@ int MM_METHOD::decompress (CALLBACK_FUNC *callback, void *auxdata)
 
 #ifndef FREEARC_DECOMPRESS_ONLY
 
-// Функция упаковки
+// Г”ГіГ­ГЄГ¶ГЁГї ГіГЇГ ГЄГ®ГўГЄГЁ
 int MM_METHOD::compress (CALLBACK_FUNC *callback, void *auxdata)
 {
     return mm_compress (mode, skip_header, is_float, num_chan, word_size, offset, reorder, callback, auxdata);
 }
 
-// Записать в buf[MAX_METHOD_STRLEN] строку, описывающую метод сжатия и его параметры (функция, обратная к parse_MM)
+// Г‡Г ГЇГЁГ±Г ГІГј Гў buf[MAX_METHOD_STRLEN] Г±ГІГ°Г®ГЄГі, Г®ГЇГЁГ±Г»ГўГ ГѕГ№ГіГѕ Г¬ГҐГІГ®Г¤ Г±Г¦Г ГІГЁГї ГЁ ГҐГЈГ® ГЇГ Г°Г Г¬ГҐГІГ°Г» (ГґГіГ­ГЄГ¶ГЁГї, Г®ГЎГ°Г ГІГ­Г Гї ГЄ parse_MM)
 void MM_METHOD::ShowCompressionMethod (char *buf)
 {
     MM_METHOD defaults;
@@ -53,21 +53,21 @@ void MM_METHOD::ShowCompressionMethod (char *buf)
 
 #endif  // !defined (FREEARC_DECOMPRESS_ONLY)
 
-// Конструирует объект типа MM_METHOD с заданными параметрами упаковки
-// или возвращает NULL, если это другой метод сжатия или допущена ошибка в параметрах
+// ГЉГ®Г­Г±ГІГ°ГіГЁГ°ГіГҐГІ Г®ГЎГєГҐГЄГІ ГІГЁГЇГ  MM_METHOD Г± Г§Г Г¤Г Г­Г­Г»Г¬ГЁ ГЇГ Г°Г Г¬ГҐГІГ°Г Г¬ГЁ ГіГЇГ ГЄГ®ГўГЄГЁ
+// ГЁГ«ГЁ ГўГ®Г§ГўГ°Г Г№Г ГҐГІ NULL, ГҐГ±Г«ГЁ ГЅГІГ® Г¤Г°ГіГЈГ®Г© Г¬ГҐГІГ®Г¤ Г±Г¦Г ГІГЁГї ГЁГ«ГЁ Г¤Г®ГЇГіГ№ГҐГ­Г  Г®ГёГЁГЎГЄГ  Гў ГЇГ Г°Г Г¬ГҐГІГ°Г Гµ
 COMPRESSION_METHOD* parse_MM (char** parameters)
 {
   if (strcmp (parameters[0], "mm") == 0) {
-    // Если название метода (нулевой параметр) - "mm", то разберём остальные параметры
+    // Г…Г±Г«ГЁ Г­Г Г§ГўГ Г­ГЁГҐ Г¬ГҐГІГ®Г¤Г  (Г­ГіГ«ГҐГўГ®Г© ГЇГ Г°Г Г¬ГҐГІГ°) - "mm", ГІГ® Г°Г Г§ГЎГҐГ°ВёГ¬ Г®Г±ГІГ Г«ГјГ­Г»ГҐ ГЇГ Г°Г Г¬ГҐГІГ°Г»
 
     MM_METHOD *p = new MM_METHOD;
-    int error = 0;  // Признак того, что при разборе параметров произошла ошибка
+    int error = 0;  // ГЏГ°ГЁГ§Г­Г ГЄ ГІГ®ГЈГ®, Г·ГІГ® ГЇГ°ГЁ Г°Г Г§ГЎГ®Г°ГҐ ГЇГ Г°Г Г¬ГҐГІГ°Г®Гў ГЇГ°Г®ГЁГ§Г®ГёГ«Г  Г®ГёГЁГЎГЄГ 
 
-    // Переберём все параметры метода (или выйдем раньше при возникновении ошибки при разборе очередного параметра)
+    // ГЏГҐГ°ГҐГЎГҐГ°ВёГ¬ ГўГ±ГҐ ГЇГ Г°Г Г¬ГҐГІГ°Г» Г¬ГҐГІГ®Г¤Г  (ГЁГ«ГЁ ГўГ»Г©Г¤ГҐГ¬ Г°Г Г­ГјГёГҐ ГЇГ°ГЁ ГўГ®Г§Г­ГЁГЄГ­Г®ГўГҐГ­ГЁГЁ Г®ГёГЁГЎГЄГЁ ГЇГ°ГЁ Г°Г Г§ГЎГ®Г°ГҐ Г®Г·ГҐГ°ГҐГ¤Г­Г®ГЈГ® ГЇГ Г°Г Г¬ГҐГІГ°Г )
     while (*++parameters && !error)
     {
       char* param = *parameters;
-      switch (*param) {                    // Параметры, содержащие значения
+      switch (*param) {                    // ГЏГ Г°Г Г¬ГҐГІГ°Г», Г±Г®Г¤ГҐГ°Г¦Г Г№ГЁГҐ Г§Г­Г Г·ГҐГ­ГЁГї
         case 's':  p->skip_header = 1;                          continue;
         case 'f':  p->is_float    = 1;                          continue;
         case 'd':  p->mode        = parseInt (param+1, &error); continue;
@@ -76,10 +76,10 @@ COMPRESSION_METHOD* parse_MM (char** parameters)
         case 'o':  p->offset      = parseInt (param+1, &error); continue;
         case 'r':  p->reorder     = parseInt (param+1, &error); continue;
       }
-      // Сюда мы попадаем, если в параметре не указано его название
-      // Если этот параметр удастся разобрать как c*w,
-      // то используем эти значения для полей num_chan и word_size.
-      // Дополнительный символ 'f' означает, что это данные в FP-формате
+      // Г‘ГѕГ¤Г  Г¬Г» ГЇГ®ГЇГ Г¤Г ГҐГ¬, ГҐГ±Г«ГЁ Гў ГЇГ Г°Г Г¬ГҐГІГ°ГҐ Г­ГҐ ГіГЄГ Г§Г Г­Г® ГҐГЈГ® Г­Г Г§ГўГ Г­ГЁГҐ
+      // Г…Г±Г«ГЁ ГЅГІГ®ГІ ГЇГ Г°Г Г¬ГҐГІГ° ГіГ¤Г Г±ГІГ±Гї Г°Г Г§Г®ГЎГ°Г ГІГј ГЄГ ГЄ c*w,
+      // ГІГ® ГЁГ±ГЇГ®Г«ГјГ§ГіГҐГ¬ ГЅГІГЁ Г§Г­Г Г·ГҐГ­ГЁГї Г¤Г«Гї ГЇГ®Г«ГҐГ© num_chan ГЁ word_size.
+      // Г„Г®ГЇГ®Г«Г­ГЁГІГҐГ«ГјГ­Г»Г© Г±ГЁГ¬ГўГ®Г« 'f' Г®Г§Г­Г Г·Г ГҐГІ, Г·ГІГ® ГЅГІГ® Г¤Г Г­Г­Г»ГҐ Гў FP-ГґГ®Г°Г¬Г ГІГҐ
       int a, b;  char s[MAX_METHOD_STRLEN];
       if (sscanf (param, "%d*%d%s", &a, &b, s)==3  &&  strequ(s,"f"))
           p->is_float = 1, p->num_chan=a, p->word_size=b;
@@ -87,11 +87,11 @@ COMPRESSION_METHOD* parse_MM (char** parameters)
           p->is_float = 0, p->num_chan=a, p->word_size=b;
       else error=1;
     }
-    if (error)  {delete p; return NULL;}  // Ошибка при парсинге параметров метода
+    if (error)  {delete p; return NULL;}  // ГЋГёГЁГЎГЄГ  ГЇГ°ГЁ ГЇГ Г°Г±ГЁГ­ГЈГҐ ГЇГ Г°Г Г¬ГҐГІГ°Г®Гў Г¬ГҐГІГ®Г¤Г 
     return p;
   } else
-    return NULL;   // Это не метод MM
+    return NULL;   // ГќГІГ® Г­ГҐ Г¬ГҐГІГ®Г¤ MM
 }
 
-static int MM_x = AddCompressionMethod (parse_MM);   // Зарегистрируем парсер метода MM
+static int MM_x = AddCompressionMethod (parse_MM);   // Г‡Г Г°ГҐГЈГЁГ±ГІГ°ГЁГ°ГіГҐГ¬ ГЇГ Г°Г±ГҐГ° Г¬ГҐГІГ®Г¤Г  MM
 

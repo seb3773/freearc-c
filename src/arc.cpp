@@ -14,6 +14,9 @@
 #include "Environment.h"
 #include "Compression/Compression.h"
 #include "WinCompat.h"
+#ifndef _WIN32
+#include <pthread.h>
+#endif
 #ifdef _WIN32
 #include <process.h>
 #endif
@@ -74,6 +77,8 @@ static const char *g_usage =
   "  -v<size>           create multi-volume archive (e.g. -v10m, -v1440k)\n"
   "  -s                 solid archive (default)\n"
   "  -s-                one data block per file (nonsolid)\n"
+  "  -s<size>           solid block size (e.g. -s64m)\n"
+  "  -s<N>f             solid block by file count (e.g. -s10f)\n"
   "  -r                 recurse directories (default)\n"
   "  -r-                do not recurse\n"
   "  -ep                store basenames only\n"
@@ -527,7 +532,13 @@ static bool is_unpacker_cmd(const char *s) {
   return false;
 }
 
-class VolumeWriter {
+struct IArchiveWriter {
+  virtual bool write(const void *buf, size_t n) = 0;
+  virtual FILESIZE tell() const = 0;
+  virtual ~IArchiveWriter() {}
+};
+
+class VolumeWriter : public IArchiveWriter {
 public:
   std::string base_name;
   uint64 vol_size;
@@ -625,15 +636,15 @@ struct MemInFileOut {
 };
 
 struct SolidInFileOut {
-  FileRec      *files;
-  int           nfiles;
-  int           idx;
-  int           end;
-  FILE         *cur;
-  uint64        left_in_file;
-  uint          file_crc;
-  VolumeWriter *out;
-  uint64        written;
+  FileRec        *files;
+  int             nfiles;
+  int             idx;
+  int             end;
+  FILE           *cur;
+  uint64          left_in_file;
+  uint            file_crc;
+  IArchiveWriter *out;
+  uint64          written;
 };
 
 static int mem_callback(const char *what, void *data, int size, void *aux) {
@@ -701,6 +712,315 @@ static int solid_callback(const char *what, void *data, int size, void *aux) {
     if (size > 0 && !c->out->write(data, (size_t)size))
       return FREEARC_ERRCODE_WRITE;
     c->written += (uint64)size;
+    return size;
+  }
+  return 0;
+}
+
+/* --- Asynchronous I/O Pipeline primitives (§2.3) --- */
+
+#ifdef _WIN32
+struct ArcMutex {
+  CRITICAL_SECTION cs;
+  ArcMutex() { InitializeCriticalSection(&cs); }
+  ~ArcMutex() { DeleteCriticalSection(&cs); }
+  void lock() { EnterCriticalSection(&cs); }
+  void unlock() { LeaveCriticalSection(&cs); }
+};
+struct ArcCond {
+  CONDITION_VARIABLE cv;
+  ArcCond() { InitializeConditionVariable(&cv); }
+  void wait(ArcMutex &m) { SleepConditionVariableCS(&cv, &m.cs, INFINITE); }
+  void signal() { WakeConditionVariable(&cv); }
+  void broadcast() { WakeAllConditionVariable(&cv); }
+};
+typedef HANDLE ArcThread;
+typedef DWORD (WINAPI *ArcThreadFunc)(void*);
+#define ARC_THREAD_CALL DWORD WINAPI
+#define ARC_THREAD_RET DWORD
+#define ARC_THREAD_RET_VAL 0
+inline ArcThread arc_spawn_thread(ArcThreadFunc fn, void *arg) {
+  return CreateThread(NULL, 0, fn, arg, 0, NULL);
+}
+inline void arc_wait_thread(ArcThread th) {
+  if (th) {
+    WaitForSingleObject(th, INFINITE);
+    CloseHandle(th);
+  }
+}
+#else
+struct ArcMutex {
+  pthread_mutex_t m;
+  ArcMutex() { pthread_mutex_init(&m, NULL); }
+  ~ArcMutex() { pthread_mutex_destroy(&m); }
+  void lock() { pthread_mutex_lock(&m); }
+  void unlock() { pthread_mutex_unlock(&m); }
+};
+struct ArcCond {
+  pthread_cond_t cv;
+  ArcCond() { pthread_cond_init(&cv, NULL); }
+  ~ArcCond() { pthread_cond_destroy(&cv); }
+  void wait(ArcMutex &m) { pthread_cond_wait(&cv, &m.m); }
+  void signal() { pthread_cond_signal(&cv); }
+  void broadcast() { pthread_cond_broadcast(&cv); }
+};
+typedef pthread_t ArcThread;
+typedef void* (*ArcThreadFunc)(void*);
+#define ARC_THREAD_CALL void*
+#define ARC_THREAD_RET void*
+#define ARC_THREAD_RET_VAL NULL
+inline ArcThread arc_spawn_thread(ArcThreadFunc fn, void *arg) {
+  pthread_t t = 0;
+  pthread_create(&t, NULL, fn, arg);
+  return t;
+}
+inline void arc_wait_thread(ArcThread th) {
+  if (th) {
+    pthread_join(th, NULL);
+  }
+}
+#endif
+
+struct ArcChunk {
+  char  *data;
+  size_t capacity;
+  size_t size;
+  size_t pos;
+  bool   is_eof;
+
+  ArcChunk(size_t cap = 0) : data(NULL), capacity(0), size(0), pos(0), is_eof(false) {
+    if (cap > 0) {
+      data = (char*)malloc(cap);
+      capacity = cap;
+    }
+  }
+  ~ArcChunk() {
+    if (data) free(data);
+  }
+  void ensure_capacity(size_t need) {
+    if (need > capacity) {
+      size_t new_cap = need < capacity * 2 ? capacity * 2 : need;
+      data = (char*)realloc(data, new_cap);
+      capacity = new_cap;
+    }
+  }
+};
+
+class ArcChunkQueue {
+  std::vector<ArcChunk*> items;
+  size_t   max_items;
+  size_t   head;
+  size_t   tail;
+  size_t   count;
+  bool     stopped;
+  ArcMutex mutex;
+  ArcCond  not_empty;
+  ArcCond  not_full;
+
+public:
+  ArcChunkQueue(size_t max_size = 4)
+    : items(max_size, (ArcChunk*)NULL), max_items(max_size), head(0), tail(0), count(0), stopped(false) {}
+
+  void push(ArcChunk *chunk) {
+    mutex.lock();
+    while (count == max_items && !stopped) {
+      not_full.wait(mutex);
+    }
+    if (stopped) {
+      mutex.unlock();
+      delete chunk;
+      return;
+    }
+    items[tail] = chunk;
+    tail = (tail + 1) % max_items;
+    count++;
+    not_empty.signal();
+    mutex.unlock();
+  }
+
+  ArcChunk* pop() {
+    mutex.lock();
+    while (count == 0 && !stopped) {
+      not_empty.wait(mutex);
+    }
+    if (count == 0 && stopped) {
+      mutex.unlock();
+      return NULL;
+    }
+    ArcChunk *item = items[head];
+    head = (head + 1) % max_items;
+    count--;
+    not_full.signal();
+    mutex.unlock();
+    return item;
+  }
+
+  void stop() {
+    mutex.lock();
+    stopped = true;
+    not_empty.broadcast();
+    not_full.broadcast();
+    mutex.unlock();
+  }
+
+  void clear_and_delete() {
+    mutex.lock();
+    stopped = true;
+    while (count > 0) {
+      delete items[head];
+      head = (head + 1) % max_items;
+      count--;
+    }
+    mutex.unlock();
+  }
+};
+
+struct PipeReaderContext {
+  FileRec       *files;
+  int            idx;
+  int            end;
+  ArcChunkQueue *in_queue;
+  ArcChunkQueue *free_in_chunks;
+  volatile int   error_code;
+  volatile bool  done;
+};
+
+static ARC_THREAD_CALL pipe_reader_func(void *arg) {
+  PipeReaderContext *ctx = (PipeReaderContext*)arg;
+  const size_t CHUNK_SIZE = 1024 * 1024; // 1 MB
+  while (ctx->idx < ctx->end && ctx->error_code == 0) {
+    FileRec &f = ctx->files[ctx->idx];
+    if (f.isdir || f.size == 0 || f.is_symlink) {
+      f.crc = 0;
+      ctx->idx++;
+      continue;
+    }
+    FILE *fp = fopen(f.path.c_str(), "rb");
+    if (!fp) {
+      ctx->error_code = FREEARC_ERRCODE_READ;
+      ctx->in_queue->stop();
+      break;
+    }
+    uint64 left = f.size;
+    uint crc = INIT_CRC;
+    while (left > 0 && ctx->error_code == 0) {
+      ArcChunk *chunk = ctx->free_in_chunks->pop();
+      if (!chunk) break;
+      chunk->ensure_capacity(CHUNK_SIZE);
+      size_t want = (size_t)(left < (uint64)CHUNK_SIZE ? left : (uint64)CHUNK_SIZE);
+      size_t n = fread(chunk->data, 1, want, fp);
+      if (n != want) {
+        ctx->error_code = FREEARC_ERRCODE_READ;
+        ctx->free_in_chunks->push(chunk);
+        ctx->in_queue->stop();
+        break;
+      }
+      crc = UpdateCRC(chunk->data, (uint)n, crc);
+      left -= n;
+      chunk->size = n;
+      chunk->pos = 0;
+      chunk->is_eof = false;
+      ctx->in_queue->push(chunk);
+    }
+    fclose(fp);
+    if (ctx->error_code != 0) break;
+    f.crc = crc ^ INIT_CRC;
+    ctx->idx++;
+  }
+  ArcChunk *eof_chunk = new ArcChunk();
+  eof_chunk->is_eof = true;
+  eof_chunk->size = 0;
+  ctx->in_queue->push(eof_chunk);
+  ctx->done = true;
+  return ARC_THREAD_RET_VAL;
+}
+
+struct PipeWriterContext {
+  IArchiveWriter *out;
+  ArcChunkQueue  *out_queue;
+  ArcChunkQueue  *free_out_chunks;
+  uint64          written;
+  volatile int    error_code;
+  volatile bool   done;
+};
+
+static ARC_THREAD_CALL pipe_writer_func(void *arg) {
+  PipeWriterContext *ctx = (PipeWriterContext*)arg;
+  while (true) {
+    ArcChunk *chunk = ctx->out_queue->pop();
+    if (!chunk) break;
+    if (chunk->is_eof) {
+      delete chunk;
+      break;
+    }
+    if (ctx->error_code == 0 && chunk->size > 0) {
+      if (!ctx->out->write(chunk->data, chunk->size)) {
+        ctx->error_code = FREEARC_ERRCODE_WRITE;
+        ctx->out_queue->stop();
+      } else {
+        ctx->written += chunk->size;
+      }
+    }
+    ctx->free_out_chunks->push(chunk);
+  }
+  ctx->done = true;
+  return ARC_THREAD_RET_VAL;
+}
+
+struct PipelinedCallbackState {
+  PipeReaderContext *reader_ctx;
+  PipeWriterContext *writer_ctx;
+  ArcChunk          *cur_in_chunk;
+  bool               in_eof;
+};
+
+static int pipelined_solid_callback(const char *what, void *data, int size, void *aux) {
+  PipelinedCallbackState *s = (PipelinedCallbackState*)aux;
+  if (strequ(what, "read")) {
+    if (s->in_eof) return 0;
+    int got = 0;
+    char *dst = (char*)data;
+    while (got < size) {
+      if (s->reader_ctx->error_code != 0)
+        return s->reader_ctx->error_code;
+      if (!s->cur_in_chunk) {
+        s->cur_in_chunk = s->reader_ctx->in_queue->pop();
+        if (!s->cur_in_chunk || s->cur_in_chunk->is_eof) {
+          s->in_eof = true;
+          if (s->cur_in_chunk) {
+            delete s->cur_in_chunk;
+            s->cur_in_chunk = NULL;
+          }
+          break; // EOF
+        }
+      }
+      size_t avail = s->cur_in_chunk->size - s->cur_in_chunk->pos;
+      size_t want = (size_t)(size - got);
+      size_t take = avail < want ? avail : want;
+      if (take > 0) {
+        memcpy(dst + got, s->cur_in_chunk->data + s->cur_in_chunk->pos, take);
+        s->cur_in_chunk->pos += take;
+        got += (int)take;
+      }
+      if (s->cur_in_chunk->pos >= s->cur_in_chunk->size) {
+        s->reader_ctx->free_in_chunks->push(s->cur_in_chunk);
+        s->cur_in_chunk = NULL;
+      }
+    }
+    return got;
+  }
+  if (strequ(what, "write")) {
+    if (s->writer_ctx->error_code != 0)
+      return s->writer_ctx->error_code;
+    if (size <= 0) return 0;
+    ArcChunk *chunk = s->writer_ctx->free_out_chunks->pop();
+    if (!chunk) return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+    chunk->ensure_capacity((size_t)size);
+    memcpy(chunk->data, data, (size_t)size);
+    chunk->size = (size_t)size;
+    chunk->pos = 0;
+    chunk->is_eof = false;
+    s->writer_ctx->out_queue->push(chunk);
     return size;
   }
   return 0;
@@ -1350,8 +1670,95 @@ static void write_footer(ByteWriter &w, BlockInfo *blocks, int nblocks,
     w.write_raw(comment.data(), comment.size());
 }
 
-static BlockInfo compress_range(VolumeWriter *out, const char *method, const char *password,
-                                const char *algorithm, FileRec *files, int start, int count) {
+class TempBlockWriter : public IArchiveWriter {
+public:
+  std::vector<char> mem_buf;
+  FILE             *temp_file;
+  std::string       temp_path;
+  uint64            written;
+
+  TempBlockWriter() : temp_file(NULL), written(0) {}
+  virtual ~TempBlockWriter() {
+    if (temp_file) {
+      fclose(temp_file);
+      temp_file = NULL;
+    }
+    if (!temp_path.empty()) {
+      remove(temp_path.c_str());
+      temp_path.clear();
+    }
+  }
+
+  virtual bool write(const void *buf, size_t n) {
+    if (n == 0) return true;
+    const char *p = (const char*)buf;
+    if (!temp_file && written + n <= 16 * 1024 * 1024) {
+      size_t old_size = mem_buf.size();
+      mem_buf.resize(old_size + n);
+      memcpy(&mem_buf[old_size], p, n);
+      written += n;
+      return true;
+    }
+    if (!temp_file) {
+#ifdef _WIN32
+      char tmp_dir[MAX_PATH];
+      GetTempPathA(MAX_PATH, tmp_dir);
+      char tmp_file[MAX_PATH];
+      GetTempFileNameA(tmp_dir, "arc", 0, tmp_file);
+      temp_path = tmp_file;
+      temp_file = fopen(temp_path.c_str(), "w+b");
+#else
+      char temp_template[MY_FILENAME_MAX];
+      snprintf(temp_template, sizeof(temp_template), "/tmp/arc_block_XXXXXX");
+      int fd = mkstemp(temp_template);
+      if (fd >= 0) {
+        temp_path = temp_template;
+        temp_file = fdopen(fd, "w+b");
+      }
+#endif
+      if (!temp_file) return false;
+      if (!mem_buf.empty()) {
+        if (fwrite(&mem_buf[0], 1, mem_buf.size(), temp_file) != mem_buf.size())
+          return false;
+        mem_buf.clear();
+        std::vector<char>().swap(mem_buf);
+      }
+    }
+    if (fwrite(p, 1, n, temp_file) != n) return false;
+    written += n;
+    return true;
+  }
+
+  virtual FILESIZE tell() const {
+    return (FILESIZE)written;
+  }
+
+  bool copy_to(VolumeWriter *out) {
+    if (!mem_buf.empty()) {
+      return out->write(&mem_buf[0], mem_buf.size());
+    }
+    if (temp_file) {
+      fflush(temp_file);
+      fseek(temp_file, 0, SEEK_SET);
+      char buf[65536];
+      size_t nr;
+      while ((nr = fread(buf, 1, sizeof(buf), temp_file)) > 0) {
+        if (!out->write(buf, nr)) return false;
+      }
+      fclose(temp_file);
+      temp_file = NULL;
+      if (!temp_path.empty()) {
+        remove(temp_path.c_str());
+        temp_path.clear();
+      }
+    }
+    return true;
+  }
+};
+
+static BlockInfo compress_range(IArchiveWriter *out, const char *method, const char *password,
+                                const char *algorithm, FileRec *files, int start, int count,
+                                bool allow_io_pipeline = true) {
   char compress_m[MAX_METHOD_STRLEN], store_m[MAX_METHOD_STRLEN];
   wrap_encryption(method, password, algorithm, compress_m, store_m);
   BlockInfo b;
@@ -1363,23 +1770,157 @@ static BlockInfo compress_range(VolumeWriter *out, const char *method, const cha
   for (int i = 0; i < count; i++)
     orig += files[start + i].size;
   b.origsize = (FILESIZE)orig;
-  SolidInFileOut sctx;
-  memset(&sctx, 0, sizeof(sctx));
-  sctx.files = files;
-  sctx.nfiles = start + count;
-  sctx.idx = start;
-  sctx.end = start + count;
-  sctx.cur = NULL;
-  sctx.out = out;
-  sctx.written = 0;
-  if (orig > 0) {
+
+  if (orig == 0) {
+    for (int i = 0; i < count; i++)
+      files[start + i].crc = 0;
+    b.compsize = 0;
+    b.crc = 0;
+    return b;
+  }
+
+  // Si mono-thread explicite (-mt1), très petit volume (<64KB), ou pipeline désactivé (worker parallèle)
+  if (!allow_io_pipeline || GetCompressionThreads() <= 1 || orig < 65536) {
+    SolidInFileOut sctx;
+    memset(&sctx, 0, sizeof(sctx));
+    sctx.files = files;
+    sctx.nfiles = start + count;
+    sctx.idx = start;
+    sctx.end = start + count;
+    sctx.cur = NULL;
+    sctx.out = out;
+    sctx.written = 0;
     int rc = MultiCompress(compress_m, solid_callback, &sctx);
     if (sctx.cur) fclose(sctx.cur);
     CHECK(rc >= 0, (s, "ERROR: data compression failed (%d) method \"%s\"", rc, compress_m));
+    b.compsize = (FILESIZE)sctx.written;
+    b.crc = 0;
+    return b;
   }
-  b.compsize = (FILESIZE)sctx.written;
+
+  // --- Pipeline Asynchrone I/O (§2.3) ---
+  const size_t QUEUE_DEPTH = 4;
+  const size_t CHUNK_SIZE = 1024 * 1024; // 1 MB
+
+  ArcChunkQueue in_queue(QUEUE_DEPTH);
+  ArcChunkQueue free_in_chunks(QUEUE_DEPTH);
+  for (size_t i = 0; i < QUEUE_DEPTH; i++) {
+    free_in_chunks.push(new ArcChunk(CHUNK_SIZE));
+  }
+
+  ArcChunkQueue out_queue(QUEUE_DEPTH);
+  ArcChunkQueue free_out_chunks(QUEUE_DEPTH);
+  for (size_t i = 0; i < QUEUE_DEPTH; i++) {
+    free_out_chunks.push(new ArcChunk(CHUNK_SIZE));
+  }
+
+  PipeReaderContext reader_ctx;
+  reader_ctx.files = files;
+  reader_ctx.idx = start;
+  reader_ctx.end = start + count;
+  reader_ctx.in_queue = &in_queue;
+  reader_ctx.free_in_chunks = &free_in_chunks;
+  reader_ctx.error_code = 0;
+  reader_ctx.done = false;
+
+  PipeWriterContext writer_ctx;
+  writer_ctx.out = out;
+  writer_ctx.out_queue = &out_queue;
+  writer_ctx.free_out_chunks = &free_out_chunks;
+  writer_ctx.written = 0;
+  writer_ctx.error_code = 0;
+  writer_ctx.done = false;
+
+  PipelinedCallbackState cb_state;
+  cb_state.reader_ctx = &reader_ctx;
+  cb_state.writer_ctx = &writer_ctx;
+  cb_state.cur_in_chunk = NULL;
+  cb_state.in_eof = false;
+
+  ArcThread reader_th = arc_spawn_thread((ArcThreadFunc)pipe_reader_func, &reader_ctx);
+  ArcThread writer_th = arc_spawn_thread((ArcThreadFunc)pipe_writer_func, &writer_ctx);
+
+  int rc = MultiCompress(compress_m, pipelined_solid_callback, &cb_state);
+
+  // Signaler fin au Reader et Writer
+  in_queue.stop();
+  free_in_chunks.stop();
+
+  ArcChunk *out_eof = new ArcChunk();
+  out_eof->is_eof = true;
+  out_eof->size = 0;
+  out_queue.push(out_eof);
+
+  arc_wait_thread(reader_th);
+  arc_wait_thread(writer_th);
+
+  out_queue.stop();
+  free_out_chunks.stop();
+
+  if (cb_state.cur_in_chunk) {
+    delete cb_state.cur_in_chunk;
+    cb_state.cur_in_chunk = NULL;
+  }
+  free_in_chunks.clear_and_delete();
+  free_out_chunks.clear_and_delete();
+  in_queue.clear_and_delete();
+  out_queue.clear_and_delete();
+
+  CHECK(reader_ctx.error_code == 0, (s, "ERROR: data read failed (%d)", reader_ctx.error_code));
+  CHECK(writer_ctx.error_code == 0, (s, "ERROR: data write failed (%d)", writer_ctx.error_code));
+  CHECK(rc >= 0, (s, "ERROR: data compression failed (%d) method \"%s\"", rc, compress_m));
+
+  b.compsize = (FILESIZE)writer_ctx.written;
   b.crc = 0;
   return b;
+}
+
+struct BlockTask {
+  int start;
+  int count;
+};
+
+struct BlockCompressJob {
+  int             block_idx;
+  int             start;
+  int             count;
+  TempBlockWriter writer;
+  BlockInfo       info;
+  int             errcode;
+  bool            done;
+
+  BlockCompressJob() : block_idx(0), start(0), count(0), errcode(0), done(false) {}
+};
+
+struct MultiBlockPoolContext {
+  std::vector<BlockCompressJob*> *jobs;
+  size_t                          next_job;
+  size_t                          total_jobs;
+  ArcMutex                        mutex;
+  const char                     *method;
+  const char                     *password;
+  const char                     *algorithm;
+  FileRec                        *files;
+  volatile int                    global_error;
+};
+
+static ARC_THREAD_CALL block_worker_func(void *arg) {
+  MultiBlockPoolContext *ctx = (MultiBlockPoolContext*)arg;
+  while (true) {
+    size_t idx;
+    ctx->mutex.lock();
+    if (ctx->global_error != 0 || ctx->next_job >= ctx->total_jobs) {
+      ctx->mutex.unlock();
+      break;
+    }
+    idx = ctx->next_job++;
+    ctx->mutex.unlock();
+
+    BlockCompressJob *job = (*ctx->jobs)[idx];
+    job->info = compress_range(&job->writer, ctx->method, ctx->password, ctx->algorithm, ctx->files, job->start, job->count, false);
+    job->done = true;
+  }
+  return ARC_THREAD_RET_VAL;
 }
 
 static bool write_archive(const std::string &arcname, uint64 vol_size,
@@ -1389,7 +1930,9 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
                           const std::string &comment,
                           std::vector<std::string> &out_vol_names,
                           uint64 &out_total_written,
-                          const std::string &sfx_stub = "") {
+                          const std::string &sfx_stub = "",
+                          uint64 solid_block_size = 0,
+                          int solid_block_files = 0) {
   VolumeWriter out(arcname, vol_size);
   CHECK(out.open(), (s, "ERROR: can't create archive %s", arcname.c_str()));
 
@@ -1419,20 +1962,110 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
       msg("Compressing %s (%llu bytes)\n", disp.c_str(), (unsigned long long)files[i].size);
   }
 
-  std::vector<DataBlockRec> data_blocks;
-  if (solid) {
-    DataBlockRec rec;
-    rec.start = 0;
-    rec.count = (int)files.size();
-    rec.info = compress_range(&out, method, password, algorithm, &files[0], 0, rec.count);
-    data_blocks.push_back(rec);
-  } else {
+  std::vector<BlockTask> tasks;
+  if (solid == 1 && solid_block_size == 0 && solid_block_files == 0) {
+    if (!files.empty()) {
+      BlockTask t;
+      t.start = 0;
+      t.count = (int)files.size();
+      tasks.push_back(t);
+    }
+  } else if (solid == 0 || solid_block_files == 1) {
     for (int i = 0; i < (int)files.size(); i++) {
+      BlockTask t;
+      t.start = i;
+      t.count = 1;
+      tasks.push_back(t);
+    }
+  } else if (solid_block_files > 1) {
+    for (int i = 0; i < (int)files.size(); i += solid_block_files) {
+      BlockTask t;
+      t.start = i;
+      t.count = std::min(solid_block_files, (int)files.size() - i);
+      tasks.push_back(t);
+    }
+  } else if (solid_block_size > 0) {
+    int cur_start = 0;
+    uint64 cur_size = 0;
+    for (int i = 0; i < (int)files.size(); i++) {
+      cur_size += files[i].size;
+      if (cur_size >= solid_block_size && i > cur_start) {
+        BlockTask t;
+        t.start = cur_start;
+        t.count = i - cur_start + 1;
+        tasks.push_back(t);
+        cur_start = i + 1;
+        cur_size = 0;
+      }
+    }
+    if (cur_start < (int)files.size()) {
+      BlockTask t;
+      t.start = cur_start;
+      t.count = (int)files.size() - cur_start;
+      tasks.push_back(t);
+    }
+  } else {
+    if (!files.empty()) {
+      BlockTask t;
+      t.start = 0;
+      t.count = (int)files.size();
+      tasks.push_back(t);
+    }
+  }
+
+  std::vector<DataBlockRec> data_blocks;
+  FileRec *files_ptr = files.empty() ? NULL : &files[0];
+  int threads = GetCompressionThreads();
+
+  if (threads <= 1 || tasks.size() <= 1) {
+    for (size_t i = 0; i < tasks.size(); i++) {
       DataBlockRec rec;
-      rec.start = i;
-      rec.count = 1;
-      rec.info = compress_range(&out, method, password, algorithm, &files[0], i, 1);
+      rec.start = tasks[i].start;
+      rec.count = tasks[i].count;
+      rec.info = compress_range(&out, method, password, algorithm, files_ptr, rec.start, rec.count, true);
       data_blocks.push_back(rec);
+    }
+  } else {
+    std::vector<BlockCompressJob*> jobs;
+    for (size_t i = 0; i < tasks.size(); i++) {
+      BlockCompressJob *job = new BlockCompressJob();
+      job->block_idx = (int)i;
+      job->start = tasks[i].start;
+      job->count = tasks[i].count;
+      jobs.push_back(job);
+    }
+
+    MultiBlockPoolContext ctx;
+    ctx.jobs = &jobs;
+    ctx.next_job = 0;
+    ctx.total_jobs = jobs.size();
+    ctx.method = method;
+    ctx.password = password;
+    ctx.algorithm = algorithm;
+    ctx.files = files_ptr;
+    ctx.global_error = 0;
+
+    int num_workers = (int)std::min((size_t)threads, jobs.size());
+    std::vector<ArcThread> workers;
+    for (int w = 0; w < num_workers; w++) {
+      workers.push_back(arc_spawn_thread((ArcThreadFunc)block_worker_func, &ctx));
+    }
+
+    for (int w = 0; w < num_workers; w++) {
+      arc_wait_thread(workers[w]);
+    }
+
+    for (size_t i = 0; i < jobs.size(); i++) {
+      BlockCompressJob *job = jobs[i];
+      FILESIZE block_start_pos = out.tell();
+      CHECK(job->writer.copy_to(&out), (s, "ERROR: writing block %d to archive failed", (int)i));
+      DataBlockRec rec;
+      rec.start = job->start;
+      rec.count = job->count;
+      rec.info = job->info;
+      rec.info.pos = block_start_pos;
+      data_blocks.push_back(rec);
+      delete job;
     }
   }
 
@@ -1835,6 +2468,8 @@ int main(int argc, char **argv) {
   int argi = 1;
   int recurse = 1;
   int solid = 1;
+  uint64 solid_block_size = 0;
+  int solid_block_files = 0;
   int ep = 0;
   int noarcext = 0;
   bool create_sfx = false;
@@ -1906,13 +2541,6 @@ int main(int argc, char **argv) {
         return 0;
       }
       if (strequ(a, "-q")) g_quiet = 1;
-      else if (strequ(a, "-s")) solid = 1;
-      else if (strequ(a, "-s-")) solid = 0;
-      else if (strequ(a, "-r")) recurse = 1;
-      else if (strequ(a, "-r-")) recurse = 0;
-      else if (strequ(a, "-ep")) ep = 1;
-      else if (strequ(a, "-ep1")) ep = 2;
-      else if (strequ(a, "--noarcext")) noarcext = 1;
       else if (strequ(a, "-sfx")) {
         create_sfx = true;
       }
@@ -1920,6 +2548,33 @@ int main(int argc, char **argv) {
         create_sfx = true;
         sfx_stub_path = a + 5;
       }
+      else if (strequ(a, "-s")) {
+        solid = 1;
+        solid_block_size = 0;
+        solid_block_files = 0;
+      }
+      else if (strequ(a, "-s-")) {
+        solid = 0;
+        solid_block_size = 0;
+        solid_block_files = 0;
+      }
+      else if (start_with(a, "-s")) {
+        const char *sp = a + 2;
+        if (*sp == '=') sp++;
+        size_t slen = strlen(sp);
+        if (slen > 0 && (sp[slen - 1] == 'f' || sp[slen - 1] == 'F')) {
+          solid = 2;
+          solid_block_files = atoi(sp);
+        } else {
+          solid = 2;
+          solid_block_size = parse_vol_size(sp);
+        }
+      }
+      else if (strequ(a, "-r")) recurse = 1;
+      else if (strequ(a, "-r-")) recurse = 0;
+      else if (strequ(a, "-ep")) ep = 1;
+      else if (strequ(a, "-ep1")) ep = 2;
+      else if (strequ(a, "--noarcext")) noarcext = 1;
       else if (strequ(a, "-bcj") || strequ(a, "--bcj") || strequ(a, "-exe") || strequ(a, "--exe")) filters.push_back("exe");
       else if (strequ(a, "-rep") || strequ(a, "--rep")) filters.push_back("rep:64m");
       else if (strequ(a, "-delta") || strequ(a, "--delta")) filters.push_back("delta");
@@ -2179,7 +2834,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> out_vols;
     uint64 total_w = 0;
     write_archive(tmp_arc, vol_size, new_files, solid, method, password, hp_password, algorithm,
-                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub);
+                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files);
     replace_archive_files(arcname, tmp_arc, vol_size, !active_sfx_stub.empty());
     remove_dir_recursive(temp_dir);
     if (vol_size > 0 && out_vols.size() > 1) {
@@ -2271,7 +2926,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> out_vols;
     uint64 total_w = 0;
     write_archive(tmp_arc, vol_size, combined_files, solid, method, password, hp_password, algorithm,
-                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub);
+                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files);
     replace_archive_files(arcname, tmp_arc, vol_size, !active_sfx_stub.empty());
     remove_dir_recursive(temp_dir);
     if (vol_size > 0 && out_vols.size() > 1) {
@@ -2367,7 +3022,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> out_vols;
     uint64 total_w = 0;
     write_archive(tmp_arc, vol_size, combined_files, solid, method, password, hp_password, algorithm,
-                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub);
+                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files);
     replace_archive_files(arcname, tmp_arc, vol_size, !active_sfx_stub.empty());
     remove_dir_recursive(temp_dir);
     if (vol_size > 0 && out_vols.size() > 1) {
@@ -2430,7 +3085,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> out_vols;
     uint64 total_w = 0;
     write_archive(tmp_arc, vol_size, combined_files, solid, method, password, hp_password, algorithm,
-                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub);
+                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files);
     replace_archive_files(arcname, tmp_arc, vol_size, !active_sfx_stub.empty());
     remove_dir_recursive(temp_dir);
     if (vol_size > 0 && out_vols.size() > 1) {
@@ -2468,7 +3123,7 @@ int main(int argc, char **argv) {
 
   std::vector<std::string> out_vols;
   uint64 total_w = 0;
-  write_archive(arcname, vol_size, files, solid, method, password, hp_password, algorithm, comment, out_vols, total_w, active_sfx_stub);
+  write_archive(arcname, vol_size, files, solid, method, password, hp_password, algorithm, comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files);
   if (!active_sfx_stub.empty()) {
     chmod(arcname.c_str(), 0755);
     msg("Created SFX archive %s (%llu bytes)\n", arcname.c_str(), (unsigned long long)total_w);

@@ -10,11 +10,14 @@ extern "C" {
 #include "C_PPMD.h"
 }
 #include "PPMdType.h"
+#include "../MultiThreading.h"
 
 /*-------------------------------------------------*/
 /* Ðåàëèçàöèÿ ppmd_compress                        */
 /*-------------------------------------------------*/
 #ifndef FREEARC_DECOMPRESS_ONLY
+
+static NWindows::NSynchronization::CCriticalSection ppmd_comp_cs;
 
 namespace PPMD_compression {
 
@@ -23,6 +26,7 @@ namespace PPMD_compression {
 extern "C" {
 int ppmd_compress (int order, MemSize mem, int MRMethod, CALLBACK_FUNC *callback, void *auxdata)
 {
+  NWindows::NSynchronization::CCriticalSectionLock lock(ppmd_comp_cs);
   if ( !StartSubAllocator(mem) ) {
     return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
   }
@@ -54,6 +58,8 @@ void _STDCALL PrintInfo (_PPMD_FILE* DecodedFile, _PPMD_FILE* EncodedFile)
 /* Ðåàëèçàöèÿ ppmd_decompress                      */
 /*-------------------------------------------------*/
 
+static NWindows::NSynchronization::CCriticalSection ppmd_decomp_cs;
+
 namespace PPMD_decompression {
 
 #include "Model.cpp"
@@ -61,6 +67,7 @@ namespace PPMD_decompression {
 extern "C" {
 int ppmd_decompress (int order, MemSize mem, int MRMethod, CALLBACK_FUNC *callback, void *auxdata)
 {
+  NWindows::NSynchronization::CCriticalSectionLock lock(ppmd_decomp_cs);
   if ( !StartSubAllocator(mem) ) {
     return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
   }
