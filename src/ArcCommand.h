@@ -42,7 +42,13 @@ public:
   virtual void ListHeader (COMMAND &) {}
   virtual void ListFooter (COMMAND &) {}
   virtual void ListFiles (DIRECTORY_BLOCK*, COMMAND &) {}
-  virtual void Abort (COMMAND*, int errcode)  {exit (FREEARC_EXIT_ERROR);}
+  virtual void Abort (COMMAND*, int errcode)  {
+    if (g_logfile) {
+      fprintf(g_logfile, "ERROR: operation terminated with error code %d\n", errcode);
+      fflush(g_logfile);
+    }
+    exit (FREEARC_EXIT_ERROR);
+  }
 };
 
 static inline std::string clean_option_path(const std::string &raw) {
@@ -73,6 +79,71 @@ static inline std::string clean_option_path(const std::string &raw) {
   return s;
 }
 
+static inline uint64 parse_mem_limit(const char *s) {
+  if (!s || !*s) return 0;
+  if (*s == '=') s++;
+  while (*s == ' ' || *s == '\t') s++;
+  char *endp = NULL;
+  unsigned long long val = strtoull(s, &endp, 10);
+  if (!endp || endp == s) return 0;
+  while (*endp == ' ') endp++;
+  if (*endp == 'k' || *endp == 'K') {
+    val *= 1024ULL;
+  } else if (*endp == 'm' || *endp == 'M') {
+    val *= 1024ULL * 1024ULL;
+  } else if (*endp == 'g' || *endp == 'G') {
+    val *= 1024ULL * 1024ULL * 1024ULL;
+  } else if (*endp == 'b' || *endp == 'B') {
+    // bytes
+  } else if (*endp == '\0') {
+    if (val <= 65536ULL) {
+      val *= 1024ULL * 1024ULL;
+    }
+  }
+  return (uint64)val;
+}
+
+static inline int parse_threads_val(const char *s) {
+  if (!s || !*s) return 0;
+  if (*s == '=') s++;
+  int v = atoi(s);
+  return v > 0 ? v : 0;
+}
+
+static inline void create_dir_recursive(const std::string &path) {
+  if (path.empty()) return;
+  char buf[PATH_MAX];
+  snprintf(buf, sizeof(buf), "%s", path.c_str());
+  for (char *p = buf + 1; *p; p++) {
+    if (*p == '/' || *p == '\\') {
+      if (p == buf + 2 && buf[1] == ':') continue;
+      char save = *p;
+      *p = '\0';
+#ifdef _WIN32
+      mkdir(buf);
+#else
+      mkdir(buf, 0777);
+#endif
+      *p = save;
+    }
+  }
+#ifdef _WIN32
+  mkdir(buf);
+#else
+  mkdir(buf, 0777);
+#endif
+}
+
+static inline void ensure_parent_dirs(const std::string &filepath) {
+  std::string s = clean_option_path(filepath);
+  size_t pos = s.find_last_of("/\\");
+  if (pos != std::string::npos && pos > 0) {
+    std::string dir = s.substr(0, pos);
+    if (dir.size() == 2 && dir[1] == ':') return;
+    create_dir_recursive(dir);
+  }
+}
+
 static inline bool is_diskpath_opt(const char *a, std::string &out_val, bool &need_next_arg) {
   need_next_arg = false;
   out_val.clear();
@@ -90,6 +161,94 @@ static inline bool is_diskpath_opt(const char *a, std::string &out_val, bool &ne
   }
   if (strncasecmp(a, "--diskpath=", 11) == 0) {
     out_val = a + 11;
+    return true;
+  }
+  return false;
+}
+
+static inline bool is_limit_decomp_opt(const char *a, std::string &out_val, bool &need_next_arg) {
+  need_next_arg = false;
+  out_val.clear();
+  if (strcasecmp(a, "-ld") == 0 || strcasecmp(a, "--limitdecompmem") == 0) {
+    need_next_arg = true;
+    return true;
+  }
+  if (strncasecmp(a, "-ld=", 4) == 0) {
+    out_val = a + 4;
+    return true;
+  }
+  if (strncasecmp(a, "-ld", 3) == 0 && a[3] != '\0') {
+    out_val = a + 3;
+    return true;
+  }
+  if (strncasecmp(a, "--limitdecompmem=", 17) == 0) {
+    out_val = a + 17;
+    return true;
+  }
+  return false;
+}
+
+static inline bool is_limit_comp_opt(const char *a, std::string &out_val, bool &need_next_arg) {
+  need_next_arg = false;
+  out_val.clear();
+  if (strcasecmp(a, "-lc") == 0 || strcasecmp(a, "--limitcompmem") == 0) {
+    need_next_arg = true;
+    return true;
+  }
+  if (strncasecmp(a, "-lc=", 4) == 0) {
+    out_val = a + 4;
+    return true;
+  }
+  if (strncasecmp(a, "-lc", 3) == 0 && a[3] != '\0') {
+    out_val = a + 3;
+    return true;
+  }
+  if (strncasecmp(a, "--limitcompmem=", 15) == 0) {
+    out_val = a + 15;
+    return true;
+  }
+  return false;
+}
+
+static inline bool is_logfile_opt(const char *a, std::string &out_val, bool &need_next_arg) {
+  need_next_arg = false;
+  out_val.clear();
+  if (strcasecmp(a, "-lo") == 0 || strcasecmp(a, "--logfile") == 0) {
+    need_next_arg = true;
+    return true;
+  }
+  if (strncasecmp(a, "-lo=", 4) == 0) {
+    out_val = a + 4;
+    return true;
+  }
+  if (strncasecmp(a, "-lo", 3) == 0 && a[3] != '\0') {
+    out_val = a + 3;
+    return true;
+  }
+  if (strncasecmp(a, "--logfile=", 10) == 0) {
+    out_val = a + 10;
+    return true;
+  }
+  return false;
+}
+
+static inline bool is_multithread_opt(const char *a, std::string &out_val, bool &need_next_arg) {
+  need_next_arg = false;
+  out_val.clear();
+  if (strcasecmp(a, "-mt") == 0 || strcasecmp(a, "--multithreaded") == 0) {
+    need_next_arg = true;
+    return true;
+  }
+  if (strncasecmp(a, "-mt=", 4) == 0) {
+    out_val = a + 4;
+    return true;
+  }
+  if (strncasecmp(a, "-mt", 3) == 0 && a[3] != '\0') {
+    out_val = a + 3;
+    return true;
+  }
+  if (strncasecmp(a, "--multithreaded=", 16) == 0) {
+    out_val = a + 16;
     return true;
   }
   return false;
@@ -124,6 +283,10 @@ public:
   BOOL noarcext;        // --noarcext
   BOOL nooptions;       // --
   char *password;       // -p
+  uint64 limit_decomp_mem;
+  uint64 limit_comp_mem;
+  int    custom_threads;
+  std::string logfile_path;
 
   COMMAND (int argc, char *argv[]);
   void Prepare();
@@ -241,6 +404,10 @@ COMMAND::COMMAND (int argc, char *argv[])
   no  = FALSE;
   silent = 0;
   password = NULL;
+  limit_decomp_mem = 0;
+  limit_comp_mem = 0;
+  custom_threads = 0;
+  logfile_path.clear();
 #ifdef FREEARC_SFX
   arcname = argv[0];
 #ifndef FREEARC_WIN
@@ -286,6 +453,8 @@ COMMAND::COMMAND (int argc, char *argv[])
     {
       std::string dp_val;
       bool dp_next = false;
+      std::string opt_val;
+      bool opt_next = false;
            if (strequ(argv[0],"-l"))       cmd = 'l', silent = silent || 2;
       else if (strequ(argv[0],"-v"))       cmd = 'v', silent = silent || 2;
       else if (strequ(argv[0],"-e"))       cmd = 'e', silent = silent || 2;
@@ -320,20 +489,28 @@ COMMAND::COMMAND (int argc, char *argv[])
       else if (strequ(argv[0],"-s0"))      silent = 0;
       else if (strequ(argv[0],"-s2"))      silent = 2;
       else if (strequ(argv[0],"--"))       nooptions=TRUE;
-      else if (strcasecmp(argv[0],"-ld") == 0 || strcasecmp(argv[0],"--limitdecompmem") == 0) {
-        if (argv[1] && argv[1][0] != '-') ++argv;
+      else if (is_limit_decomp_opt(argv[0], opt_val, opt_next)) {
+        if (opt_next && argv[1] && argv[1][0] != '-') limit_decomp_mem = parse_mem_limit(*++argv);
+        else limit_decomp_mem = parse_mem_limit(opt_val.c_str());
       }
-      else if (strncasecmp(argv[0],"-ld", 3) == 0 || strncasecmp(argv[0],"--limitdecompmem=", 17) == 0) {}
-      else if (strcasecmp(argv[0],"-mt") == 0 || strcasecmp(argv[0],"--multithreaded") == 0) {
-        if (argv[1] && argv[1][0] != '-') ++argv;
+      else if (is_limit_comp_opt(argv[0], opt_val, opt_next)) {
+        if (opt_next && argv[1] && argv[1][0] != '-') limit_comp_mem = parse_mem_limit(*++argv);
+        else limit_comp_mem = parse_mem_limit(opt_val.c_str());
       }
-      else if (strncasecmp(argv[0],"-mt", 3) == 0 || strncasecmp(argv[0],"--multithreaded=", 16) == 0) {}
-      else if (strcasecmp(argv[0],"-lo") == 0 || strcasecmp(argv[0],"--logfile") == 0) {
-        if (argv[1] && argv[1][0] != '-') ++argv;
+      else if (is_multithread_opt(argv[0], opt_val, opt_next)) {
+        if (opt_next && argv[1] && argv[1][0] != '-') custom_threads = parse_threads_val(*++argv);
+        else custom_threads = parse_threads_val(opt_val.c_str());
       }
-      else if (strncasecmp(argv[0],"-lo", 3) == 0 || strncasecmp(argv[0],"--logfile=", 10) == 0) {}
-      else if (strncasecmp(argv[0],"-lc", 3) == 0 || strncasecmp(argv[0],"--limitcompmem", 14) == 0 ||
-               strncasecmp(argv[0],"-di", 3) == 0 || strncasecmp(argv[0],"-ds", 3) == 0 ||
+      else if (is_logfile_opt(argv[0], opt_val, opt_next)) {
+        if (opt_next && argv[1] && argv[1][0] != '-') logfile_path = clean_option_path(*++argv);
+        else logfile_path = clean_option_path(opt_val);
+        if (!logfile_path.empty()) {
+          ensure_parent_dirs(logfile_path);
+          if (g_logfile) { fclose(g_logfile); g_logfile = NULL; }
+          g_logfile = fopen(logfile_path.c_str(), "a+");
+        }
+      }
+      else if (strncasecmp(argv[0],"-di", 3) == 0 || strncasecmp(argv[0],"-ds", 3) == 0 ||
                strncasecmp(argv[0],"-ed", 3) == 0 || strcasecmp(argv[0],"--nodir") == 0 ||
                strcasecmp(argv[0],"--no-pause") == 0 || strcasecmp(argv[0],"-kb") == 0 ||
                strcasecmp(argv[0],"-ka") == 0 || strcasecmp(argv[0],"-kc") == 0) {}
@@ -402,6 +579,8 @@ COMMAND::COMMAND (int argc, char *argv[])
     {
       std::string dp_val;
       bool dp_next = false;
+      std::string opt_val;
+      bool opt_next = false;
       if (strequ(argv[0],"--noarcext"))    noarcext =TRUE;
       else if (strequ(argv[0],"-o+"))      yes      =TRUE;
       else if (strequ(argv[0],"-o-"))      no       =TRUE;
@@ -431,20 +610,28 @@ COMMAND::COMMAND (int argc, char *argv[])
       else if (strequ(argv[0],"-i") && argv[1]) add_include(*++argv);
       else if (start_with(argv[0],"-i") && argv[0][2]) add_include(argv[0]+2);
       else if (strequ(argv[0],"--"))       nooptions=TRUE;
-      else if (strcasecmp(argv[0],"-ld") == 0 || strcasecmp(argv[0],"--limitdecompmem") == 0) {
-        if (argv[1] && argv[1][0] != '-') ++argv;
+      else if (is_limit_decomp_opt(argv[0], opt_val, opt_next)) {
+        if (opt_next && argv[1] && argv[1][0] != '-') limit_decomp_mem = parse_mem_limit(*++argv);
+        else limit_decomp_mem = parse_mem_limit(opt_val.c_str());
       }
-      else if (strncasecmp(argv[0],"-ld", 3) == 0 || strncasecmp(argv[0],"--limitdecompmem=", 17) == 0) {}
-      else if (strcasecmp(argv[0],"-mt") == 0 || strcasecmp(argv[0],"--multithreaded") == 0) {
-        if (argv[1] && argv[1][0] != '-') ++argv;
+      else if (is_limit_comp_opt(argv[0], opt_val, opt_next)) {
+        if (opt_next && argv[1] && argv[1][0] != '-') limit_comp_mem = parse_mem_limit(*++argv);
+        else limit_comp_mem = parse_mem_limit(opt_val.c_str());
       }
-      else if (strncasecmp(argv[0],"-mt", 3) == 0 || strncasecmp(argv[0],"--multithreaded=", 16) == 0) {}
-      else if (strcasecmp(argv[0],"-lo") == 0 || strcasecmp(argv[0],"--logfile") == 0) {
-        if (argv[1] && argv[1][0] != '-') ++argv;
+      else if (is_multithread_opt(argv[0], opt_val, opt_next)) {
+        if (opt_next && argv[1] && argv[1][0] != '-') custom_threads = parse_threads_val(*++argv);
+        else custom_threads = parse_threads_val(opt_val.c_str());
       }
-      else if (strncasecmp(argv[0],"-lo", 3) == 0 || strncasecmp(argv[0],"--logfile=", 10) == 0) {}
-      else if (strncasecmp(argv[0],"-lc", 3) == 0 || strncasecmp(argv[0],"--limitcompmem", 14) == 0 ||
-               strncasecmp(argv[0],"-di", 3) == 0 || strncasecmp(argv[0],"-ds", 3) == 0 ||
+      else if (is_logfile_opt(argv[0], opt_val, opt_next)) {
+        if (opt_next && argv[1] && argv[1][0] != '-') logfile_path = clean_option_path(*++argv);
+        else logfile_path = clean_option_path(opt_val);
+        if (!logfile_path.empty()) {
+          ensure_parent_dirs(logfile_path);
+          if (g_logfile) { fclose(g_logfile); g_logfile = NULL; }
+          g_logfile = fopen(logfile_path.c_str(), "a+");
+        }
+      }
+      else if (strncasecmp(argv[0],"-di", 3) == 0 || strncasecmp(argv[0],"-ds", 3) == 0 ||
                strncasecmp(argv[0],"-ed", 3) == 0 || strcasecmp(argv[0],"--nodir") == 0 ||
                strcasecmp(argv[0],"--no-pause") == 0 || strcasecmp(argv[0],"-kb") == 0 ||
                strcasecmp(argv[0],"-ka") == 0 || strcasecmp(argv[0],"-kc") == 0) {}

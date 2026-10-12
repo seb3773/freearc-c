@@ -1,6 +1,3 @@
-#undef ON_CHECK_FAIL
-#define ON_CHECK_FAIL()  do { fprintf(stderr, "\n"); exit(FREEARC_EXIT_ERROR); } while (0)
-
 #include <dirent.h>
 #include <errno.h>
 #include <libgen.h>
@@ -27,6 +24,25 @@
 #include "ArcStructure.h"
 #define aARCHIVE_VERSION   make4byte(0,0,5,9)
 #define aNO_COMPRESSION    "storing"
+
+FILE *g_logfile = NULL;
+
+static void err_msg(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  if (g_logfile) {
+    va_list ap2;
+    va_copy(ap2, ap);
+    vfprintf(g_logfile, fmt, ap2);
+    fflush(g_logfile);
+    va_end(ap2);
+  }
+  vfprintf(stderr, fmt, ap);
+  va_end(ap);
+}
+
+#undef ON_CHECK_FAIL
+#define ON_CHECK_FAIL()  do { if (g_logfile) { fputs("\n", g_logfile); fflush(g_logfile); } fprintf(stderr, "\n"); exit(FREEARC_EXIT_ERROR); } while (0)
 
 static const char *g_usage =
   "Usage: arc <command> [options] archive[.arc] [files...]\n"
@@ -71,8 +87,9 @@ static const char *g_usage =
   "  -p PASS            encrypt data blocks\n"
   "  -hp PASS           encrypt headers and data\n"
   "  -ae ALG            aes (default), aes-128, aes-256, blowfish, twofish, serpent\n"
-  "  -ld<mem>           limit decompression memory (tolerated/ignored)\n"
-  "  --logfile=<file>   log output file (tolerated/ignored)\n"
+  "  -ld<mem>           limit decompression memory (e.g. -ld64m, --LimitDecompMem)\n"
+  "  -lc<mem>           limit compression memory (e.g. -lc128m, --LimitCompMem)\n"
+  "  --logfile=<file>   write operation log to specified file (-lo)\n"
   "  -q                 quiet\n"
   "  --noarcext         do not append .arc to the archive name\n"
   "  @LIST              read file names from LIST (one path per line)\n";
@@ -80,10 +97,18 @@ static const char *g_usage =
 static int g_quiet = 0;
 
 static void msg(const char *fmt, ...) {
-  if (g_quiet) return;
   va_list ap;
   va_start(ap, fmt);
-  vprintf(fmt, ap);
+  if (g_logfile) {
+    va_list ap2;
+    va_copy(ap2, ap);
+    vfprintf(g_logfile, fmt, ap2);
+    fflush(g_logfile);
+    va_end(ap2);
+  }
+  if (!g_quiet) {
+    vprintf(fmt, ap);
+  }
   va_end(ap);
 }
 
@@ -291,6 +316,177 @@ static void ensure_parent_dirs(const std::string &filepath) {
   }
 }
 
+static inline bool is_limit_decomp_opt(const char *a, std::string &out_val, bool &need_next_arg) {
+  need_next_arg = false;
+  out_val.clear();
+  if (strcasecmp(a, "-ld") == 0 || strcasecmp(a, "--limitdecompmem") == 0) {
+    need_next_arg = true;
+    return true;
+  }
+  if (strncasecmp(a, "-ld=", 4) == 0) {
+    out_val = a + 4;
+    return true;
+  }
+  if (strncasecmp(a, "-ld", 3) == 0 && a[3] != '\0') {
+    out_val = a + 3;
+    return true;
+  }
+  if (strncasecmp(a, "--limitdecompmem=", 17) == 0) {
+    out_val = a + 17;
+    return true;
+  }
+  return false;
+}
+
+static inline bool is_limit_comp_opt(const char *a, std::string &out_val, bool &need_next_arg) {
+  need_next_arg = false;
+  out_val.clear();
+  if (strcasecmp(a, "-lc") == 0 || strcasecmp(a, "--limitcompmem") == 0) {
+    need_next_arg = true;
+    return true;
+  }
+  if (strncasecmp(a, "-lc=", 4) == 0) {
+    out_val = a + 4;
+    return true;
+  }
+  if (strncasecmp(a, "-lc", 3) == 0 && a[3] != '\0') {
+    out_val = a + 3;
+    return true;
+  }
+  if (strncasecmp(a, "--limitcompmem=", 15) == 0) {
+    out_val = a + 15;
+    return true;
+  }
+  return false;
+}
+
+static inline bool is_logfile_opt(const char *a, std::string &out_val, bool &need_next_arg) {
+  need_next_arg = false;
+  out_val.clear();
+  if (strcasecmp(a, "-lo") == 0 || strcasecmp(a, "--logfile") == 0) {
+    need_next_arg = true;
+    return true;
+  }
+  if (strncasecmp(a, "-lo=", 4) == 0) {
+    out_val = a + 4;
+    return true;
+  }
+  if (strncasecmp(a, "-lo", 3) == 0 && a[3] != '\0') {
+    out_val = a + 3;
+    return true;
+  }
+  if (strncasecmp(a, "--logfile=", 10) == 0) {
+    out_val = a + 10;
+    return true;
+  }
+  return false;
+}
+
+static inline bool is_multithread_opt(const char *a, std::string &out_val, bool &need_next_arg) {
+  need_next_arg = false;
+  out_val.clear();
+  if (strcasecmp(a, "-mt") == 0 || strcasecmp(a, "--multithreaded") == 0) {
+    need_next_arg = true;
+    return true;
+  }
+  if (strncasecmp(a, "-mt=", 4) == 0) {
+    out_val = a + 4;
+    return true;
+  }
+  if (strncasecmp(a, "-mt", 3) == 0 && a[3] != '\0') {
+    out_val = a + 3;
+    return true;
+  }
+  if (strncasecmp(a, "--multithreaded=", 16) == 0) {
+    out_val = a + 16;
+    return true;
+  }
+  return false;
+}
+
+static uint64 parse_mem_limit(const char *s) {
+  if (!s || !*s) return 0;
+  if (*s == '=') s++;
+  while (*s == ' ' || *s == '\t') s++;
+  char *endp = NULL;
+  unsigned long long val = strtoull(s, &endp, 10);
+  if (!endp || endp == s) return 0;
+  while (*endp == ' ') endp++;
+  if (*endp == 'k' || *endp == 'K') {
+    val *= 1024ULL;
+  } else if (*endp == 'm' || *endp == 'M') {
+    val *= 1024ULL * 1024ULL;
+  } else if (*endp == 'g' || *endp == 'G') {
+    val *= 1024ULL * 1024ULL * 1024ULL;
+  } else if (*endp == 'b' || *endp == 'B') {
+    // bytes
+  } else if (*endp == '\0') {
+    if (val <= 65536ULL) {
+      val *= 1024ULL * 1024ULL;
+    }
+  }
+  return (uint64)val;
+}
+
+static int parse_threads_val(const char *s) {
+  if (!s || !*s) return 0;
+  if (*s == '=') s++;
+  int v = atoi(s);
+  return v > 0 ? v : 0;
+}
+
+static void open_logfile(const std::string &path) {
+  if (path.empty()) return;
+  if (g_logfile) {
+    fclose(g_logfile);
+    g_logfile = NULL;
+  }
+  std::string cleaned = clean_option_path(path);
+  ensure_parent_dirs(cleaned);
+  g_logfile = fopen(cleaned.c_str(), "a+");
+  if (!g_logfile) {
+    err_msg("WARNING: cannot open logfile '%s': %s\n", cleaned.c_str(), strerror(errno));
+  }
+}
+
+static void close_logfile() {
+  if (g_logfile) {
+    fclose(g_logfile);
+    g_logfile = NULL;
+  }
+}
+
+static std::string apply_mem_limits(const std::string &method_str, uint64 limit_decomp, uint64 limit_comp) {
+  if (limit_decomp == 0 && limit_comp == 0) return method_str;
+  std::string result;
+  const char *p = method_str.c_str();
+  while (*p) {
+    const char *plus = strchr(p, '+');
+    std::string part = plus ? std::string(p, plus - p) : std::string(p);
+    char buf[MAX_METHOD_STRLEN];
+    strncopy(buf, (char*)part.c_str(), sizeof(buf));
+    if (limit_decomp > 0) {
+      char limited[MAX_METHOD_STRLEN];
+      int rc = LimitDecompressionMem(buf, (MemSize)limit_decomp, limited);
+      if (rc == FREEARC_OK) {
+        strncopy(buf, limited, sizeof(buf));
+      }
+    }
+    if (limit_comp > 0) {
+      char limited[MAX_METHOD_STRLEN];
+      int rc = LimitCompressionMem(buf, (MemSize)limit_comp, limited);
+      if (rc == FREEARC_OK) {
+        strncopy(buf, limited, sizeof(buf));
+      }
+    }
+    if (!result.empty()) result += '+';
+    result += buf;
+    if (!plus) break;
+    p = plus + 1;
+  }
+  return result;
+}
+
 static bool is_absolute_path(const std::string &path) {
   if (path.empty()) return false;
   if (path[0] == '/' || path[0] == '\\') return true;
@@ -308,13 +504,6 @@ static std::string join_fspath(const std::string &base, const std::string &rel) 
   if (last == '/' || last == '\\')
     return base + rel;
   return base + "/" + rel;
-}
-
-static int parse_threads_val(const char *val) {
-  if (!val || !*val || *val == '-') return 1;
-  while (*val == '=' || *val == ' ') val++;
-  int t = atoi(val);
-  return t > 0 ? t : 1;
 }
 
 static char parse_arc_cmd(const char *s) {
@@ -373,7 +562,7 @@ public:
     ensure_parent_dirs(vname);
     cur_f = fopen(vname.c_str(), "wb");
     if (!cur_f) {
-      fprintf(stderr, "ERROR: can't create volume %s (%s)\n", vname.c_str(), strerror(errno));
+      err_msg("ERROR: can't create volume %s (%s)\n", vname.c_str(), strerror(errno));
       return false;
     }
     volume_names.push_back(vname);
@@ -409,7 +598,7 @@ public:
 
       size_t written = fwrite(p, 1, to_write, cur_f);
       if (written != to_write) {
-        fprintf(stderr, "ERROR: volume write failed\n");
+        err_msg("ERROR: volume write failed\n");
         return false;
       }
       cur_vol_written += written;
@@ -762,7 +951,7 @@ static std::string find_unarc_binary(const char *argv0) {
 static std::string find_sfx_stub(const char *argv0, const std::string &custom) {
   if (!custom.empty()) {
     if (access(custom.c_str(), R_OK) == 0) return custom;
-    fprintf(stderr, "WARNING: specified SFX stub '%s' not found, searching defaults...\n", custom.c_str());
+    err_msg("WARNING: specified SFX stub '%s' not found, searching defaults...\n", custom.c_str());
   }
   char self_exe[PATH_MAX];
 #ifdef _WIN32
@@ -1626,10 +1815,18 @@ static bool extract_preserved_files(const std::string &arcname, const std::strin
   return true;
 }
 
+struct LogFileGuard {
+  ~LogFileGuard() { close_logfile(); }
+};
+
 int main(int argc, char **argv) {
+  LogFileGuard log_guard;
   char cmd = 'a';
   bool cmd_specified = false;
   int custom_threads = 0;
+  uint64 limit_decomp_mem = 0;
+  uint64 limit_comp_mem = 0;
+  std::string logfile_path;
   std::string diskpath;
   const char *method = NULL;
   const char *password = NULL;
@@ -1664,13 +1861,13 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
       int rc = _spawnvp(_P_WAIT, unarc_bin.c_str(), (const char * const *)argv);
       if (rc < 0) {
-        fprintf(stderr, "ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
+        err_msg("ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
         return FREEARC_EXIT_ERROR;
       }
       return rc;
 #else
       execvp(unarc_bin.c_str(), argv);
-      fprintf(stderr, "ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
+      err_msg("ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
       return FREEARC_EXIT_ERROR;
 #endif
     }
@@ -1680,13 +1877,13 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
         int rc = _spawnvp(_P_WAIT, unarc_bin.c_str(), (const char * const *)argv);
         if (rc < 0) {
-          fprintf(stderr, "ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
+          err_msg("ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
           return FREEARC_EXIT_ERROR;
         }
         return rc;
 #else
         execvp(unarc_bin.c_str(), argv);
-        fprintf(stderr, "ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
+        err_msg("ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
         return FREEARC_EXIT_ERROR;
 #endif
       }
@@ -1702,8 +1899,8 @@ int main(int argc, char **argv) {
       continue;
     }
     if (!stop_opts && a[0] == '-' && a[1] != '\0') {
-      std::string dp_val;
-      bool dp_next = false;
+      std::string opt_val;
+      bool opt_next = false;
       if (strequ(a, "-h") || strequ(a, "--help")) {
         fputs(g_usage, stdout);
         return 0;
@@ -1729,28 +1926,27 @@ int main(int argc, char **argv) {
       else if (strequ(a, "-dict") || strequ(a, "--dict")) filters.push_back("dict");
       else if (strequ(a, "-lzp") || strequ(a, "--lzp")) filters.push_back("lzp");
       else if (strequ(a, "-mm") || strequ(a, "--mm")) filters.push_back("mm");
-      else if (is_diskpath_opt(a, dp_val, dp_next)) {
-        if (dp_next && argi + 1 < argc) diskpath = clean_option_path(argv[++argi]);
-        else diskpath = clean_option_path(dp_val);
+      else if (is_diskpath_opt(a, opt_val, opt_next)) {
+        if (opt_next && argi + 1 < argc) diskpath = clean_option_path(argv[++argi]);
+        else diskpath = clean_option_path(opt_val);
       }
-      else if (strcasecmp(a, "-mt") == 0 || strcasecmp(a, "--multithreaded") == 0) {
-        if (argi + 1 < argc && argv[argi + 1][0] != '-') custom_threads = parse_threads_val(argv[++argi]);
+      else if (is_multithread_opt(a, opt_val, opt_next)) {
+        if (opt_next && argi + 1 < argc && argv[argi + 1][0] != '-') custom_threads = parse_threads_val(argv[++argi]);
+        else custom_threads = parse_threads_val(opt_val.c_str());
       }
-      else if (strncasecmp(a, "-mt=", 4) == 0) custom_threads = parse_threads_val(a + 4);
-      else if (strncasecmp(a, "-mt", 3) == 0 && a[3] != '\0') custom_threads = parse_threads_val(a + 3);
-      else if (strncasecmp(a, "--multithreaded=", 16) == 0) custom_threads = parse_threads_val(a + 16);
-      else if (strcasecmp(a, "-ld") == 0 || strcasecmp(a, "--limitdecompmem") == 0) {
-        if (argi + 1 < argc && argv[argi + 1][0] != '-') argi++;
+      else if (is_limit_decomp_opt(a, opt_val, opt_next)) {
+        if (opt_next && argi + 1 < argc && argv[argi + 1][0] != '-') limit_decomp_mem = parse_mem_limit(argv[++argi]);
+        else limit_decomp_mem = parse_mem_limit(opt_val.c_str());
       }
-      else if (strncasecmp(a, "-ld", 3) == 0 || strncasecmp(a, "--limitdecompmem=", 17) == 0) {}
-      else if (strcasecmp(a, "-lc") == 0 || strcasecmp(a, "--limitcompmem") == 0) {
-        if (argi + 1 < argc && argv[argi + 1][0] != '-') argi++;
+      else if (is_limit_comp_opt(a, opt_val, opt_next)) {
+        if (opt_next && argi + 1 < argc && argv[argi + 1][0] != '-') limit_comp_mem = parse_mem_limit(argv[++argi]);
+        else limit_comp_mem = parse_mem_limit(opt_val.c_str());
       }
-      else if (strncasecmp(a, "-lc", 3) == 0 || strncasecmp(a, "--limitcompmem=", 15) == 0) {}
-      else if (strcasecmp(a, "-lo") == 0 || strcasecmp(a, "--logfile") == 0) {
-        if (argi + 1 < argc && argv[argi + 1][0] != '-') argi++;
+      else if (is_logfile_opt(a, opt_val, opt_next)) {
+        if (opt_next && argi + 1 < argc && argv[argi + 1][0] != '-') logfile_path = clean_option_path(argv[++argi]);
+        else logfile_path = clean_option_path(opt_val);
+        open_logfile(logfile_path);
       }
-      else if (strncasecmp(a, "-lo", 3) == 0 || strncasecmp(a, "--logfile=", 10) == 0) {}
       else if (strcasecmp(a, "-w") == 0 || strcasecmp(a, "--workdir") == 0) {
         if (argi + 1 < argc && argv[argi + 1][0] != '-') argi++;
       }
@@ -1780,7 +1976,7 @@ int main(int argc, char **argv) {
       else if (strequ(a, "-ae") && argi + 1 < argc) algorithm = argv[++argi];
       else if (start_with(a, "-ae")) algorithm = a + 3;
       else {
-        fprintf(stderr, "WARNING: unrecognized legacy option '%s' ignored\n", a);
+        err_msg("WARNING: unrecognized legacy option '%s' ignored\n", a);
       }
     } else {
       if (!cmd_specified) {
@@ -1820,7 +2016,7 @@ int main(int argc, char **argv) {
   }
 
   if (vol_size > 0 && vol_size < 10240) {
-    fprintf(stderr, "ERROR: volume size must be at least 10KB (e.g. -v10m or -v500k)\n");
+    err_msg("ERROR: volume size must be at least 10KB (e.g. -v10m or -v500k)\n");
     return FREEARC_EXIT_ERROR;
   }
 
@@ -1842,6 +2038,9 @@ int main(int argc, char **argv) {
     final_method += base_method;
   } else {
     final_method = base_method;
+  }
+  if (limit_decomp_mem > 0 || limit_comp_mem > 0) {
+    final_method = apply_mem_limits(final_method, limit_decomp_mem, limit_comp_mem);
   }
   std::string method_str = final_method;
   method = method_str.c_str();

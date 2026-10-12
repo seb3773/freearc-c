@@ -20,6 +20,7 @@ void UnarcQuit()
 
 #include "CUI.h"
 CUI UI;
+FILE *g_logfile = NULL;
 
 int main (int argc, char *argv[])
 {
@@ -29,6 +30,10 @@ int main (int argc, char *argv[])
   if (command.ok)                  // If parsing succeeded
     PROCESS (&command, &UI);       // Execute command
   if (!command.to_stdout && !command.silent)
-    printf ("\n");
+    cui_printf ("\n");
+  if (g_logfile) {
+    fclose(g_logfile);
+    g_logfile = NULL;
+  }
   return command.ok? EXIT_SUCCESS : FREEARC_EXIT_ERROR;
 }

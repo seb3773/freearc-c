@@ -326,11 +326,13 @@ test_legacy_cli() {
     local list="$T/compat_list.lst"
     printf "hello.txt\nsub/deep/lines.txt\n" > "$list"
 
-    # 1. Test "create" command + intermediate subdirs creation + ignored flags (-ld, -mt, --logfile, -di, -ds)
+    # 1. Test "create" command + intermediate subdirs creation + wired flags (-ld, -lc, -mt, --logfile)
     local nested_arc="$T/nested/dir/level2/newarchive.arc"
-    rm -rf "$T/nested"
-    "$ARC" create -ld64m -mt4 --logfile="$T/arc.log" -di -ds --LimitDecompMem=128m -dp"$T/corpus" "$nested_arc" @"$list" >/dev/null 2>&1 || return 1
+    rm -rf "$T/nested" "$T/arc.log" "$T/unarc.log"
+    "$ARC" create -ld64m -lc128m -mt4 --logfile="$T/arc.log" -di -ds --LimitDecompMem=128m -dp"$T/corpus" "$nested_arc" @"$list" >/dev/null 2>&1 || return 1
     [ -f "$nested_arc" ] || return 1
+    [ -s "$T/arc.log" ] || return 1
+    grep -q "All OK" "$T/arc.log" || return 1
 
     # 2. Test brace syntax for diskpath: --diskpath={...} and extraction with -dp
     local out="$T/out_compat_dp"
@@ -345,15 +347,24 @@ test_legacy_cli() {
     "$ARC" extract -dp"$out2" "$nested_arc" >/dev/null 2>&1 || return 1
     diff -q "$T/corpus/hello.txt" "$out2/hello.txt" >/dev/null 2>&1 || return 1
 
-    # 4. Test unarc ignored options
+    # 4. Test unarc wired options: logfile logging and -ld enforcement
     local out3="$T/out_compat_unarc_opts"
     "$UNARC" extract -ld128m -mt2 --logfile="$T/unarc.log" --diskpath="$out3" "$nested_arc" >/dev/null 2>&1 || return 1
     diff -q "$T/corpus/hello.txt" "$out3/hello.txt" >/dev/null 2>&1 || return 1
+    [ -s "$T/unarc.log" ] || return 1
+    grep -q "All OK" "$T/unarc.log" || return 1
+
+    # 5. Verify -ld actively rejects decompression when limit is exceeded
+    local out_fail="$T/out_fail_ld"
+    if "$UNARC" x -ld1k --diskpath="$out_fail" "$nested_arc" >/dev/null 2>&1; then
+        echo "Error: unarc should have failed with -ld1k" >&2
+        return 1
+    fi
 
     return 0
 }
 
-check "Legacy CLI drop-in compatibility (create, nested dirs, -dp with braces, -ld/-mt/--logfile ignored)" test_legacy_cli
+check "Legacy CLI drop-in compatibility (create, nested dirs, -dp with braces, --logfile logging, -ld memory limit enforcement)" test_legacy_cli
 
 # ------------------------------------------------------------------
 # Summary

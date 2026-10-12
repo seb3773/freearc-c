@@ -83,5 +83,20 @@ Write extracted files to stdout.
 .TP
 .B \-ep
 Store basenames only (strip directories).
+.TP
+.BI \-dp \ DIR
+Set base disk path for compression/extraction (supports \fB--diskpath=DIR\fR).
+.TP
+.BI \-ld \ MEM
+Limit memory usage for decompression (e.g. \fB-ld64m\fR, \fB--LimitDecompMem=64m\fR).
+.TP
+.BI \-lc \ MEM
+Limit memory usage for compression (e.g. \fB-lc256m\fR, \fB--LimitCompMem=256m\fR).
+.TP
+.BI \-lo \ FILE
+Log all console output, progress, and errors to file (supports \fB--logfile=FILE\fR).
+.TP
+.BI \-mt \ NUM
+Set number of worker threads (supports \fB--MultiThreaded=NUM\fR).
 .SH AUTHOR
 Modern native C/C++ port by seb3773. Original FreeArc format by Bulat Ziganshin.

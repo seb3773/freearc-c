@@ -439,13 +439,15 @@ extern int jmpready;
 extern jmp_buf jumper;
 
 // ��������� ��������� � ����������� ��������� ���������
+extern FILE *g_logfile;
+
 #ifndef CHECK
 #  if defined(FREEARC_WIN) && defined(FREEARC_GUI)
 #    define CHECK(a,b)           {if (!(a))  {if (jmpready) longjmp(jumper,1);  char *s=(char*)malloc(MY_FILENAME_MAX*4);  WCHAR *utf16=(WCHAR*) malloc(MY_FILENAME_MAX*4);  sprintf b;  utf8_to_utf16(s,utf16);  MessageBoxW(NULL, utf16, L"Error encountered", MB_ICONERROR);  ON_CHECK_FAIL();  exit(FREEARC_EXIT_ERROR);}}
 #  elif defined(FREEARC_WIN)
-#    define CHECK(a,b)           {if (!(a))  {if (jmpready) longjmp(jumper,1);  char *s=(char*)malloc(MY_FILENAME_MAX*4),  *oem=(char*)malloc(MY_FILENAME_MAX*4);  sprintf b;  utf8_to_oem(s,oem);  printf("\n%s",oem);  ON_CHECK_FAIL();  exit(FREEARC_EXIT_ERROR);}}
+#    define CHECK(a,b)           {if (!(a))  {if (jmpready) longjmp(jumper,1);  char *s=(char*)malloc(MY_FILENAME_MAX*4),  *oem=(char*)malloc(MY_FILENAME_MAX*4);  sprintf b;  utf8_to_oem(s,oem);  printf("\n%s",oem);  if (g_logfile) {fprintf(g_logfile, "\n%s\n", s); fflush(g_logfile);}  ON_CHECK_FAIL();  exit(FREEARC_EXIT_ERROR);}}
 #  else
-#    define CHECK(a,b)           {if (!(a))  {if (jmpready) longjmp(jumper,1);  char s[MY_FILENAME_MAX*4];  sprintf b;  printf("\n%s",s);  ON_CHECK_FAIL();  exit(FREEARC_EXIT_ERROR);}}
+#    define CHECK(a,b)           {if (!(a))  {if (jmpready) longjmp(jumper,1);  char s[MY_FILENAME_MAX*4];  sprintf b;  printf("\n%s",s);  if (g_logfile) {fprintf(g_logfile, "\n%s\n", s); fflush(g_logfile);}  ON_CHECK_FAIL();  exit(FREEARC_EXIT_ERROR);}}
 #  endif
 #endif
 

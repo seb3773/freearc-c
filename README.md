@@ -114,10 +114,10 @@ make win64
 # (Or compile both simultaneously)
 make both
 
-# Run the automated Linux validation suite (23 tests)
+# Run the automated Linux validation suite (24 tests)
 make test
 
-# Run the automated Windows 64-bit validation suite (23 tests under Wine, bit-for-bit exact)
+# Run the automated Windows 64-bit validation suite (24 tests under Wine, bit-for-bit exact)
 make test-win64
 
 # Run both test suites
@@ -210,6 +210,20 @@ unarc e -dp /destination/path backup.arc
 unarc p backup.arc README.txt | grep "version"
 ```
 
+### Legacy CLI Compatibility & Drop-In Replacement
+
+Both `arc` / `unarc` on Linux and `arc.exe` / `unarc.exe` on Windows 64-bit serve as seamless drop-in replacements for legacy 32-bit FreeArc scripts, CI pipelines, and automated repack installers:
+
+* **Command `create`**: Alias for `a` (e.g. `arc create {options} newarchive.arc @list.lst`).
+* **Intermediate Directories**: Automatically creates missing parent directories for destination archives and extracted files.
+* **Base Disk Path (`-dpDIR` / `--diskpath=DIR`)**: Configures root directory for packing or unpacking, supporting standard paths and brace-wrapped paths (`--diskpath={path/to/folder}`).
+* **Operation & Diagnostic Logging (`--logfile=FILE` / `-loFILE`)**: All console output, file progress, banners, summaries, and error logs are mirrored into the specified log file (even in quiet `-q` mode).
+* **Decompression Memory Limiting (`-ld<mem>` / `--LimitDecompMem=<mem>`)**:
+  * *At compression (`arc`)*: Constraints algorithms (LZMA dictionary, PPMD memory) to ensure archives fit within the target RAM limit during extraction.
+  * *At extraction (`unarc`)*: Validates required block memory before unpacking and safely aborts with an informative error if the limit is exceeded, preventing out-of-memory crashes.
+* **Compression Memory Limiting (`-lc<mem>` / `--LimitCompMem=<mem>`)**: Constrains compressor RAM usage during archive creation.
+* **Multithreading Control (`-mt<num>` / `--MultiThreaded=<num>`)**: Configures worker thread concurrency for compression algorithms.
+
 ---
 
 ## Project Structure
@@ -235,8 +249,8 @@ unarc p backup.arc README.txt | grep "version"
 │   ├── WinCompat.h      # Windows 64-bit POSIX compatibility shims
 │   └── Compression/     # Compression codecs (LZMA, PPMD, GRZip, Tornado, TTA, Filters)
 ├── tests/
-│   ├── run_tests.sh       # Comprehensive Linux automated test suite (23 tests)
-│   └── run_tests_win64.sh # Automated Windows 64-bit & cross-platform test suite (23 tests)
+│   ├── run_tests.sh       # Comprehensive Linux automated test suite (24 tests)
+│   └── run_tests_win64.sh # Automated Windows 64-bit & cross-platform test suite (24 tests)
 └── tests_files/         # Test artifacts
     ├── corpus/          # Standard test corpus (binaries, text, code, nested dirs)
     └── samples_legacy/  # Legacy FreeArc .arc archives (example.arc, data2.arc)

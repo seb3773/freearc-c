@@ -1,7 +1,25 @@
 #pragma once
 
 #include <stdio.h>
+#include <stdarg.h>
 #include "WinCompat.h"
+
+extern FILE *g_logfile;
+
+static inline void cui_printf (const char *fmt, ...)
+{
+  va_list ap;
+  va_start(ap, fmt);
+  if (g_logfile) {
+    va_list ap2;
+    va_copy(ap2, ap);
+    vfprintf(g_logfile, fmt, ap2);
+    fflush(g_logfile);
+    va_end(ap2);
+  }
+  vprintf(fmt, ap);
+  va_end(ap);
+}
 
 class CUI : public BASEUI
 {
@@ -26,11 +44,16 @@ public:
 
 void CUI::DisplayHeader (char* header)
 {
-  printf ("%s", header);
+  cui_printf ("%s", header);
 }
 
 bool CUI::ProgressFile (bool isdir, const char *operation, FILENAME filename, uint64 filesize)
 {
+  if (g_logfile && cur_cmd != 'p') {
+    fprintf(g_logfile, isdir ? "%s %s" STR_PATH_DELIMITER "\n" : "%s %s (%llu bytes)\n",
+            operation, filename, (unsigned long long)filesize);
+    fflush(g_logfile);
+  }
   if (cur_cmd == 'p' || silent_mode) return TRUE;
   printf (isdir?  "%s %s" STR_PATH_DELIMITER "\n"  :  "%s %s (%llu bytes)\n",
           operation, filename, filesize);
@@ -39,12 +62,20 @@ bool CUI::ProgressFile (bool isdir, const char *operation, FILENAME filename, ui
 
 void CUI::EndProgress (COMMAND *cmd)
 {
+  if (g_logfile && cur_cmd != 'p') {
+    fprintf(g_logfile, "All OK\n");
+    fflush(g_logfile);
+  }
   if (cur_cmd == 'p' || silent_mode || (cmd && (cmd->to_stdout || cmd->silent))) return;
   printf ("All OK");
 }
 
 void CUI::EndProgress ()
 {
+  if (g_logfile && cur_cmd != 'p') {
+    fprintf(g_logfile, "All OK\n");
+    fflush(g_logfile);
+  }
   if (cur_cmd == 'p' || silent_mode) return;
   printf ("All OK");
 }
@@ -59,23 +90,32 @@ bool CUI::AllowProcessing (char cmd, int silent, FILENAME arcname, char* comment
   cur_cmd = cmd;
   silent_mode = silent;
   strcpy (outdir, _outdir);
-  if (cmd != 'p' && silent == 0) {
-  printf (". %s archive: %s\n",                       // Выведем имя обрабатываемого архива
-    cmd=='l'||cmd=='v'? "Listing" : cmd=='t' ? "Testing" : "Extracting", drop_dirname(arcname));
-  if (cmtsize>0)                                      // Выведем архивный комментарий
+  if (cmd != 'p') {
+    if (g_logfile) {
+      fprintf(g_logfile, ". %s archive: %s\n",
+        cmd=='l'||cmd=='v'? "Listing" : cmd=='t' ? "Testing" : "Extracting", drop_dirname(arcname));
+      if (cmtsize > 0) {
+        fprintf(g_logfile, "%*.*s\n", cmtsize, cmtsize, comment);
+      }
+      fflush(g_logfile);
+    }
+    if (silent == 0) {
+      printf (". %s archive: %s\n",
+        cmd=='l'||cmd=='v'? "Listing" : cmd=='t' ? "Testing" : "Extracting", drop_dirname(arcname));
+      if (cmtsize>0)
 #ifdef FREEARC_WIN
-{
-    // Convert comment from UTF-8 to OEM encoding before printing
-    char *oemname = (char*) malloc(cmtsize+1);
-    strncpy (oemname, comment, cmtsize);
-    oemname[cmtsize] = 0;
-    utf8_to_oem (oemname, oemname);
-    printf ("%s\n", oemname);
-    free (oemname);
-}
+      {
+        char *oemname = (char*) malloc(cmtsize+1);
+        strncpy (oemname, comment, cmtsize);
+        oemname[cmtsize] = 0;
+        utf8_to_oem (oemname, oemname);
+        printf ("%s\n", oemname);
+        free (oemname);
+      }
 #else
-    printf("%*.*s\n", cmtsize, cmtsize, comment);
+        printf("%*.*s\n", cmtsize, cmtsize, comment);
 #endif
+    }
   }
 
   return TRUE;
@@ -122,21 +162,21 @@ static inline void format_mode(uint32 mode, char *buf) {
 void CUI::ListHeader (COMMAND &command)
 {
   if (command.cmd=='l')
-      printf ("Date/time                  Size Filename\n"
-              "----------------------------------------\n");
+      cui_printf ("Date/time                  Size Filename\n"
+                  "----------------------------------------\n");
   else
-      printf ("Date/time            Attr               Size          Packed      CRC Filename\n"
-              "---------------------------------------------------------------------------------\n");
+      cui_printf ("Date/time            Attr               Size          Packed      CRC Filename\n"
+                  "---------------------------------------------------------------------------------\n");
   total_files=total_bytes=total_packed=0;
 }
 
 void CUI::ListFooter (COMMAND &command)
 {
   if (command.cmd=='l')
-      printf ("----------------------------------------\n");
+      cui_printf ("----------------------------------------\n");
   else
-      printf ("---------------------------------------------------------------------------------\n");
-  printf ("%.0lf files, %.0lf bytes, %.0lf compressed", double(total_files), double(total_bytes), double(total_packed));
+      cui_printf ("---------------------------------------------------------------------------------\n");
+  cui_printf ("%.0lf files, %.0lf bytes, %.0lf compressed", double(total_files), double(total_bytes), double(total_packed));
 }
 
 void CUI::ListFiles (DIRECTORY_BLOCK *dirblock, COMMAND &command)
@@ -167,24 +207,24 @@ void CUI::ListFiles (DIRECTORY_BLOCK *dirblock, COMMAND &command)
 
       if (command.cmd=='l') {
         if (dirblock->issymlink[i])
-          printf ("%s       -lnk-", timestr);
+          cui_printf ("%s       -lnk-", timestr);
         else if (dirblock->isdir[i])
-          printf ("%s       -dir-", timestr);
+          cui_printf ("%s       -dir-", timestr);
         else
-          printf ("%s %11.0lf", timestr, double(filesize));
+          cui_printf ("%s %11.0lf", timestr, double(filesize));
       } else {
-        printf ("%s %s %15.0lf %15.0lf %08x", timestr, modestr, double(filesize), double(packed), dirblock->crc[i]);
+        cui_printf ("%s %s %15.0lf %15.0lf %08x", timestr, modestr, double(filesize), double(packed), dirblock->crc[i]);
       }
-      printf ("%c", Encrypted? '*':' ');
+      cui_printf ("%c", Encrypted? '*':' ');
 
       // Print filename using console encoding
       static char filename[MY_FILENAME_MAX*4];
       dirblock->fullname (i, filename);
       static MYFILE file;  file.setname (filename);
       if (dirblock->issymlink[i] && dirblock->symlink_target[i] && dirblock->symlink_target[i][0])
-        printf ("%s -> %s\n", file.displayname(), dirblock->symlink_target[i]);
+        cui_printf ("%s -> %s\n", file.displayname(), dirblock->symlink_target[i]);
       else
-        printf ("%s\n", file.displayname());
+        cui_printf ("%s\n", file.displayname());
 
       total_files++;
       total_bytes  += filesize;

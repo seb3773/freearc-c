@@ -203,6 +203,8 @@ char *AddTempfile (char *compressor)
 
   // Maximum memory allowed to use
   uint64 maxmem = mymin (GetPhysicalMemory()/4*3, GetMaxMemToAlloc());
+  if (CurrentProcess && CurrentProcess->cmd && CurrentProcess->cmd->limit_decomp_mem > 0)
+    maxmem = mymin (maxmem, CurrentProcess->cmd->limit_decomp_mem);
 
   // If memreqs are too large - add "tempfile" between methods
   if (mem > maxmem)
@@ -269,6 +271,20 @@ void PROCESS::ExtractFiles (DIRECTORY_BLOCK *dirblock, int block_num)
     CHECK (prc!=FREEARC_ERRCODE_GENERAL, (s,"ERROR: archive is encrypted, use -pPassword"));
     CHECK (prc!=FREEARC_ERRCODE_BAD_COMPRESSED_DATA, (s,"ERROR: wrong password"));
     CHECK (prc>=0, (s,"ERROR: unsupported compression method %s", data_block.compressor));
+    if (cmd->limit_decomp_mem > 0) {
+      char tmp_c[MAX_METHOD_STRLEN];
+      strncopy(tmp_c, resolved, sizeof(tmp_c));
+      CMETHOD cm_arr[MAX_METHODS_IN_COMPRESSOR];
+      int N_meth = split(tmp_c, COMPRESSION_METHODS_DELIMITER, cm_arr, MAX_METHODS_IN_COMPRESSOR);
+      uint64 max_req = 0;
+      for (int mi = 0; mi < N_meth; mi++) {
+        MemSize mreq = GetDecompressionMem(cm_arr[mi]);
+        if (mreq > max_req) max_req = mreq;
+      }
+      CHECK (max_req <= cmd->limit_decomp_mem,
+             (s, "ERROR: decompression requires %llu MB memory, exceeding -ld limit of %llu MB",
+              (unsigned long long)(max_req + 1048575)/1048576, (unsigned long long)(cmd->limit_decomp_mem + 1048575)/1048576));
+    }
     char *compressor = AddTempfile (resolved);
     int result = MultiDecompress (compressor? compressor : resolved, global_callback, this);
     CHECK (result!=FREEARC_ERRCODE_INVALID_COMPRESSOR, (s,"ERROR: unsupported compression method %s", resolved));
@@ -286,7 +302,7 @@ void PROCESS::ExtractFiles (DIRECTORY_BLOCK *dirblock, int block_num)
 PROCESS::PROCESS (COMMAND* _cmd, BASEUI* _UI, uint64 &total_files, uint64 &origsize, uint64 &compsize) : cmd(_cmd), UI(_UI)
 {
   CurrentProcess = this;
-  SetCompressionThreads (GetProcessorsCount());
+  SetCompressionThreads (_cmd->custom_threads > 0 ? _cmd->custom_threads : GetProcessorsCount());
 
   arcinfo.arcfile.open (cmd->arcname, READ_MODE);                     // ������� ���� ������
   arcinfo.read_structure();                                           // ��������� ��������� ������
@@ -316,6 +332,7 @@ PROCESS::PROCESS (COMMAND* _cmd, BASEUI* _UI) : cmd(_cmd), UI(_UI)
 {
   CurrentProcess = this;
   cmd->Prepare();
+  SetCompressionThreads (cmd->custom_threads > 0 ? cmd->custom_threads : GetProcessorsCount());
 
   arcinfo.arcfile.open (cmd->arcname, READ_MODE);                     // ������� ���� ������
   arcinfo.read_structure();                                           // ��������� ��������� ������
