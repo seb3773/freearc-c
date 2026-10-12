@@ -147,6 +147,26 @@ void BaseMatchFinder::shift (BYTE *buf, int shift)
 
 
 
+// Fast match length computation using 64-bit comparison and CTZ
+static inline UINT find_match_len(const BYTE *p, const BYTE *q, const void *bufend, UINT len)
+{
+    const BYTE *end = (const BYTE *)bufend;
+    while (p + len + 8 <= end) {
+        uint64 v1, v2;
+        memcpy(&v1, p + len, 8);
+        memcpy(&v2, q + len, 8);
+        uint64 diff = v1 ^ v2;
+        if (diff != 0) {
+            return len + (UINT)(__builtin_ctzll(diff) >> 3);
+        }
+        len += 8;
+    }
+    while (p + len < end && p[len] == q[len]) {
+        len++;
+    }
+    return len;
+}
+
 // ****************************************************************************
 // 1-way Match Finder which holds only one entry for each hash value **********
 // ****************************************************************************
@@ -163,10 +183,7 @@ struct MatchFinder1 : BaseMatchFinder
         UINT h = hash(value(p));
         q = toPtr(HTable[h]);  HTable[h] = fromPtr(p);
         if (val32equ(p, q)) {
-            UINT len;
-            for (len=MINLEN-1; p+len+4<bufend && val32equ(p+len, q+len); len+=4);
-            for (            ; p+len  <bufend && p[len] == q[len];       len++);
-            return len;
+            return find_match_len(p, q, bufend, MINLEN-1);
         } else {
             return MINLEN-1;
         }
@@ -202,20 +219,16 @@ struct MatchFinder2 : BaseMatchFinder
         BYTE *q1 = toPtr (HTable[h+1]);   HTable[h+1] = HTable[h];
               q  = toPtr (HTable[h]);     HTable[h]   = fromPtr(p);
         if (val32equ(p, q)) {
-            for (len=MINLEN-1; p+len+4<bufend && val32equ(p+len, q+len); len+=4);
-            for (            ; p+len  <bufend && p[len] == q[len];       len++);
+            len = find_match_len(p, q, bufend, MINLEN-1);
 
             if (p[len] == q1[len]) {
-                UINT len1;
-                for (len1=0; p+len1<bufend && p[len1]==q1[len1]; len1++);
+                UINT len1 = find_match_len(p, q1, bufend, 0);
                 if (len1>len)  len=len1, q=q1;
             }
             return len;
         } else if (val32equ(p, q1)) {
             q=q1;
-            for (len=MINLEN-1; p+len+4<bufend && val32equ(p+len, q+len); len+=4);
-            for (            ; p+len  <bufend && p[len] == q[len];       len++);
-            return len;
+            return find_match_len(p, q, bufend, MINLEN-1);
         } else {
             return MINLEN-1;
         }
@@ -253,8 +266,7 @@ struct MatchFinderN : BaseMatchFinder
         q = toPtr(x0);
         // Start with checking first element of hash row
         if (val32equ(p, q)) {
-            for (len=MINLEN; p+len+4<=bufend && val32equ(p+len, q+len); len+=4);
-            for (          ; p+len  < bufend && p[len] == q[len];       len++);
+            len = find_match_len(p, q, bufend, MINLEN);
             if (len==4 && p-q>=48*kb  ||
                 len==5 && p-q>=192*kb ||
                 len==6 && p-q>=1*mb)
@@ -266,8 +278,7 @@ struct MatchFinderN : BaseMatchFinder
             x1=HTable[h+j];  HTable[h+j]=x0;
             BYTE *q1 = toPtr(x1);
             if (val32equ(p+len+1-MINLEN, q1+len+1-MINLEN)) {
-                UINT len1;
-                for (len1=0;  p+len1<bufend && p[len1]==q1[len1];  len1++);
+                UINT len1 = find_match_len(p, q1, bufend, 0);
                 if (len1==4 && p-q1>=48*kb  ||
                     len1==5 && p-q1>=192*kb ||
                     len1==6 && p-q1>=1*mb)
@@ -436,18 +447,14 @@ len6:   q = toPtr(x1);
 len7:   q = toPtr(x1);
         len = MINLEN-1;
         if (val32equ(p, q)) {
-            len = mymin(MINLEN-1, 4);
-            for (; p+len<bufend && val32equ(p+len, q+len); len+=4);
-            for (; p+len<bufend && p[len] == q[len];       len++);
+            len = find_match_len(p, q, bufend, mymin(MINLEN-1, 4));
         }
 
         while (table!=tabend) {
             next_pair();
             BYTE *q1 = toPtr(x1);
             if (t == 0 && p[len] == q1[len] && val32equ(p, q1)) {
-                UINT len1 = mymin(MINLEN-1, 4);
-                for (; p+len1<bufend && val32equ(p+len1, q1+len1); len1+=4);
-                for (; p+len1<bufend && p[len1] == q1[len1];       len1++);
+                UINT len1 = find_match_len(p, q1, bufend, mymin(MINLEN-1, 4));
                 if (len1>len)  len=len1, q=q1;
             }
         }
@@ -589,18 +596,14 @@ len6:   q = toPtr(x1);
 len7:   len = MINLEN-1;
         q = toPtr(x1);
         if (val32equ(p, q)) {
-            len = mymin(MINLEN-1, 4);
-            for (; p+len<bufend && val32equ(p+len, q+len); len+=4);
-            for (; p+len<bufend && p[len] == q[len];       len++);
+            len = find_match_len(p, q, bufend, mymin(MINLEN-1, 4));
         }
 
         while (table!=tabend) {
             next_pair();
             BYTE *q1 = toPtr(x1);
             if (t == 0 && p[len] == q1[len] && val32equ(p, q1)) {
-                UINT len1 = mymin(MINLEN-1, 4);
-                for (; p+len1<bufend && val32equ(p+len1, q1+len1); len1+=4);
-                for (; p+len1<bufend && p[len1] == q1[len1];       len1++);
+                UINT len1 = find_match_len(p, q1, bufend, mymin(MINLEN-1, 4));
                 if (len1>len  &&  !(len1==len+1 && ChangePair(p-q, p-q1)) )
                     len=len1, q=q1;
             }
