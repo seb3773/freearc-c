@@ -317,6 +317,45 @@ test_legacy_archives() {
 check "Legacy FreeArc 0.6x archives integrity and decompression" test_legacy_archives
 
 # ------------------------------------------------------------------
+# Test 10: Legacy CLI Drop-in Compatibility & Script Support
+# ------------------------------------------------------------------
+echo ""
+echo "=== Test Group 10: Legacy CLI Drop-in Compatibility ==="
+
+test_legacy_cli() {
+    local list="$T/compat_list.lst"
+    printf "hello.txt\nsub/deep/lines.txt\n" > "$list"
+
+    # 1. Test "create" command + intermediate subdirs creation + ignored flags (-ld, -mt, --logfile, -di, -ds)
+    local nested_arc="$T/nested/dir/level2/newarchive.arc"
+    rm -rf "$T/nested"
+    "$ARC" create -ld64m -mt4 --logfile="$T/arc.log" -di -ds --LimitDecompMem=128m -dp"$T/corpus" "$nested_arc" @"$list" >/dev/null 2>&1 || return 1
+    [ -f "$nested_arc" ] || return 1
+
+    # 2. Test brace syntax for diskpath: --diskpath={...} and extraction with -dp
+    local out="$T/out_compat_dp"
+    "$UNARC" x --diskpath="{$out}" "$nested_arc" >/dev/null 2>&1 || return 1
+    diff -q "$T/corpus/hello.txt" "$out/hello.txt" >/dev/null 2>&1 || return 1
+    diff -q "$T/corpus/sub/deep/lines.txt" "$out/sub/deep/lines.txt" >/dev/null 2>&1 || return 1
+
+    # 3. Test long commands: "arc extract", "arc test", "arc list"
+    "$ARC" test "$nested_arc" >/dev/null 2>&1 || return 1
+    "$ARC" list "$nested_arc" >/dev/null 2>&1 || return 1
+    local out2="$T/out_compat_extract"
+    "$ARC" extract -dp"$out2" "$nested_arc" >/dev/null 2>&1 || return 1
+    diff -q "$T/corpus/hello.txt" "$out2/hello.txt" >/dev/null 2>&1 || return 1
+
+    # 4. Test unarc ignored options
+    local out3="$T/out_compat_unarc_opts"
+    "$UNARC" extract -ld128m -mt2 --logfile="$T/unarc.log" --diskpath="$out3" "$nested_arc" >/dev/null 2>&1 || return 1
+    diff -q "$T/corpus/hello.txt" "$out3/hello.txt" >/dev/null 2>&1 || return 1
+
+    return 0
+}
+
+check "Legacy CLI drop-in compatibility (create, nested dirs, -dp with braces, -ld/-mt/--logfile ignored)" test_legacy_cli
+
+# ------------------------------------------------------------------
 # Summary
 # ------------------------------------------------------------------
 echo ""

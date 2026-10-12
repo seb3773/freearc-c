@@ -17,6 +17,9 @@
 #include "Environment.h"
 #include "Compression/Compression.h"
 #include "WinCompat.h"
+#ifdef _WIN32
+#include <process.h>
+#endif
 #ifdef stat
 #undef stat
 #endif
@@ -28,47 +31,51 @@
 static const char *g_usage =
   "Usage: arc <command> [options] archive[.arc] [files...]\n"
   "Commands:\n"
-  "  a           add files to archive (default)\n"
-  "  u           update newer files and add new files\n"
-  "  f           freshen existing files in archive (no new files added)\n"
-  "  d           delete files/patterns from archive\n"
-  "  m           move files to archive (delete from disk after archiving)\n"
-  "  l           display archive listing (delegates to unarc)\n"
-  "  v           display verbose archive listing with Unix attributes\n"
-  "  t           test archive integrity\n"
-  "  e           extract files without pathnames\n"
-  "  x           extract files with pathnames\n"
-  "  p           extract files to standard output (pipe)\n"
-  "  s           convert archive to self-extracting executable (SFX)\n"
+  "  a, add, c, create  add files to archive (default)\n"
+  "  u, update          update newer files and add new files\n"
+  "  f, freshen         freshen existing files in archive (no new files added)\n"
+  "  d, delete          delete files/patterns from archive\n"
+  "  m, move            move files to archive (delete from disk after archiving)\n"
+  "  l, list            display archive listing (delegates to unarc)\n"
+  "  v                  display verbose archive listing with Unix attributes\n"
+  "  t, test            test archive integrity\n"
+  "  e                  extract files without pathnames\n"
+  "  x, extract         extract files with pathnames\n"
+  "  p                  extract files to standard output (pipe)\n"
+  "  s                  convert archive to self-extracting executable (SFX)\n"
   "Options:\n"
-  "  -m METHOD   storing, lzma, tor, ppmd, grzip, tta\n"
-  "              levels: -m0..-m5, -mx, -m4x, -m5x\n"
-  "              chains: -m exe+lzma, -m rep+lzma, -m dict+ppmd, etc.\n"
-  "  -bcj        activate x86 executable filter (alias: -exe)\n"
-  "  -rep        activate repetition filter (rep:64m)\n"
-  "  -delta      activate delta filter\n"
-  "  -dict       activate dictionary filter\n"
-  "  -lzp        activate LZP filter\n"
-  "  -mm         activate multimedia filter\n"
-  "  -v<size>    create multi-volume archive (e.g. -v10m, -v1440k)\n"
-  "  -s          solid archive (default)\n"
-  "  -s-         one data block per file (nonsolid)\n"
-  "  -r          recurse directories (default)\n"
-  "  -r-         do not recurse\n"
-  "  -ep         store basenames only\n"
-  "  -ep1        strip the first path component\n"
-  "  -sfx[=STUB] create self-extracting executable (.sfx/.run)\n"
-  "  -ap<path>   set archive path prefix\n"
-  "  -z TEXT     archive comment (or -zFILE to read a file)\n"
-  "  -x PATTERN  exclude files matching pattern (@listfile supported)\n"
-  "  -i PATTERN  include only files matching pattern (@listfile supported)\n"
-  "  -so         write extracted files to stdout\n"
-  "  -p PASS     encrypt data blocks\n"
-  "  -hp PASS    encrypt headers and data\n"
-  "  -ae ALG     aes (default), aes-128, aes-256, blowfish, twofish, serpent\n"
-  "  -q          quiet\n"
-  "  --noarcext  do not append .arc to the archive name\n"
-  "  @LIST       read file names from LIST (one path per line)\n";
+  "  -dp<DIR>, --diskpath=<DIR>  base directory on disk\n"
+  "  -mt<N>, --multithreaded=<N> number of compression threads\n"
+  "  -m METHOD          storing, lzma, tor, ppmd, grzip, tta\n"
+  "                     levels: -m0..-m5, -mx, -m4x, -m5x\n"
+  "                     chains: -m exe+lzma, -m rep+lzma, -m dict+ppmd, etc.\n"
+  "  -bcj               activate x86 executable filter (alias: -exe)\n"
+  "  -rep               activate repetition filter (rep:64m)\n"
+  "  -delta             activate delta filter\n"
+  "  -dict              activate dictionary filter\n"
+  "  -lzp               activate LZP filter\n"
+  "  -mm                activate multimedia filter\n"
+  "  -v<size>           create multi-volume archive (e.g. -v10m, -v1440k)\n"
+  "  -s                 solid archive (default)\n"
+  "  -s-                one data block per file (nonsolid)\n"
+  "  -r                 recurse directories (default)\n"
+  "  -r-                do not recurse\n"
+  "  -ep                store basenames only\n"
+  "  -ep1               strip the first path component\n"
+  "  -sfx[=STUB]        create self-extracting executable (.sfx/.run)\n"
+  "  -ap<path>          set archive path prefix\n"
+  "  -z TEXT            archive comment (or -zFILE to read a file)\n"
+  "  -x PATTERN         exclude files matching pattern (@listfile supported)\n"
+  "  -i PATTERN         include only files matching pattern (@listfile supported)\n"
+  "  -so                write extracted files to stdout\n"
+  "  -p PASS            encrypt data blocks\n"
+  "  -hp PASS           encrypt headers and data\n"
+  "  -ae ALG            aes (default), aes-128, aes-256, blowfish, twofish, serpent\n"
+  "  -ld<mem>           limit decompression memory (tolerated/ignored)\n"
+  "  --logfile=<file>   log output file (tolerated/ignored)\n"
+  "  -q                 quiet\n"
+  "  --noarcext         do not append .arc to the archive name\n"
+  "  @LIST              read file names from LIST (one path per line)\n";
 
 static int g_quiet = 0;
 
@@ -200,6 +207,137 @@ static uint64 parse_vol_size(const char *s) {
   return (uint64)val;
 }
 
+static std::string clean_option_path(const std::string &raw) {
+  std::string s = raw;
+  while (!s.empty() && (s[0] == ' ' || s[0] == '\t' || s[0] == '\r' || s[0] == '\n'))
+    s.erase(s.begin());
+  while (!s.empty() && (s[s.size() - 1] == ' ' || s[s.size() - 1] == '\t' || s[s.size() - 1] == '\r' || s[s.size() - 1] == '\n'))
+    s.resize(s.size() - 1);
+
+  bool changed = true;
+  while (changed && s.size() >= 2) {
+    changed = false;
+    if ((s[0] == '"' && s[s.size() - 1] == '"') ||
+        (s[0] == '\'' && s[s.size() - 1] == '\'')) {
+      s = s.substr(1, s.size() - 2);
+      changed = true;
+    } else if (s[0] == '{' && s[s.size() - 1] == '}') {
+      s = s.substr(1, s.size() - 2);
+      changed = true;
+    }
+  }
+  while (s.size() > 1 && (s[s.size() - 1] == '/' || s[s.size() - 1] == '\\')) {
+#ifdef _WIN32
+    if (s.size() == 3 && isalpha((unsigned char)s[0]) && s[1] == ':') break;
+#endif
+    s.resize(s.size() - 1);
+  }
+  return s;
+}
+
+static bool is_diskpath_opt(const char *a, std::string &out_val, bool &need_next_arg) {
+  need_next_arg = false;
+  out_val.clear();
+  if (strcasecmp(a, "-dp") == 0 || strcasecmp(a, "--diskpath") == 0) {
+    need_next_arg = true;
+    return true;
+  }
+  if (strncasecmp(a, "-dp=", 4) == 0) {
+    out_val = a + 4;
+    return true;
+  }
+  if (strncasecmp(a, "-dp", 3) == 0 && a[3] != '\0') {
+    out_val = a + 3;
+    return true;
+  }
+  if (strncasecmp(a, "--diskpath=", 11) == 0) {
+    out_val = a + 11;
+    return true;
+  }
+  return false;
+}
+
+static void create_dir_recursive(const std::string &path) {
+  if (path.empty()) return;
+  char buf[PATH_MAX];
+  snprintf(buf, sizeof(buf), "%s", path.c_str());
+  for (char *p = buf + 1; *p; p++) {
+    if (*p == '/' || *p == '\\') {
+      if (p == buf + 2 && buf[1] == ':') continue; // Skip Windows drive root like "C:\"
+      char save = *p;
+      *p = '\0';
+#ifdef _WIN32
+      mkdir(buf);
+#else
+      mkdir(buf, 0777);
+#endif
+      *p = save;
+    }
+  }
+#ifdef _WIN32
+  mkdir(buf);
+#else
+  mkdir(buf, 0777);
+#endif
+}
+
+static void ensure_parent_dirs(const std::string &filepath) {
+  std::string s = clean_option_path(filepath);
+  size_t pos = s.find_last_of("/\\");
+  if (pos != std::string::npos && pos > 0) {
+    std::string dir = s.substr(0, pos);
+    if (dir.size() == 2 && dir[1] == ':') return;
+    create_dir_recursive(dir);
+  }
+}
+
+static bool is_absolute_path(const std::string &path) {
+  if (path.empty()) return false;
+  if (path[0] == '/' || path[0] == '\\') return true;
+#ifdef _WIN32
+  if (path.size() >= 2 && isalpha((unsigned char)path[0]) && path[1] == ':') return true;
+#endif
+  return false;
+}
+
+static std::string join_fspath(const std::string &base, const std::string &rel) {
+  if (base.empty()) return rel;
+  if (rel.empty()) return base;
+  if (is_absolute_path(rel)) return rel;
+  char last = base[base.size() - 1];
+  if (last == '/' || last == '\\')
+    return base + rel;
+  return base + "/" + rel;
+}
+
+static int parse_threads_val(const char *val) {
+  if (!val || !*val || *val == '-') return 1;
+  while (*val == '=' || *val == ' ') val++;
+  int t = atoi(val);
+  return t > 0 ? t : 1;
+}
+
+static char parse_arc_cmd(const char *s) {
+  if (strcasecmp(s, "a") == 0 || strcasecmp(s, "add") == 0) return 'a';
+  if (strcasecmp(s, "c") == 0 || strcasecmp(s, "create") == 0) return 'a';
+  if (strcasecmp(s, "u") == 0 || strcasecmp(s, "update") == 0) return 'u';
+  if (strcasecmp(s, "f") == 0 || strcasecmp(s, "freshen") == 0) return 'f';
+  if (strcasecmp(s, "d") == 0 || strcasecmp(s, "delete") == 0) return 'd';
+  if (strcasecmp(s, "m") == 0 || strcasecmp(s, "move") == 0) return 'm';
+  if (strcasecmp(s, "s") == 0) return 's';
+  return 0;
+}
+
+static bool is_unpacker_cmd(const char *s) {
+  if (strcasecmp(s, "l") == 0 || strcasecmp(s, "list") == 0) return true;
+  if (strcasecmp(s, "v") == 0 || strcasecmp(s, "view") == 0) return true;
+  if (strcasecmp(s, "t") == 0 || strcasecmp(s, "test") == 0) return true;
+  if (strcasecmp(s, "e") == 0) return true;
+  if (strcasecmp(s, "x") == 0 || strcasecmp(s, "extract") == 0) return true;
+  if (strcasecmp(s, "p") == 0) return true;
+  return false;
+}
+
 class VolumeWriter {
 public:
   std::string base_name;
@@ -232,6 +370,7 @@ public:
     }
     cur_vol_num++;
     std::string vname = get_vol_name(cur_vol_num);
+    ensure_parent_dirs(vname);
     cur_f = fopen(vname.c_str(), "wb");
     if (!cur_f) {
       fprintf(stderr, "ERROR: can't create volume %s (%s)\n", vname.c_str(), strerror(errno));
@@ -482,9 +621,15 @@ static std::string map_method(const char *m) {
 }
 
 static std::string normalize_stored(const char *path) {
-  while (*path == '/') path++;
-  while (path[0] == '.' && path[1] == '/') path += 2;
-  std::string s = path;
+  std::string cleaned = clean_option_path(path);
+  const char *p = cleaned.c_str();
+  while (*p == '/' || *p == '\\') p++;
+  while (p[0] == '.' && (p[1] == '/' || p[1] == '\\')) p += 2;
+  std::string s;
+  for (; *p; p++) {
+    if (*p == '\\') s += '/';
+    else s += *p;
+  }
   while (!s.empty() && s[s.size() - 1] == '/')
     s.resize(s.size() - 1);
   return s;
@@ -549,18 +694,50 @@ static bool included(const std::string &stored, const std::vector<std::string> &
   return false;
 }
 
-static void read_listfile(const char *list, std::vector<std::string> &paths);
+static void read_listfile(const char *list, std::vector<std::string> &paths, const std::string &diskpath = "") {
+  std::string lpath = clean_option_path(list);
+  FILE *f = fopen(lpath.c_str(), "r");
+  if (!f && !diskpath.empty()) {
+    std::string joined = join_fspath(diskpath, lpath);
+    f = fopen(joined.c_str(), "r");
+  }
+  CHECK(f, (s, "ERROR: can't open listfile %s", list));
+  char line[MY_FILENAME_MAX * 4];
+  while (fgets(line, sizeof(line), f)) {
+    char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    char *e = p + strlen(p);
+    while (e > p && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t'))
+      *--e = 0;
+    if (!*p || *p == '#') continue;
+    paths.push_back(clean_option_path(p));
+  }
+  fclose(f);
+}
 
-static void add_pattern_arg(const char *arg, std::vector<std::string> &list) {
+static void add_pattern_arg(const char *arg, std::vector<std::string> &list, const std::string &diskpath = "") {
   if (!arg || !*arg) return;
-  if (arg[0] == '@') read_listfile(arg + 1, list);
-  else list.push_back(arg);
+  if (arg[0] == '@') read_listfile(arg + 1, list, diskpath);
+  else list.push_back(clean_option_path(arg));
 }
 
 static std::string find_unarc_binary(const char *argv0) {
+#ifdef _WIN32
+  char self_exe[MAX_PATH];
+  DWORD len = GetModuleFileNameA(NULL, self_exe, sizeof(self_exe) - 1);
+  if (len > 0) {
+    self_exe[len] = '\0';
+    std::string s = self_exe;
+    size_t slash = s.find_last_of("\\/");
+    if (slash != std::string::npos) {
+      std::string path = s.substr(0, slash + 1) + "unarc.exe";
+      if (access(path.c_str(), 0) == 0) return path;
+    }
+  }
+#endif
   if (argv0) {
     std::string s = argv0;
-    size_t slash = s.rfind('/');
+    size_t slash = s.find_last_of("/\\");
     if (slash != std::string::npos) {
       std::string path = s.substr(0, slash + 1) + "unarc";
 #ifdef _WIN32
@@ -573,12 +750,13 @@ static std::string find_unarc_binary(const char *argv0) {
   if (access("build/win64/unarc.exe", 0) == 0) return "build/win64/unarc.exe";
   if (access("../build/win64/unarc.exe", 0) == 0) return "../build/win64/unarc.exe";
   if (access("./unarc.exe", 0) == 0) return "./unarc.exe";
+  return "unarc.exe";
 #else
   if (access("build/linux/unarc", X_OK) == 0) return "build/linux/unarc";
   if (access("../build/linux/unarc", X_OK) == 0) return "../build/linux/unarc";
   if (access("./unarc", X_OK) == 0) return "./unarc";
-#endif
   return "unarc";
+#endif
 }
 
 static std::string find_sfx_stub(const char *argv0, const std::string &custom) {
@@ -672,21 +850,6 @@ static std::string ensure_arc_ext(const char *name, int noarcext, bool is_sfx = 
   return s;
 }
 
-static void read_listfile(const char *list, std::vector<std::string> &paths) {
-  FILE *f = fopen(list, "r");
-  CHECK(f, (s, "ERROR: can't open listfile %s", list));
-  char line[MY_FILENAME_MAX * 4];
-  while (fgets(line, sizeof(line), f)) {
-    char *p = line;
-    while (*p == ' ' || *p == '\t') p++;
-    char *e = p + strlen(p);
-    while (e > p && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t'))
-      *--e = 0;
-    if (!*p || *p == '#') continue;
-    paths.push_back(p);
-  }
-  fclose(f);
-}
 
 static bool same_file(const struct stat &a, const struct stat &b) {
   if (a.st_ino != 0 && b.st_ino != 0)
@@ -819,6 +982,50 @@ static void walk_path(std::vector<FileRec> &files, std::set<std::string> &seen,
               skip_arc, recurse, ep, ex, inc, ap, skip_arc_path);
   }
   closedir(d);
+}
+
+static void walk_input(std::vector<FileRec> &files, std::set<std::string> &seen,
+                       const std::string &raw_input, const std::string &diskpath,
+                       const struct stat *skip_arc, int recurse, int ep,
+                       const std::vector<std::string> &ex,
+                       const std::vector<std::string> &inc,
+                       const std::string &ap,
+                       const char *skip_arc_path) {
+  std::string fspath = is_absolute_path(raw_input) ? raw_input : join_fspath(diskpath, raw_input);
+  std::string stored = normalize_stored(raw_input.c_str());
+  if (stored.empty()) {
+    msg("WARNING: skip %s\n", raw_input.c_str());
+    return;
+  }
+
+  // Check if raw_input contains wildcard characters
+  if (raw_input.find('*') != std::string::npos || raw_input.find('?') != std::string::npos) {
+    size_t slash = raw_input.find_last_of("/\\");
+    std::string rel_dir = (slash != std::string::npos) ? raw_input.substr(0, slash) : "";
+    std::string pattern = (slash != std::string::npos) ? raw_input.substr(slash + 1) : raw_input;
+
+    std::string fs_dir = is_absolute_path(rel_dir) ? rel_dir : join_fspath(diskpath, rel_dir);
+    if (fs_dir.empty()) fs_dir = ".";
+
+    DIR *d = opendir(fs_dir.c_str());
+    if (!d) {
+      msg("WARNING: cannot open directory %s (%s)\n", fs_dir.c_str(), strerror(errno));
+      return;
+    }
+    while (struct dirent *e = readdir(d)) {
+      if (strequ(e->d_name, ".") || strequ(e->d_name, "..")) continue;
+      if (glob_match(pattern.c_str(), e->d_name)) {
+        std::string child_raw = rel_dir.empty() ? e->d_name : (rel_dir + "/" + e->d_name);
+        std::string child_fs = fs_dir + "/" + e->d_name;
+        std::string child_stored = normalize_stored(child_raw.c_str());
+        walk_path(files, seen, child_fs.c_str(), child_stored, skip_arc, recurse, ep, ex, inc, ap, skip_arc_path);
+      }
+    }
+    closedir(d);
+    return;
+  }
+
+  walk_path(files, seen, fspath.c_str(), stored, skip_arc, recurse, ep, ex, inc, ap, skip_arc_path);
 }
 
 static BlockInfo write_control_block(VolumeWriter *out, int type, const char *compress_method,
@@ -1070,27 +1277,6 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
   return true;
 }
 
-static void create_dir_recursive(const std::string &path) {
-  char buf[PATH_MAX];
-  snprintf(buf, sizeof(buf), "%s", path.c_str());
-  for (char *p = buf + 1; *p; p++) {
-    if (*p == '/' || *p == '\\') {
-      char save = *p;
-      *p = '\0';
-#ifdef _WIN32
-      mkdir(buf);
-#else
-      mkdir(buf, 0777);
-#endif
-      *p = save;
-    }
-  }
-#ifdef _WIN32
-  mkdir(buf);
-#else
-  mkdir(buf, 0777);
-#endif
-}
 
 static std::string make_temp_dir() {
 #ifdef _WIN32
@@ -1442,6 +1628,9 @@ static bool extract_preserved_files(const std::string &arcname, const std::strin
 
 int main(int argc, char **argv) {
   char cmd = 'a';
+  bool cmd_specified = false;
+  int custom_threads = 0;
+  std::string diskpath;
   const char *method = NULL;
   const char *password = NULL;
   const char *hp_password = NULL;
@@ -1467,22 +1656,39 @@ int main(int argc, char **argv) {
     return argc == 1 ? 0 : FREEARC_EXIT_ERROR;
   }
 
-  // Check if this is an unpacker command (l, v, t, e, x, p) or pipe flag (-so)
+  // Check if this is an unpacker command (l, v, t, e, x, p, list, test, extract) or pipe flag (-so)
   for (int i = 1; i < argc; i++) {
     if (strequ(argv[i], "--")) break;
     if (strequ(argv[i], "-so")) {
       std::string unarc_bin = find_unarc_binary(argv[0]);
+#ifdef _WIN32
+      int rc = _spawnvp(_P_WAIT, unarc_bin.c_str(), (const char * const *)argv);
+      if (rc < 0) {
+        fprintf(stderr, "ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
+        return FREEARC_EXIT_ERROR;
+      }
+      return rc;
+#else
       execvp(unarc_bin.c_str(), argv);
       fprintf(stderr, "ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
       return FREEARC_EXIT_ERROR;
+#endif
     }
     if (argv[i][0] != '-') {
-      if (strequ(argv[i], "l") || strequ(argv[i], "v") || strequ(argv[i], "t") ||
-          strequ(argv[i], "e") || strequ(argv[i], "x") || strequ(argv[i], "p")) {
+      if (is_unpacker_cmd(argv[i])) {
         std::string unarc_bin = find_unarc_binary(argv[0]);
+#ifdef _WIN32
+        int rc = _spawnvp(_P_WAIT, unarc_bin.c_str(), (const char * const *)argv);
+        if (rc < 0) {
+          fprintf(stderr, "ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
+          return FREEARC_EXIT_ERROR;
+        }
+        return rc;
+#else
         execvp(unarc_bin.c_str(), argv);
         fprintf(stderr, "ERROR: failed to execute unarc (%s): %s\n", unarc_bin.c_str(), strerror(errno));
         return FREEARC_EXIT_ERROR;
+#endif
       }
       break;
     }
@@ -1496,6 +1702,8 @@ int main(int argc, char **argv) {
       continue;
     }
     if (!stop_opts && a[0] == '-' && a[1] != '\0') {
+      std::string dp_val;
+      bool dp_next = false;
       if (strequ(a, "-h") || strequ(a, "--help")) {
         fputs(g_usage, stdout);
         return 0;
@@ -1521,16 +1729,48 @@ int main(int argc, char **argv) {
       else if (strequ(a, "-dict") || strequ(a, "--dict")) filters.push_back("dict");
       else if (strequ(a, "-lzp") || strequ(a, "--lzp")) filters.push_back("lzp");
       else if (strequ(a, "-mm") || strequ(a, "--mm")) filters.push_back("mm");
+      else if (is_diskpath_opt(a, dp_val, dp_next)) {
+        if (dp_next && argi + 1 < argc) diskpath = clean_option_path(argv[++argi]);
+        else diskpath = clean_option_path(dp_val);
+      }
+      else if (strcasecmp(a, "-mt") == 0 || strcasecmp(a, "--multithreaded") == 0) {
+        if (argi + 1 < argc && argv[argi + 1][0] != '-') custom_threads = parse_threads_val(argv[++argi]);
+      }
+      else if (strncasecmp(a, "-mt=", 4) == 0) custom_threads = parse_threads_val(a + 4);
+      else if (strncasecmp(a, "-mt", 3) == 0 && a[3] != '\0') custom_threads = parse_threads_val(a + 3);
+      else if (strncasecmp(a, "--multithreaded=", 16) == 0) custom_threads = parse_threads_val(a + 16);
+      else if (strcasecmp(a, "-ld") == 0 || strcasecmp(a, "--limitdecompmem") == 0) {
+        if (argi + 1 < argc && argv[argi + 1][0] != '-') argi++;
+      }
+      else if (strncasecmp(a, "-ld", 3) == 0 || strncasecmp(a, "--limitdecompmem=", 17) == 0) {}
+      else if (strcasecmp(a, "-lc") == 0 || strcasecmp(a, "--limitcompmem") == 0) {
+        if (argi + 1 < argc && argv[argi + 1][0] != '-') argi++;
+      }
+      else if (strncasecmp(a, "-lc", 3) == 0 || strncasecmp(a, "--limitcompmem=", 15) == 0) {}
+      else if (strcasecmp(a, "-lo") == 0 || strcasecmp(a, "--logfile") == 0) {
+        if (argi + 1 < argc && argv[argi + 1][0] != '-') argi++;
+      }
+      else if (strncasecmp(a, "-lo", 3) == 0 || strncasecmp(a, "--logfile=", 10) == 0) {}
+      else if (strcasecmp(a, "-w") == 0 || strcasecmp(a, "--workdir") == 0) {
+        if (argi + 1 < argc && argv[argi + 1][0] != '-') argi++;
+      }
+      else if (start_with(a, "-w") || strncasecmp(a, "--workdir=", 10) == 0) {}
+      else if (strncasecmp(a, "-di", 3) == 0 || strncasecmp(a, "-ds", 3) == 0 ||
+               strncasecmp(a, "-ed", 3) == 0 || strcasecmp(a, "-o+") == 0 ||
+               strcasecmp(a, "-o-") == 0 || strcasecmp(a, "-y") == 0 ||
+               strcasecmp(a, "-n") == 0 || strcasecmp(a, "--nodir") == 0 ||
+               strcasecmp(a, "--no-pause") == 0 || strcasecmp(a, "-kb") == 0 ||
+               strcasecmp(a, "-ka") == 0 || strcasecmp(a, "-kc") == 0) {}
       else if (strequ(a, "-v") && argi + 1 < argc) vol_size = parse_vol_size(argv[++argi]);
       else if (start_with(a, "-v")) vol_size = parse_vol_size(a + 2);
       else if (strequ(a, "-m") && argi + 1 < argc) method = argv[++argi];
       else if (start_with(a, "-m")) method = a + 2;
       else if (strequ(a, "-z") && argi + 1 < argc) comment = load_comment(argv[++argi]);
       else if (start_with(a, "-z")) comment = load_comment(a + 2);
-      else if (strequ(a, "-x") && argi + 1 < argc) add_pattern_arg(argv[++argi], excludes);
-      else if (start_with(a, "-x")) add_pattern_arg(a + 2, excludes);
-      else if (strequ(a, "-i") && argi + 1 < argc) add_pattern_arg(argv[++argi], includes);
-      else if (start_with(a, "-i")) add_pattern_arg(a + 2, includes);
+      else if (strequ(a, "-x") && argi + 1 < argc) add_pattern_arg(argv[++argi], excludes, diskpath);
+      else if (start_with(a, "-x")) add_pattern_arg(a + 2, excludes, diskpath);
+      else if (strequ(a, "-i") && argi + 1 < argc) add_pattern_arg(argv[++argi], includes, diskpath);
+      else if (start_with(a, "-i")) add_pattern_arg(a + 2, includes, diskpath);
       else if (strequ(a, "-ap") && argi + 1 < argc) arcprefix = argv[++argi];
       else if (start_with(a, "-ap")) arcprefix = a + 3;
       else if (strequ(a, "-hp") && argi + 1 < argc) hp_password = argv[++argi];
@@ -1540,25 +1780,27 @@ int main(int argc, char **argv) {
       else if (strequ(a, "-ae") && argi + 1 < argc) algorithm = argv[++argi];
       else if (start_with(a, "-ae")) algorithm = a + 3;
       else {
-        printf("Unknown option: %s\n%s", a, g_usage);
-        return FREEARC_EXIT_ERROR;
+        fprintf(stderr, "WARNING: unrecognized legacy option '%s' ignored\n", a);
       }
     } else {
-      if (arcname.empty()) {
-        if (inputs.empty() && (strequ(a, "a") || strequ(a, "c") || strequ(a, "u") ||
-                               strequ(a, "f") || strequ(a, "d") || strequ(a, "m") ||
-                               strequ(a, "s"))) {
-          cmd = a[0];
-          if (cmd == 'c') cmd = 'a';
+      if (!cmd_specified) {
+        char parsed_cmd = parse_arc_cmd(a);
+        if (parsed_cmd) {
+          cmd = parsed_cmd;
+          cmd_specified = true;
           argi++;
           continue;
         }
-        arcname = ensure_arc_ext(a, noarcext, create_sfx || cmd == 's');
+        cmd = 'a';
+        cmd_specified = true;
+      }
+      if (arcname.empty()) {
+        arcname = ensure_arc_ext(clean_option_path(a).c_str(), noarcext, create_sfx || cmd == 's');
       } else {
         if (a[0] == '@')
-          read_listfile(a + 1, inputs);
+          read_listfile(clean_option_path(a + 1).c_str(), inputs, diskpath);
         else
-          inputs.push_back(a);
+          inputs.push_back(clean_option_path(a));
       }
     }
     argi++;
@@ -1604,7 +1846,8 @@ int main(int argc, char **argv) {
   std::string method_str = final_method;
   method = method_str.c_str();
 
-  SetCompressionThreads(GetProcessorsCount());
+  int num_threads = (custom_threads > 0) ? custom_threads : GetProcessorsCount();
+  SetCompressionThreads(num_threads);
 
   ExistingArchiveInfo existing_info;
   bool archive_exists = inspect_archive(arcname, password ? password : hp_password, existing_info);
@@ -1630,6 +1873,7 @@ int main(int argc, char **argv) {
     CHECK(!stub.empty(), (s, "ERROR: SFX stub 'arc.sfx' not found. Ensure build/linux/arc.sfx exists or specify -sfx=<stub>"));
 
     std::string tmp_dest = sfx_dest + ".tmp_sfx";
+    ensure_parent_dirs(tmp_dest);
     FILE *fout = fopen(tmp_dest.c_str(), "wb");
     CHECK(fout, (s, "ERROR: cannot create output file %s (%s)", tmp_dest.c_str(), strerror(errno)));
 
@@ -1757,10 +2001,7 @@ int main(int argc, char **argv) {
     std::vector<FileRec> disk_files;
     std::set<std::string> seen;
     for (size_t i = 0; i < inputs.size(); i++) {
-      const char *path = inputs[i].c_str();
-      std::string stored = normalize_stored(path);
-      if (stored.empty()) continue;
-      walk_path(disk_files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
+      walk_input(disk_files, seen, inputs[i], diskpath, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
     }
     std::map<std::string, ExistingFile> arc_map;
     for (size_t i = 0; i < existing_info.files.size(); i++) {
@@ -1851,10 +2092,7 @@ int main(int argc, char **argv) {
     std::vector<FileRec> disk_files;
     std::set<std::string> seen;
     for (size_t i = 0; i < inputs.size(); i++) {
-      const char *path = inputs[i].c_str();
-      std::string stored = normalize_stored(path);
-      if (stored.empty()) continue;
-      walk_path(disk_files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
+      walk_input(disk_files, seen, inputs[i], diskpath, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
     }
     std::map<std::string, ExistingFile> arc_map;
     for (size_t i = 0; i < existing_info.files.size(); i++) {
@@ -1950,10 +2188,7 @@ int main(int argc, char **argv) {
     std::vector<FileRec> disk_files;
     std::set<std::string> seen;
     for (size_t i = 0; i < inputs.size(); i++) {
-      const char *path = inputs[i].c_str();
-      std::string stored = normalize_stored(path);
-      if (stored.empty()) continue;
-      walk_path(disk_files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
+      walk_input(disk_files, seen, inputs[i], diskpath, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
     }
     std::set<std::string> disk_set;
     for (size_t i = 0; i < disk_files.size(); i++) {
@@ -2028,13 +2263,7 @@ int main(int argc, char **argv) {
   std::vector<FileRec> files;
   std::set<std::string> seen;
   for (size_t i = 0; i < inputs.size(); i++) {
-    const char *path = inputs[i].c_str();
-    std::string stored = normalize_stored(path);
-    if (stored.empty()) {
-      msg("WARNING: skip %s\n", path);
-      continue;
-    }
-    walk_path(files, seen, path, stored, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
+    walk_input(files, seen, inputs[i], diskpath, skip_arc, recurse, ep, excludes, includes, arcprefix, check_arc.c_str());
   }
   CHECK(!files.empty(), (s, "ERROR: no files to archive"));
 

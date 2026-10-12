@@ -45,6 +45,56 @@ public:
   virtual void Abort (COMMAND*, int errcode)  {exit (FREEARC_EXIT_ERROR);}
 };
 
+static inline std::string clean_option_path(const std::string &raw) {
+  std::string s = raw;
+  while (!s.empty() && (s[0] == ' ' || s[0] == '\t' || s[0] == '\r' || s[0] == '\n'))
+    s.erase(s.begin());
+  while (!s.empty() && (s[s.size() - 1] == ' ' || s[s.size() - 1] == '\t' || s[s.size() - 1] == '\r' || s[s.size() - 1] == '\n'))
+    s.resize(s.size() - 1);
+
+  bool changed = true;
+  while (changed && s.size() >= 2) {
+    changed = false;
+    if ((s[0] == '"' && s[s.size() - 1] == '"') ||
+        (s[0] == '\'' && s[s.size() - 1] == '\'')) {
+      s = s.substr(1, s.size() - 2);
+      changed = true;
+    } else if (s[0] == '{' && s[s.size() - 1] == '}') {
+      s = s.substr(1, s.size() - 2);
+      changed = true;
+    }
+  }
+  while (s.size() > 1 && (s[s.size() - 1] == '/' || s[s.size() - 1] == '\\')) {
+#ifdef _WIN32
+    if (s.size() == 3 && isalpha((unsigned char)s[0]) && s[1] == ':') break;
+#endif
+    s.resize(s.size() - 1);
+  }
+  return s;
+}
+
+static inline bool is_diskpath_opt(const char *a, std::string &out_val, bool &need_next_arg) {
+  need_next_arg = false;
+  out_val.clear();
+  if (strcasecmp(a, "-dp") == 0 || strcasecmp(a, "--diskpath") == 0) {
+    need_next_arg = true;
+    return true;
+  }
+  if (strncasecmp(a, "-dp=", 4) == 0) {
+    out_val = a + 4;
+    return true;
+  }
+  if (strncasecmp(a, "-dp", 3) == 0 && a[3] != '\0') {
+    out_val = a + 3;
+    return true;
+  }
+  if (strncasecmp(a, "--diskpath=", 11) == 0) {
+    out_val = a + 11;
+    return true;
+  }
+  return false;
+}
+
 
 /******************************************************************************
 ** ���������� � ����������� ������������� ������� *****************************
@@ -59,6 +109,8 @@ public:
   std::vector<std::string> includes;      // -i patterns
   std::vector<std::string> file_patterns; // Positional patterns (and @listfiles)
   std::string arcprefix;                  // -ap prefix
+  std::string clean_arcname_storage;      // Backing storage for arcname
+  std::string clean_outpath_storage;      // Backing storage for outpath
   BOOL to_stdout;                         // Extract to stdout (-so or cmd 'p')
   MYDIR    outpath;     // Output path (-dp)
   MYDIR    workdir;     // Temp directory (-w)
@@ -232,6 +284,8 @@ COMMAND::COMMAND (int argc, char *argv[])
   {
     if (argv[0][0]=='-' || strequ(argv[0],"/?") || strequ(argv[0],"/help"))
     {
+      std::string dp_val;
+      bool dp_next = false;
            if (strequ(argv[0],"-l"))       cmd = 'l', silent = silent || 2;
       else if (strequ(argv[0],"-v"))       cmd = 'v', silent = silent || 2;
       else if (strequ(argv[0],"-e"))       cmd = 'e', silent = silent || 2;
@@ -243,10 +297,19 @@ COMMAND::COMMAND (int argc, char *argv[])
       else if (strequ(argv[0],"-n") || strequ(argv[0],"-o-")) no  = TRUE;
       else if (strequ(argv[0],"-p") && argv[1]) password = *++argv;
       else if (start_with(argv[0],"-p") && argv[0][2]) password = argv[0]+2;
-      else if (strequ(argv[0],"-d") && argv[1]) outpath.setname(*++argv);
-      else if (start_with(argv[0],"-d"))   outpath.setname(argv[0]+2);
-      else if (strequ(argv[0],"-dp") && argv[1]) outpath.setname(*++argv);
-      else if (start_with(argv[0],"-dp"))  outpath.setname(argv[0]+3);
+      else if (strequ(argv[0],"-d") && argv[1]) {
+        clean_outpath_storage = clean_option_path(*++argv);
+        outpath.setname((char*)clean_outpath_storage.c_str());
+      }
+      else if (start_with(argv[0],"-d") && !start_with(argv[0],"-dp")) {
+        clean_outpath_storage = clean_option_path(argv[0]+2);
+        outpath.setname((char*)clean_outpath_storage.c_str());
+      }
+      else if (is_diskpath_opt(argv[0], dp_val, dp_next)) {
+        if (dp_next && argv[1]) clean_outpath_storage = clean_option_path(*++argv);
+        else clean_outpath_storage = clean_option_path(dp_val);
+        outpath.setname((char*)clean_outpath_storage.c_str());
+      }
       else if (start_with(argv[0],"-w"))   workdir.setname(argv[0]+2);
       else if (start_with(argv[0],"-ap"))  arcprefix = argv[0]+3;
       else if (strequ(argv[0],"-x") && argv[1]) add_exclude(*++argv);
@@ -257,7 +320,26 @@ COMMAND::COMMAND (int argc, char *argv[])
       else if (strequ(argv[0],"-s0"))      silent = 0;
       else if (strequ(argv[0],"-s2"))      silent = 2;
       else if (strequ(argv[0],"--"))       nooptions=TRUE;
-      else ok=FALSE;
+      else if (strcasecmp(argv[0],"-ld") == 0 || strcasecmp(argv[0],"--limitdecompmem") == 0) {
+        if (argv[1] && argv[1][0] != '-') ++argv;
+      }
+      else if (strncasecmp(argv[0],"-ld", 3) == 0 || strncasecmp(argv[0],"--limitdecompmem=", 17) == 0) {}
+      else if (strcasecmp(argv[0],"-mt") == 0 || strcasecmp(argv[0],"--multithreaded") == 0) {
+        if (argv[1] && argv[1][0] != '-') ++argv;
+      }
+      else if (strncasecmp(argv[0],"-mt", 3) == 0 || strncasecmp(argv[0],"--multithreaded=", 16) == 0) {}
+      else if (strcasecmp(argv[0],"-lo") == 0 || strcasecmp(argv[0],"--logfile") == 0) {
+        if (argv[1] && argv[1][0] != '-') ++argv;
+      }
+      else if (strncasecmp(argv[0],"-lo", 3) == 0 || strncasecmp(argv[0],"--logfile=", 10) == 0) {}
+      else if (strncasecmp(argv[0],"-lc", 3) == 0 || strncasecmp(argv[0],"--limitcompmem", 14) == 0 ||
+               strncasecmp(argv[0],"-di", 3) == 0 || strncasecmp(argv[0],"-ds", 3) == 0 ||
+               strncasecmp(argv[0],"-ed", 3) == 0 || strcasecmp(argv[0],"--nodir") == 0 ||
+               strcasecmp(argv[0],"--no-pause") == 0 || strcasecmp(argv[0],"-kb") == 0 ||
+               strcasecmp(argv[0],"-ka") == 0 || strcasecmp(argv[0],"-kc") == 0) {}
+      else {
+        // Do not abort on unknown legacy options
+      }
     }
     else break;
   }
@@ -318,16 +400,30 @@ COMMAND::COMMAND (int argc, char *argv[])
   {
     if (argv[0][0]=='-')
     {
+      std::string dp_val;
+      bool dp_next = false;
       if (strequ(argv[0],"--noarcext"))    noarcext =TRUE;
       else if (strequ(argv[0],"-o+"))      yes      =TRUE;
       else if (strequ(argv[0],"-o-"))      no       =TRUE;
       else if (strequ(argv[0],"-so"))      to_stdout=TRUE;
       else if (strequ(argv[0],"-p") && argv[1]) password = *++argv;
       else if (start_with(argv[0],"-p") && argv[0][2]) password = argv[0]+2;
-      else if (start_with(argv[0],"-dp"))  outpath.setname(argv[0]+3);
+      else if (strequ(argv[0],"-d") && argv[1]) {
+        clean_outpath_storage = clean_option_path(*++argv);
+        outpath.setname((char*)clean_outpath_storage.c_str());
+      }
+      else if (start_with(argv[0],"-d") && !start_with(argv[0],"-dp")) {
+        clean_outpath_storage = clean_option_path(argv[0]+2);
+        outpath.setname((char*)clean_outpath_storage.c_str());
+      }
+      else if (is_diskpath_opt(argv[0], dp_val, dp_next)) {
+        if (dp_next && argv[1]) clean_outpath_storage = clean_option_path(*++argv);
+        else clean_outpath_storage = clean_option_path(dp_val);
+        outpath.setname((char*)clean_outpath_storage.c_str());
+      }
       else if (start_with(argv[0],"-ap"))  arcprefix = argv[0]+3;
       else if (start_with(argv[0],"-w"))   workdir.setname(argv[0]+2);
-      else if (strequ(argv[0],"-s") || strequ(argv[0],"-s1")) silent = 1;
+      else if (strequ(argv[0],"-s") || strequ(argv[0],"-s1") || strequ(argv[0],"-q")) silent = 1;
       else if (strequ(argv[0],"-s2"))      silent = 2;
       else if (strequ(argv[0],"-s0"))      silent = 0;
       else if (strequ(argv[0],"-x") && argv[1]) add_exclude(*++argv);
@@ -335,10 +431,40 @@ COMMAND::COMMAND (int argc, char *argv[])
       else if (strequ(argv[0],"-i") && argv[1]) add_include(*++argv);
       else if (start_with(argv[0],"-i") && argv[0][2]) add_include(argv[0]+2);
       else if (strequ(argv[0],"--"))       nooptions=TRUE;
-      else ok=FALSE;
+      else if (strcasecmp(argv[0],"-ld") == 0 || strcasecmp(argv[0],"--limitdecompmem") == 0) {
+        if (argv[1] && argv[1][0] != '-') ++argv;
+      }
+      else if (strncasecmp(argv[0],"-ld", 3) == 0 || strncasecmp(argv[0],"--limitdecompmem=", 17) == 0) {}
+      else if (strcasecmp(argv[0],"-mt") == 0 || strcasecmp(argv[0],"--multithreaded") == 0) {
+        if (argv[1] && argv[1][0] != '-') ++argv;
+      }
+      else if (strncasecmp(argv[0],"-mt", 3) == 0 || strncasecmp(argv[0],"--multithreaded=", 16) == 0) {}
+      else if (strcasecmp(argv[0],"-lo") == 0 || strcasecmp(argv[0],"--logfile") == 0) {
+        if (argv[1] && argv[1][0] != '-') ++argv;
+      }
+      else if (strncasecmp(argv[0],"-lo", 3) == 0 || strncasecmp(argv[0],"--logfile=", 10) == 0) {}
+      else if (strncasecmp(argv[0],"-lc", 3) == 0 || strncasecmp(argv[0],"--limitcompmem", 14) == 0 ||
+               strncasecmp(argv[0],"-di", 3) == 0 || strncasecmp(argv[0],"-ds", 3) == 0 ||
+               strncasecmp(argv[0],"-ed", 3) == 0 || strcasecmp(argv[0],"--nodir") == 0 ||
+               strcasecmp(argv[0],"--no-pause") == 0 || strcasecmp(argv[0],"-kb") == 0 ||
+               strcasecmp(argv[0],"-ka") == 0 || strcasecmp(argv[0],"-kc") == 0) {}
+      else {
+        // Do not abort on unknown legacy options
+      }
     }
-    else if (cmd==' ')   cmd = argv[0][0], ok = ok && strlen(argv[0])==1;
-    else if (!arcname)   arcname = argv[0];
+    else if (cmd==' ') {
+      if (strcasecmp(argv[0], "x") == 0 || strcasecmp(argv[0], "extract") == 0) cmd = 'x';
+      else if (strcasecmp(argv[0], "e") == 0) cmd = 'e';
+      else if (strcasecmp(argv[0], "t") == 0 || strcasecmp(argv[0], "test") == 0) cmd = 't';
+      else if (strcasecmp(argv[0], "l") == 0 || strcasecmp(argv[0], "list") == 0) cmd = 'l';
+      else if (strcasecmp(argv[0], "v") == 0 || strcasecmp(argv[0], "view") == 0) cmd = 'v';
+      else if (strcasecmp(argv[0], "p") == 0) cmd = 'p';
+      else ok = FALSE;
+    }
+    else if (!arcname) {
+      clean_arcname_storage = clean_option_path(argv[0]);
+      arcname = (char*)clean_arcname_storage.c_str();
+    }
     else break;
   }
 

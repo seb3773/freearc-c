@@ -309,6 +309,44 @@ test_legacy_win64() {
 check "Legacy FreeArc 0.6x archive integrity & extraction (unarc.exe)" test_legacy_win64
 
 # ------------------------------------------------------------------
+# Test Group 8: Win64 Legacy CLI Drop-in Compatibility (Script Support)
+# ------------------------------------------------------------------
+echo ""
+echo "=== Test Group 8: Win64 Legacy CLI Drop-in Compatibility ==="
+
+test_legacy_cli_win64() {
+    local list="$T/compat_list_win.lst"
+    printf "hello.txt\nsub/deep/multiline.txt\n" > "$list"
+
+    # 1. Test "create" command + intermediate subdirs creation + ignored flags (-ld, -mt, --logfile, -di, -ds)
+    local nested_arc="$T/nested_win/sub/dir/newarchive.arc"
+    rm -rf "$T/nested_win"
+    run_wine "$ARC_WIN" create -ld64m -mt4 --logfile="$T/arc_win.log" -di -ds --LimitDecompMem=128m -dp"$T/corpus" "$nested_arc" @"$list" || return 1
+    [ -f "$nested_arc" ] || return 1
+
+    # 2. Test brace syntax for diskpath: --diskpath={...} and extraction with -dp
+    local out="$T/out_compat_dp_win"
+    run_wine "$UNARC_WIN" x --diskpath="{$out}" "$nested_arc" || return 1
+    diff -q "$T/corpus/hello.txt" "$out/hello.txt" >/dev/null 2>&1 || return 1
+    diff -q "$T/corpus/sub/deep/multiline.txt" "$out/sub/deep/multiline.txt" >/dev/null 2>&1 || return 1
+
+    # 3. Test long commands: "arc.exe test", "arc.exe extract"
+    run_wine "$ARC_WIN" test "$nested_arc" || return 1
+    local out2="$T/out_compat_extract_win"
+    run_wine "$ARC_WIN" extract -dp"$out2" "$nested_arc" || return 1
+    diff -q "$T/corpus/hello.txt" "$out2/hello.txt" >/dev/null 2>&1 || return 1
+
+    # 4. Test unarc ignored options
+    local out3="$T/out_compat_unarc_opts_win"
+    run_wine "$UNARC_WIN" extract -ld128m -mt2 --logfile="$T/unarc_win.log" --diskpath="$out3" "$nested_arc" || return 1
+    diff -q "$T/corpus/hello.txt" "$out3/hello.txt" >/dev/null 2>&1 || return 1
+
+    return 0
+}
+
+check "Win64 Legacy CLI drop-in compatibility (create, nested dirs, -dp with braces, -ld/-mt/--logfile ignored)" test_legacy_cli_win64
+
+# ------------------------------------------------------------------
 # Summary
 # ------------------------------------------------------------------
 echo ""
