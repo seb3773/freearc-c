@@ -234,6 +234,43 @@ int COMPRESSION_METHOD::doit (char *what, int param, void *data, CALLBACK_FUNC *
   else                                             return FREEARC_ERRCODE_NOT_IMPLEMENTED;
 }
 
+int ReadWriteMemBuf (const char *what, void *buf, int size, void *_membuf)
+{
+  MemBuf *membuf = (MemBuf*)_membuf;
+  if (strequ(what,"read")  &&  membuf->readPtr) {
+    int read_bytes = membuf->readLeft<size ? membuf->readLeft : size;
+    memcpy (buf, membuf->readPtr, read_bytes);
+    membuf->readPtr  += read_bytes;
+    membuf->readLeft -= read_bytes;
+    return read_bytes;
+  } else if (strequ(what,"write")  &&  membuf->writePtr) {
+    if (size > membuf->writeLeft)  return FREEARC_ERRCODE_OUTBLOCK_TOO_SMALL;
+    memcpy (membuf->writePtr, buf, size);
+    membuf->writePtr  += size;
+    membuf->writeLeft -= size;
+    return size;
+  } else {
+    return (membuf->callback? membuf->callback (what, buf, size, membuf->auxdata)
+                            : FREEARC_ERRCODE_NOT_IMPLEMENTED);
+  }
+}
+
+int COMPRESSION_METHOD::DeCompressMem (COMPRESSION direction, void *input, int inputSize, void *output, int *outputSize, CALLBACK_FUNC *callback, void *auxdata, void **CodecState)
+{
+  if (!input && !callback)  return FREEARC_OK;
+  int cap = outputSize ? *outputSize : 0;
+  MemBuf membuf(input, inputSize, output, cap, callback, auxdata);
+  int result  =  (direction==COMPRESS?
+#ifndef FREEARC_DECOMPRESS_ONLY
+                                       compress   (ReadWriteMemBuf, &membuf)
+#else
+                                       FREEARC_ERRCODE_ONLY_DECOMPRESS
+#endif
+                                     : decompress (ReadWriteMemBuf, &membuf));
+  if (outputSize) *outputSize = membuf.written();
+  return result;
+}
+
 
 // ****************************************************************************************************************************
 // ���������� ������, ������ �������� �������                                                                                 *

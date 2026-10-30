@@ -5,6 +5,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <string.h>
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+#endif
 
 extern "C" {
 #include "C_PPMD.h"

@@ -34,15 +34,15 @@
 #include "filters.h"
 
 typedef struct {
-    long order;
-    long mode;
-    long shift;
-    long round;
-    long qm[MAX_ORDER];
-    long dx[BUF_SIZE];
-    long dl[BUF_SIZE];
-    long *px;
-    long *pl;
+    int32 order;
+    int32 mode;
+    int32 shift;
+    int32 round;
+    int32 qm[MAX_ORDER];
+    int32 dx[BUF_SIZE];
+    int32 dl[BUF_SIZE];
+    int32 *px;
+    int32 *pl;
 } fltst;
 
 ///////// Filters Settings /////////
@@ -61,9 +61,9 @@ static int flt_set [3][3][4][3] = {
 };
 
 __inline void
-filter_compress (fltst *fs, long *in) {
-    long *pA, *pB, *pE;
-    long out, sum;
+filter_compress (fltst *fs, int32 *in) {
+    int32 *pA, *pB, *pE;
+    int32 out, sum;
 
     pA = fs->pl;
     pB = fs->qm;
@@ -71,14 +71,14 @@ filter_compress (fltst *fs, long *in) {
 
     for (sum = fs->round; pA < pE;
         pA += 8, pB += 8) {
-        sum += *(pA+0) * *(pB+0);
-        sum += *(pA+1) * *(pB+1);
-        sum += *(pA+2) * *(pB+2);
-        sum += *(pA+3) * *(pB+3);
-        sum += *(pA+4) * *(pB+4);
-        sum += *(pA+5) * *(pB+5);
-        sum += *(pA+6) * *(pB+6);
-        sum += *(pA+7) * *(pB+7);
+        sum = (int32)((uint32)sum + (uint32)pA[0] * (uint32)pB[0]);
+        sum = (int32)((uint32)sum + (uint32)pA[1] * (uint32)pB[1]);
+        sum = (int32)((uint32)sum + (uint32)pA[2] * (uint32)pB[2]);
+        sum = (int32)((uint32)sum + (uint32)pA[3] * (uint32)pB[3]);
+        sum = (int32)((uint32)sum + (uint32)pA[4] * (uint32)pB[4]);
+        sum = (int32)((uint32)sum + (uint32)pA[5] * (uint32)pB[5]);
+        sum = (int32)((uint32)sum + (uint32)pA[6] * (uint32)pB[6]);
+        sum = (int32)((uint32)sum + (uint32)pA[7] * (uint32)pB[7]);
     }
 
     out = *in - (sum >> fs->shift);
@@ -133,21 +133,21 @@ filter_compress (fltst *fs, long *in) {
 
     if (fs->px + fs->order == fs->dx + (BUF_SIZE-1)) {
         memcpy(fs->dx, fs->px + 1, fs->order *
-            sizeof(long)); fs->px = fs->dx;
+            sizeof(int32)); fs->px = fs->dx;
     } else  fs->px++;
 
     if (fs->pl + fs->order ==  fs->dl + (BUF_SIZE-1)) {
         memcpy(fs->dl, fs->pl + 1, fs->order *
-            sizeof(long)); fs->pl = fs->dl;
+            sizeof(int32)); fs->pl = fs->dl;
     } else fs->pl++;
 
     *in = out;
 }
 
 __inline void
-filter_decompress (fltst *fs, long *in) {
-    long *pA, *pB, *pE;
-    long out, sum;
+filter_decompress (fltst *fs, int32 *in) {
+    int32 *pA, *pB, *pE;
+    int32 out, sum;
 
     pA = fs->pl;
     pB = fs->qm;
@@ -155,14 +155,14 @@ filter_decompress (fltst *fs, long *in) {
 
     for (sum = fs->round;
         pA < pE; pA += 8, pB += 8) {
-        sum += *(pA+0) * *(pB+0);
-        sum += *(pA+1) * *(pB+1);
-        sum += *(pA+2) * *(pB+2);
-        sum += *(pA+3) * *(pB+3);
-        sum += *(pA+4) * *(pB+4);
-        sum += *(pA+5) * *(pB+5);
-        sum += *(pA+6) * *(pB+6);
-        sum += *(pA+7) * *(pB+7);
+        sum = (int32)((uint32)sum + (uint32)pA[0] * (uint32)pB[0]);
+        sum = (int32)((uint32)sum + (uint32)pA[1] * (uint32)pB[1]);
+        sum = (int32)((uint32)sum + (uint32)pA[2] * (uint32)pB[2]);
+        sum = (int32)((uint32)sum + (uint32)pA[3] * (uint32)pB[3]);
+        sum = (int32)((uint32)sum + (uint32)pA[4] * (uint32)pB[4]);
+        sum = (int32)((uint32)sum + (uint32)pA[5] * (uint32)pB[5]);
+        sum = (int32)((uint32)sum + (uint32)pA[6] * (uint32)pB[6]);
+        sum = (int32)((uint32)sum + (uint32)pA[7] * (uint32)pB[7]);
     }
 
     out = *in + (sum >> fs->shift);
@@ -217,12 +217,12 @@ filter_decompress (fltst *fs, long *in) {
 
     if (fs->px + fs->order == fs->dx + (BUF_SIZE - 1)) {
         memcpy(fs->dx, fs->px + 1, fs->order *
-            sizeof(long)); fs->px = fs->dx;
+            sizeof(int32)); fs->px = fs->dx;
     } else  fs->px++;
 
     if (fs->pl + fs->order ==  fs->dl + (BUF_SIZE - 1)) {
         memcpy(fs->dl, fs->pl + 1, fs->order *
-            sizeof(long)); fs->pl = fs->dl;
+            sizeof(int32)); fs->pl = fs->dl;
     } else fs->pl++;
 
     *in = out;
@@ -240,8 +240,11 @@ filter_init (fltst *fs, int order, int shift, int mode) {
 }
 
 void
-filters_compress (long *data, unsigned long len, long level, long byte_size) {
+filters_compress (int32 *data, unsigned long len, long level, long byte_size) {
     fltst fst1, fst2, fst3;
+
+    int32 *p = data;
+    int32 tmp, last;
 
     int *f1 = flt_set[0][level-1][byte_size-1];
     int *f2 = flt_set[1][level-1][byte_size-1];
@@ -251,38 +254,26 @@ filters_compress (long *data, unsigned long len, long level, long byte_size) {
     filter_init (&fst2, f2[0], f2[1], f2[2]);
     filter_init (&fst3, f3[0], f3[1], f3[2]);
 
-    // compress stage 1: fixed order 1 prediction
-    if (len > 0) {
-        if (byte_size == 4) {
-            for (unsigned long i = len - 1; i > 0; i--) {
-                data[i] -= data[i - 1];
-            }
-        } else {
-            long k = (byte_size == 1) ? 4 : 5;
-            for (unsigned long i = len - 1; i > 0; i--) {
-                data[i] -= PREDICTOR1(data[i - 1], k);
-            }
-        }
-    }
+    for (last = 0; p < data + len; p++) {
+        tmp = *p; switch (byte_size) {
+        case 1: *p -= PREDICTOR1(last, 4); break;
+        case 2: *p -= PREDICTOR1(last, 5); break;
+        case 3: *p -= PREDICTOR1(last, 5); break;
+        case 4: *p -= last; break;
+        } last = tmp;
 
-    // compress stage 2: adaptive hybrid filters
-    if (fst1.order) {
-        for (unsigned long i = 0; i < len; i++)
-            filter_compress (&fst1, &data[i]);
-    }
-    if (fst2.order) {
-        for (unsigned long i = 0; i < len; i++)
-            filter_compress (&fst2, &data[i]);
-    }
-    if (fst3.order) {
-        for (unsigned long i = 0; i < len; i++)
-            filter_compress (&fst3, &data[i]);
+        if (fst1.order) filter_compress (&fst1, p);
+        if (fst2.order) filter_compress (&fst2, p);
+        if (fst3.order) filter_compress (&fst3, p);
     }
 }
 
 void
-filters_decompress (long *data, unsigned long len, long level, long byte_size) {
+filters_decompress (int32 *data, unsigned long len, long level, long byte_size) {
     fltst fst1, fst2, fst3;
+
+    int32 *p = data;
+    int32 last;
 
     int *f1 = flt_set[0][level-1][byte_size-1];
     int *f2 = flt_set[1][level-1][byte_size-1];
@@ -292,32 +283,17 @@ filters_decompress (long *data, unsigned long len, long level, long byte_size) {
     filter_init (&fst2, f2[0], f2[1], f2[2]);
     filter_init (&fst3, f3[0], f3[1], f3[2]);
 
-    // decompress stage 1: adaptive hybrid filters
-    if (fst3.order) {
-        for (unsigned long i = 0; i < len; i++)
-            filter_decompress (&fst3, &data[i]);
-    }
-    if (fst2.order) {
-        for (unsigned long i = 0; i < len; i++)
-            filter_decompress (&fst2, &data[i]);
-    }
-    if (fst1.order) {
-        for (unsigned long i = 0; i < len; i++)
-            filter_decompress (&fst1, &data[i]);
-    }
+    for (last = 0; p < data + len; p++) {
+        if (fst3.order) filter_decompress (&fst3, p);
+        if (fst2.order) filter_decompress (&fst2, p);
+        if (fst1.order) filter_decompress (&fst1, p);
 
-    // decompress stage 2: fixed order 1 prediction
-    if (len > 0) {
-        if (byte_size == 4) {
-            for (unsigned long i = 1; i < len; i++) {
-                data[i] += data[i - 1];
-            }
-        } else {
-            long k = (byte_size == 1) ? 4 : 5;
-            for (unsigned long i = 1; i < len; i++) {
-                data[i] += PREDICTOR1(data[i - 1], k);
-            }
-        }
+        switch (byte_size) {
+        case 1: *p += PREDICTOR1(last, 4); break;
+        case 2: *p += PREDICTOR1(last, 5); break;
+        case 3: *p += PREDICTOR1(last, 5); break;
+        case 4: *p += last; break;
+        } last = *p;
     }
 }
 

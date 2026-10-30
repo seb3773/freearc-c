@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="${SCRIPT_DIR}/pkg_root"
-VERSION="1.2.0-1"
+VERSION="1.3.0-1"
 ARCH="amd64"
 DEB_NAME="freearc_${VERSION}_${ARCH}.deb"
 
@@ -56,7 +56,7 @@ fi
 # DEBIAN/control
 cat << 'CTRL_EOF' > "${PKG_DIR}/DEBIAN/control"
 Package: freearc
-Version: 1.2.0-1
+Version: 1.3.0-1
 Section: utils
 Priority: optional
 Architecture: amd64

@@ -1,4 +1,7 @@
 #include <stdlib.h>
+#ifdef FREEARC_UNIX
+#include <sys/resource.h>
+#endif
 #include "Common.h"
 #include "Compression.h"
 
@@ -226,6 +229,13 @@ void showMem (MemSize mem, char *result)
   else if (mem%mb==0) sprintf (result, "%dmb", mem/mb);
   else if (mem%kb==0) sprintf (result, "%dkb", mem/kb);
   else                sprintf (result, "%ub",  mem);
+}
+
+MemSize rounddown_mem (MemSize n)
+{
+         if (n < 32*kb) return n;
+    else if (n < 32*mb) return roundDown (n, 1*kb);
+    else                return roundDown (n, 1*mb);
 }
 
 
@@ -603,3 +613,13 @@ unsigned time_based_random(void)
   return (unsigned)t + (unsigned)(t*1000000000);
 }
 #endif // !FREEARC_NO_TIMING
+
+void SetCompressionThreadPriority (void)
+{
+#ifdef FREEARC_WIN
+  SetThreadPriority (GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#else
+  int old = getpriority(PRIO_PROCESS, 0);
+  setpriority(PRIO_PROCESS, 0, old+1);
+#endif
+}

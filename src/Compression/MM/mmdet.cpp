@@ -184,7 +184,7 @@ void Model::calc_results()
 
         for(int i=0;i<STATSIZE;i++)
             if (stats[N][i])
-                bits += stats[N][i] * log(double(total/stats[N][i]))/log(double(2));
+                bits += stats[N][i] * log(double(total)/stats[N][i])/log(double(2));
     }
     // Total result including additional bits required for extension codes
     result = (long)(bits/8 + xbits/8);

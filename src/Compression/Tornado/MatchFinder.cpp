@@ -447,14 +447,18 @@ len6:   q = toPtr(x1);
 len7:   q = toPtr(x1);
         len = MINLEN-1;
         if (val32equ(p, q)) {
-            len = find_match_len(p, q, bufend, mymin(MINLEN-1, 4));
+            len = mymin(MINLEN-1, 4);
+            for (; p+len<bufend && val32equ(p+len, q+len); len+=4);
+            for (; p+len<bufend && p[len] == q[len];       len++);
         }
 
         while (table!=tabend) {
             next_pair();
             BYTE *q1 = toPtr(x1);
             if (t == 0 && p[len] == q1[len] && val32equ(p, q1)) {
-                UINT len1 = find_match_len(p, q1, bufend, mymin(MINLEN-1, 4));
+                UINT len1 = mymin(MINLEN-1, 4);
+                for (; p+len1<bufend && val32equ(p+len1, q1+len1); len1+=4);
+                for (; p+len1<bufend && p[len1] == q1[len1];       len1++);
                 if (len1>len)  len=len1, q=q1;
             }
         }
@@ -596,14 +600,18 @@ len6:   q = toPtr(x1);
 len7:   len = MINLEN-1;
         q = toPtr(x1);
         if (val32equ(p, q)) {
-            len = find_match_len(p, q, bufend, mymin(MINLEN-1, 4));
+            len = mymin(MINLEN-1, 4);
+            for (; p+len<bufend && val32equ(p+len, q+len); len+=4);
+            for (; p+len<bufend && p[len] == q[len];       len++);
         }
 
         while (table!=tabend) {
             next_pair();
             BYTE *q1 = toPtr(x1);
             if (t == 0 && p[len] == q1[len] && val32equ(p, q1)) {
-                UINT len1 = find_match_len(p, q1, bufend, mymin(MINLEN-1, 4));
+                UINT len1 = mymin(MINLEN-1, 4);
+                for (; p+len1<bufend && val32equ(p+len1, q1+len1); len1+=4);
+                for (; p+len1<bufend && p[len1] == q1[len1];       len1++);
                 if (len1>len  &&  !(len1==len+1 && ChangePair(p-q, p-q1)) )
                     len=len1, q=q1;
             }

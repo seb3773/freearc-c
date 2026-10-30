@@ -30,10 +30,13 @@ Consequently, to create or maintain FreeArc archives on Linux, users and develop
 This project fills this 15-year gap by providing a **100% native C/C++ suite** that is modern, autonomous, and fast:
 * **Zero Haskell, Zero GHC, Zero Wine**: Pure standard C/C++ that compiles cleanly with standard GCC or Clang on any modern Linux system.
 * **Zero External Dependencies**: Produces lean, self-contained binaries (< 1 MB total suite: `arc` ~427 KB, `unarc` ~197 KB, `arc.sfx` ~194 KB).
-* **Total Binary Format Parity**: Strictly generates standard compliant blocks (`HEADER_BLOCK`, `DATA_BLOCK`, `DIR_BLOCK`, `FOOTER_BLOCK`) with bit-for-bit CRC32 accuracy, fully interoperable with legacy FreeArc tools.
-* **Historical 64-bit Bug Fixes**: Porting and running the codecs on modern 64-bit Linux exposed several critical bugs that were never addressed in legacy FreeArc:
+* **Total Binary Format Parity**: Strictly generates standard compliant blocks (`HEADER_BLOCK`, `DATA_BLOCK`, `DIR_BLOCK`, `FOOTER_BLOCK`) with 100% bit-exact DATA and DIR parity vs original Windows FreeArc 0.67 (`Arc.exe`) across all codecs and auto-profiles (`-m1` to `-m5x`).
+* **True Intra-Stream Multithreading (4x4)**: High-performance multi-core compression of single solid streams without breaking solid compression ratios, splitting streams into in-memory chunks processed concurrently.
+* **Historical 64-bit Bug Fixes & Codec Hardening**: Porting and running the codecs on modern 64-bit Linux addressed critical issues present in legacy FreeArc:
   * 64-bit pointer truncations in **LZP** and **GRZip**.
   * `unsigned long` 64-bit struct member alignment errors in the **Multimedia (MM)** filter WAVE headers.
+  * PPMD LP64 sub-allocator unit sizing (12-byte unit indexation) ensuring exact model parity on 64-bit platforms.
+  * Tornado Hash3 14-bit log table alignment matching Haskell `tor:5`/`tor:6`.
   * Uninitialized prefix tree pointers causing segmentation faults in **LZMA**.
   * Modernized memory management and strict alignment handling across all compression engines.
 * **Integrated Native Cryptography**: Native C++ implementations of AES (128/256-bit), Blowfish, Twofish, and Serpent with header encryption (`-hp`) and data block encryption (`-p`).
@@ -43,18 +46,22 @@ This project fills this 15-year gap by providing a **100% native C/C++ suite** t
 
 ## Highlights
 
-* **100% Native C/C++**: Zero Haskell, zero GHC, zero Wine, zero external library dependencies. Compiles cleanly with standard GCC/Clang on modern Linux.
+* **100% Native C/C++**: Zero Haskell, zero GHC, zero Wine, zero external library dependencies. Compiles cleanly with standard GCC/Clang on modern Linux and MinGW on Windows 64-bit.
+* **100% Bit-Exact Legacy Parity**: Full bit-for-bit parity on compressed payload (`DATA`) and directory block metadata (`DIR`) against original Windows FreeArc 0.67 (`Arc.exe`) across all codecs, filters, and auto-profiles (`-m1` through `-m5x`).
+* **Intra-Stream Multithreading (4x4)**: Multi-core parallel compression inside single solid streams (`4x4:lzma`, `4x4:tor`), scaling linearly across CPU cores without creating separate solid block boundaries.
+* **Intelligent Auto-Profiles & File Grouping**: Complete `arc.groups` classification table (`$text`, `$compressed`, `$exe`, `$iso`, `$precomp`, `$obj`, `$bmp`, `$wav`) with dynamic content detection routing files to optimal compression pipelines.
 * **Full Archive Management**: Complete command set — add (`a`), update (`u`), freshen (`f`), delete (`d`), move (`m`), list (`l`/`v`), test (`t`), extract (`x`/`e`), and pipe (`p`/`-so`).
 * **High-Ratio Codecs**: Full suite of FreeArc compression algorithms:
-  * **LZMA** (fast to maximum levels: `-m1` to `-m5x`)
-  * **Tornado** (ultra-fast LZ77 variant)
-  * **PPMD** (high-order prediction by partial matching)
-  * **GRZip** (Burrows-Wheeler transform compression)
-  * **TTA** (lossless true audio compression)
+  * **LZMA** (fast to maximum levels: `-m1` to `-m5x`, with `4x4` multi-threading)
+  * **Tornado** (ultra-fast LZ77 variant with 64-bit CTZ acceleration)
+  * **PPMD** (high-order prediction by partial matching, 64-bit bit-exact allocator)
+  * **GRZip** (Burrows-Wheeler transform compression with adaptive block mode and $O(1)$ MTF rank table)
+  * **TTA** (lossless true audio compression with SIMD vectorization)
+  * **4x4** (intra-stream chunked multi-threaded compression wrapper)
   * **Storing** (uncompressed store)
 * **Intelligent Preprocessors & Filters**:
   * **BCJ / EXE**: x86 32/64-bit branch target preprocessor (`-bcj` / `-exe`)
-  * **REP**: High-speed multi-megabyte repetition filter (`-rep`)
+  * **REP**: High-speed multi-megabyte repetition filter (`-rep`) with multi-threaded hasher
   * **DELTA**: Multi-byte differential filter (`-delta`)
   * **DICT**: Text dictionary preprocessor (`-dict`)
   * **LZP**: Lempel-Ziv + Prediction filter (`-lzp`)
@@ -72,8 +79,6 @@ This project fills this 15-year gap by providing a **100% native C/C++ suite** t
   * Deep directory hierarchies, wildcard patterns, and `@listfile` support.
 * **Unix Pipelines**:
   * Decompress single or multiple files directly to standard output (`arc p`, `unarc p`, `-so`).
-* **100% Backward Compatibility**:
-  * Bit-for-bit CRC32 verified against legacy archives created by original FreeArc 0.6x Windows tools.
 
 ---
 
@@ -226,25 +231,35 @@ Both `arc` / `unarc` on Linux and `arc.exe` / `unarc.exe` on Windows 64-bit serv
 
 ---
 
-## Performance & Optimizations
+## Performance & Multithreading Architecture
 
-The native C/C++ engine incorporates targeted modern performance optimizations while preserving strict bit-for-bit output determinism:
+The native C/C++ engine incorporates a multi-tier multithreading architecture and targeted hardware optimizations while preserving strict 100% bit-exact output determinism:
 
-* **Parallel Multi-Block Compression Engine (`-mt`)**:
-  * Asynchronous overlapping I/O pipeline (`reader` thread for pre-buffering and on-the-fly CRC32, `writer` thread for background streaming).
-  * Concurrent worker pool for multi-block modes (non-solid `-s-`, partitioned blocks `-s<size>`, `-s<N>f`) with deterministic sequential archive flushing.
+* **True Intra-Stream Multithreading (4x4 Codec)**:
+  * For single solid streams (`arc a archive.arc ...`), FreeArc does **not** compromise compression ratio by splitting archives into independent non-solid blocks.
+  * Instead, the `4x4` codec wraps backend compressors (e.g. `4x4:lzma`, `4x4:tor`), chunking the stream in memory and compressing chunks in parallel across $N$ worker threads into a single continuous solid `DATA_BLOCK`.
+  * Automatically deployed in auto-profiles (`-m4`, `-m5`, `-m4x`, `-m5x`) whenever $\ge 3$ CPU cores are detected.
+* **Multi-Threaded Codec Internals**:
+  * **REP Hasher**: Long-distance repetition filter uses `MultipleProcessingThreads` to parallelize match hash-table lookups across CPU cores.
+  * **LZMA Match Finder (`LzFindMt`)**: Dedicated worker threads for multi-threaded dictionary match finding.
+* **Overlapping Asynchronous I/O Pipeline & Multi-Block Engine**:
+  * Dual-buffering background `reader` thread with on-the-fly SIMD CRC-32 and dedicated background `writer` thread.
+  * Thread pool for multi-block archives (non-solid `-s-`, partitioned `-s<size>`, `-s<N>f`) with deterministic ordered archive flushing.
+* **Bit-Exact Auto-Profiles & File Routing**:
+  * Faithful emulation of original FreeArc Haskell auto-presets (`-m1` to `-m5x`) and complete `arc.groups` classification table (`$text`, `$compressed`, `$exe`, `$iso`, `$precomp`, `$obj`, `$bmp`, `$wav`).
+  * Dynamic datatype detection via entropy and structure profiling, routing audio to TTA, bitmaps to MM+GRZip/LZMA, and object files to DELTA+LZMA.
+  * Exact stream-bounded dictionary capping (`LimitDictionary`).
+  * Standard EPN (*Extension, Path, Name*) file ordering matching FreeArc `-ds` (configurable via `-ds-`).
 * **Hardware-Accelerated CRC-32 (PCLMULQDQ SIMD)**:
   * Carry-less multiplication (`_mm_clmulepi64_si128`) with 64-byte parallel folding and Barrett reduction, reaching ~9.5 GB/s in memory streaming (~6× faster than scalar slice-by-8/16) and > 300 GB/s on cache.
   * Dynamic runtime dispatch (`__builtin_cpu_supports("pclmul")`) with seamless slice-by-8/16 fallback.
 * **Tornado MatchFinder Acceleration**:
   * 64-bit XOR and CTZ (`__builtin_ctzll`) match-length finder eliminating inner comparison loops and branch mispredictions.
+* **Vectorized TTA Audio Filter**:
+  * Fused single-pass stereo deinterleaving and channel decorrelation (`split_int` / `combine_int`) halving memory traffic.
+  * Decoupled contiguous passes for order-1 polynomial prediction, hybrid filter stages, and SSE2/AVX vectorization.
 * **GRZip MTF Rank Table**:
   * Instant $O(1)$ inverse rank table (`MTF_Pos[256]`) replacing $O(N)$ sequential list scanning during Move-To-Front encoding.
-* **TTA Audio Filter Optimizations**:
-  * Fused single-pass stereo deinterleaving and channel decorrelation (`split_int` / `combine_int`) halving memory traffic.
-  * Decoupled contiguous passes for order-1 polynomial prediction and adaptive hybrid filter stages.
-* **Filter Loop Unrolling & SIMD Alignment**:
-  * 64-bit word operations and unrolled loops for `memxor`, multimedia preprocessors (`MM` diff1/2/4), and `Delta` table detection.
 * **Compiler & Link-Time Optimization**:
   * Production builds compiled with `-O3`, Link-Time Optimization (`-flto=auto`), dead code elimination (`-Wl,--gc-sections`), and symbol stripping.
 
@@ -271,7 +286,7 @@ The native C/C++ engine incorporates targeted modern performance optimizations w
 │   ├── ArcProcess.h     # High-level archive processing routines
 │   ├── ArcCommand.h     # CLI options parser & dispatcher
 │   ├── WinCompat.h      # Windows 64-bit POSIX compatibility shims
-│   └── Compression/     # Compression codecs (LZMA, PPMD, GRZip, Tornado, TTA, Filters)
+│   └── Compression/     # Compression codecs (4x4, LZMA, PPMD, GRZip, Tornado, TTA, Filters)
 ├── tests/
 │   ├── run_tests.sh       # Comprehensive Linux automated test suite (24 tests)
 │   └── run_tests_win64.sh # Automated Windows 64-bit & cross-platform test suite (24 tests)
@@ -288,11 +303,11 @@ Build a standard `.deb` package with a single command:
 ```bash
 ./build_deb.sh
 ```
-This automatically compiles the suite, validates the test suite, and installs stripped binaries, manpages, and documentation into a standalone Debian package (`freearc_1.2.0-1_amd64.deb`).
+This automatically compiles the suite, validates the test suite, and installs stripped binaries, manpages, and documentation into a standalone Debian package (`freearc_1.3.0-1_amd64.deb`).
 
 To install the generated package:
 ```bash
-sudo dpkg -i freearc_1.2.0-1_amd64.deb
+sudo dpkg -i freearc_1.3.0-1_amd64.deb
 ```
 
 ---

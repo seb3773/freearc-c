@@ -74,7 +74,7 @@ int SRes_to_FreeArc (SRes res)
   if (res == SZ_ERROR_UNSUPPORTED)  return FREEARC_ERRCODE_BAD_COMPRESSED_DATA;
   if (res == SZ_ERROR_PARAM)        return FREEARC_ERRCODE_INVALID_COMPRESSOR;
   if (res == SZ_ERROR_INPUT_EOF)    return FREEARC_ERRCODE_BAD_COMPRESSED_DATA;
-  if (res == SZ_ERROR_OUTPUT_EOF)   return FREEARC_ERRCODE_WRITE;
+  if (res == SZ_ERROR_OUTPUT_EOF)   return FREEARC_ERRCODE_OUTBLOCK_TOO_SMALL;
   if (res == SZ_ERROR_READ)         return FREEARC_ERRCODE_READ;
   if (res == SZ_ERROR_WRITE)        return FREEARC_ERRCODE_WRITE;
   if (res != SZ_OK)
@@ -161,6 +161,33 @@ size_t CallbackWrite(void *p, const void *buf, size_t size)
 
 
 
+static void FillLzmaEncProps (CLzmaEncProps *props,
+                              int dictionarySize, int hashSize, int algorithm, int numFastBytes,
+                              int matchFinder, int matchFinderCycles,
+                              int posStateBits, int litContextBits, int litPosBits)
+{
+  LzmaEncProps_Init(props);
+  props->dictSize = dictionarySize;
+  props->mc = matchFinderCycles;
+  props->lc = litContextBits;
+  props->lp = litPosBits;
+  props->pb = posStateBits;
+  props->algo = algorithm;
+  props->fb = numFastBytes;
+  props->hashSize = hashSize;
+  switch (matchFinder)
+  {
+    case kHC4:  props->btMode = MF_HashChain ;  props->numHashBytes = 4; break;
+    case kBT2:  props->btMode = MF_BinaryTree;  props->numHashBytes = 2; break;
+    case kBT3:  props->btMode = MF_BinaryTree;  props->numHashBytes = 3; break;
+    case kBT4:  props->btMode = MF_BinaryTree;  props->numHashBytes = 4; break;
+    case kHT4:  props->btMode = MF_HashTable;   props->numHashBytes = 4; break;
+  }
+  props->numThreads = GetCompressionThreads();
+  props->writeEndMark = 1;
+  LzmaEncProps_Normalize(props);
+}
+
 int lzma_compress  ( int dictionarySize,
                      int hashSize,
                      int algorithm,
@@ -173,33 +200,14 @@ int lzma_compress  ( int dictionarySize,
                      CALLBACK_FUNC *callback,
                      void *auxdata )
 {
-  CallbackInStream  inStream;    inStream.Read  = CallbackRead;    inStream.callback = callback;   inStream.auxdata = auxdata;   inStream.errcode = FREEARC_OK;  inStream.first_read = False;
+  CallbackInStream  inStream;    inStream.Read  = CallbackRead;    inStream.callback = callback;   inStream.auxdata = auxdata;   inStream.errcode = FREEARC_OK;  inStream.first_read = TRUE;
   CallbackOutStream outStream;  outStream.Write = CallbackWrite;  outStream.callback = callback;  outStream.auxdata = auxdata;  outStream.errcode = FREEARC_OK;
 
   CLzmaEncHandle enc;
   SRes res;
   CLzmaEncProps props;
-
-  LzmaEncProps_Init(&props);
-  props.dictSize = dictionarySize;
-  props.mc = matchFinderCycles;
-  props.lc = litContextBits;
-  props.lp = litPosBits;
-  props.pb = posStateBits;
-  props.algo = algorithm;
-  props.fb = numFastBytes;
-  props.hashSize = hashSize;
-  switch (matchFinder)
-  {
-    case kHC4:  props.btMode = MF_HashChain ;  props.numHashBytes = 4; break;
-    case kBT2:  props.btMode = MF_BinaryTree;  props.numHashBytes = 2; break;
-    case kBT3:  props.btMode = MF_BinaryTree;  props.numHashBytes = 3; break;
-    case kBT4:  props.btMode = MF_BinaryTree;  props.numHashBytes = 4; break;
-    case kHT4:  props.btMode = MF_HashTable;   props.numHashBytes = 4; break;
-  }
-  props.numThreads = GetCompressionThreads();
-  props.writeEndMark = 1;
-  LzmaEncProps_Normalize(&props);
+  FillLzmaEncProps (&props, dictionarySize, hashSize, algorithm, numFastBytes,
+                    matchFinder, matchFinderCycles, posStateBits, litContextBits, litPosBits);
 
   enc = LzmaEnc_Create(&g_Alloc);
   if (enc == 0)   return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
@@ -213,6 +221,67 @@ int lzma_compress  ( int dictionarySize,
     return inStream.errcode;
   if (outStream.errcode)
     return outStream.errcode;
+  return SRes_to_FreeArc(res);
+}
+
+int lzma_compress2  (int dictionarySize,
+                     int hashSize,
+                     int algorithm,
+                     int numFastBytes,
+                     int matchFinder,
+                     int matchFinderCycles,
+                     int posStateBits,
+                     int litContextBits,
+                     int litPosBits,
+                     void *input, int inputSize, void *output, int *outputSize,
+                     CALLBACK_FUNC *callback,
+                     void *auxdata,
+                     void **CodecState)
+{
+  if (!input && !callback) {
+    if (CodecState && *CodecState) {
+      LzmaEnc_Destroy(*CodecState, &g_Alloc, &g_Alloc);
+      *CodecState = NULL;
+    }
+    return FREEARC_OK;
+  }
+
+  CallbackInStream  inStream;    inStream.Read  = CallbackRead;    inStream.callback = callback;   inStream.auxdata = auxdata;   inStream.errcode = FREEARC_OK;  inStream.first_read = TRUE;
+  CallbackOutStream outStream;  outStream.Write = CallbackWrite;  outStream.callback = callback;  outStream.auxdata = auxdata;  outStream.errcode = FREEARC_OK;
+
+  CLzmaEncHandle enc;
+  SRes res = SZ_OK;
+  const int writeEndMark = 1;
+
+  if (CodecState && *CodecState) {
+    enc = *CodecState;
+  } else {
+    CLzmaEncProps props;
+    FillLzmaEncProps (&props, dictionarySize, hashSize, algorithm, numFastBytes,
+                      matchFinder, matchFinderCycles, posStateBits, litContextBits, litPosBits);
+    enc = LzmaEnc_Create(&g_Alloc);
+    if (enc == 0)   return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+    res = LzmaEnc_SetProps(enc, &props);
+  }
+
+  if (res == SZ_OK) {
+    if (input && output && outputSize) {
+      SizeT outsize = *outputSize;
+      res = LzmaEnc_MemEncode(enc, (Byte*)output, &outsize, (const Byte*)input, inputSize, writeEndMark, NULL, &g_Alloc, &g_Alloc);
+      *outputSize = (int) outsize;
+    } else {
+      res = LzmaEnc_Encode(enc, (ISeqOutStream*)&outStream, (ISeqInStream*)&inStream, NULL, &g_Alloc, &g_Alloc);
+    }
+  }
+
+  if (CodecState) {
+    *CodecState = enc;
+  } else {
+    LzmaEnc_Destroy(enc, &g_Alloc, &g_Alloc);
+  }
+
+  if (inStream.errcode)  return inStream.errcode;
+  if (outStream.errcode) return outStream.errcode;
   return SRes_to_FreeArc(res);
 }
 
@@ -336,6 +405,32 @@ int LZMA_METHOD::decompress (CALLBACK_FUNC *callback, void *auxdata)
                           auxdata);
 }
 
+int LZMA_METHOD::DeCompressMem (COMPRESSION direction, void *input, int inputSize, void *output, int *outputSize, CALLBACK_FUNC *callback, void *auxdata, void **CodecState)
+{
+#ifndef FREEARC_DECOMPRESS_ONLY
+  if (direction==COMPRESS) {
+    SetDictionary (dictionarySize);
+    if (algorithm && GetCompressionThreads()>1)
+        addtime = -1;
+    return lzma_compress2 (dictionarySize,
+                           hashSize,
+                           algorithm,
+                           numFastBytes,
+                           matchFinder,
+                           matchFinderCycles,
+                           posStateBits,
+                           litContextBits,
+                           litPosBits,
+                           input, inputSize, output, outputSize,
+                           callback,
+                           auxdata,
+                           CodecState);
+  }
+#endif
+  if (direction==COMPRESS)  return FREEARC_ERRCODE_ONLY_DECOMPRESS;
+  return COMPRESSION_METHOD::DeCompressMem (direction, input, inputSize, output, outputSize, callback, auxdata, CodecState);
+}
+
 #ifndef FREEARC_DECOMPRESS_ONLY
 
 // ������� ��������
@@ -371,7 +466,9 @@ void LZMA_METHOD::ShowCompressionMethod (char *buf)
 {
   char DictionaryStr[100], HashStr[100], fcStr[100], pbStr[100], lcStr[100], lpStr[100], algStr[100];
   showMem (dictionarySize, DictionaryStr);
-  showMem (hashSize, HashStr);
+  MemSize hs = hashSize;
+  if (hashSize)  CalcCompressionMemories (NULL, &hs);
+  showMem (hs, HashStr);
   LZMA_METHOD defaults;
   sprintf (fcStr, matchFinderCycles!=defaults.matchFinderCycles? ":mc%d" : "", matchFinderCycles);
   sprintf (pbStr, posStateBits     !=defaults.posStateBits     ? ":pb%d" : "", posStateBits);
@@ -394,8 +491,16 @@ void LZMA_METHOD::ShowCompressionMethod (char *buf)
   //printf("\n%s\n",buf);
 }
 
-// ���������, ������� ������ ��������� ��� �������� �������� �������
 MemSize LZMA_METHOD::GetCompressionMem (void)
+{
+  MemSize mem;
+  CalcCompressionMemories (&mem, NULL);
+  return mem;
+}
+
+static MemSize mtbuf (int algo, int threads)  {return  (algo && (threads!=1)?  (compress_all_at_once? 4*mb : 6*mb) : 0);}
+
+void LZMA_METHOD::CalcCompressionMemories (MemSize *pmem, MemSize *phashSize)
 {
   CLzmaEncProps props;
   LzmaEncProps_Init(&props);
@@ -419,66 +524,55 @@ MemSize LZMA_METHOD::GetCompressionMem (void)
   props.writeEndMark = 1;
   LzmaEncProps_Normalize(&props);
 
-  uint64 reservedArea = props.dictSize/(matchFinder==kHT4? 4 : 2);
-  uint64 sons         = matchFinder==kHT4? 0
-                      : matchFinder==kHC4? 1
-                      :                    2;
-  // ��������� �������� �� ����� 4gb-1
-  return MemSize (mymin (MemSize(-1), uint64(props.dictSize) + reservedArea + props.hashSize + sons*sizeof(CLzRef)*props.dictSize + 1*mb));
+  uint64 sizeReserv  =  matchFinder==kHT4?  (props.dictSize <= 768*mb           ?  props.dictSize/4  :  props.dictSize/8)
+                                          :  (props.dictSize <= ((UInt32)2 << 30)?  props.dictSize/2  :  props.dictSize/4);
+  uint64 sons  =  (matchFinder==kHT4? 0 : matchFinder==kHC4? 1 : 2);
+  uint64 hash_memory  =  props.hashSize + sons*sizeof(CLzRef)*props.dictSize + RC_BUF_SIZE(props.dictSize) + 768*kb + mtbuf(props.algo,props.numThreads);
+  uint64 buf_memory  =  uint64(props.dictSize) + sizeReserv + 1*mb;
+
+  if (pmem)  *pmem  =  MemSize (mymin ((MemSize)-1, hash_memory + (compress_all_at_once? 0 : buf_memory)));
+  if (phashSize)  *phashSize = props.hashSize;
 }
 
-// ��������� �������, ������������ �� ����� mem ������ ��� ������ �������� LZMA_METHOD
-MemSize calcDictSize (LZMA_METHOD *p, MemSize mem)
+MemSize calcDictSize (LZMA_METHOD *p, MemSize oldDictionarySize, MemSize mem)
 {
-  double mem4 = mymax (double(mem) - BUFFER_SIZE, 0);
-  if (p->hashSize)
-  {
-    mem4 = mymax (mem4 - p->hashSize, 0);
-    switch (p->matchFinder) {
-      case kBT2:    return (MemSize)floor(mem4/9.5);
-      case kBT3:    return (MemSize)floor(mem4/9.5);
-      case kBT4:    return (MemSize)floor(mem4/9.5);
-      case kHC4:    return (MemSize)floor(mem4/5.5);
-      case kHT4:    return (MemSize)floor(mem4/1.25);
-    }
+  double mem4 = mymax (double(mem) - p->hashSize - (compress_all_at_once? 0:1*mb) - mtbuf(p->algorithm,GetCompressionThreads()) - 1*mb, 0);
+  double buf_k = compress_all_at_once? 0 : (p->matchFinder==kHT4? 1.25:1.5);
+  switch (p->matchFinder) {
+    case kBT2:    buf_k += 8;                    break;
+    case kBT3:    buf_k += (p->hashSize? 8:10);  break;
+    case kBT4:    buf_k += (p->hashSize? 8:10);  break;
+    case kHC4:    buf_k += (p->hashSize? 4:6);   break;
+    case kHT4:    buf_k += (p->hashSize? 0:1);   break;
   }
-  else
-  {
-    switch (p->matchFinder) {
-      case kBT2:    return (MemSize)floor(mem4/9.5);
-      case kBT3:    return (MemSize)floor(mem4/11.5);
-      case kBT4:    return (MemSize)floor(mem4/11.5);
-      case kHC4:    return (MemSize)floor(mem4/7.5);
-      case kHT4:    return (MemSize)floor(mem4/2.25);
-    }
-  }
-  return 0;
+  return  (buf_k?  (MemSize)floor(mem4/buf_k)  :  oldDictionarySize);
 }
 
-// ���������� ������������� ������ ��� ��������
 void LZMA_METHOD::SetCompressionMem (MemSize mem)
 {
   if (mem<=0)  return;
-  SetDictionary (calcDictSize (this, mem));
+  if (compress_all_at_once && matchFinder==kHT4) {
+    hashSize = MemSize(floor(mymax(double(mem/mb)-mtbuf(algorithm,GetCompressionThreads())/mb-1,1)))*mb;
+  } else {
+    hashSize = 0;
+    SetDictionary(calcDictSize(this,dictionarySize,mem));
+  }
 }
 
-// ���������� ������������� ������ ��� ����������
 void LZMA_METHOD::SetDecompressionMem (MemSize mem)
 {
   if (mem<=0)  return;
   SetDictionary (mem);
 }
 
-// ���������� ������ �������.
 void LZMA_METHOD::SetDictionary (MemSize mem)
 {
   if (mem<=0)  return;
-  // ��������� ������ ������� ����� ������ ������� � 4�� ������ :)
-  dictionarySize = mymin (mem, roundDown (calcDictSize (this, UINT_MAX), mb));
-  // ������� - ������� 32 ��, �� ����������� ���������� �� ��������
-  dictionarySize = mymax (32*kb, dictionarySize);
-  dictionarySize = dictionarySize < 2*mb? dictionarySize
-                                        : roundDown(dictionarySize, 1*mb);
+  dictionarySize = mem;
+#ifndef FREEARC_64BIT
+  dictionarySize = mymin (dictionarySize, rounddown_mem (calcDictSize (this, dictionarySize, UINT_MAX)));
+#endif
+  dictionarySize = rounddown_mem (mymax (32*kb, dictionarySize));
 }
 
 #endif  // !defined (FREEARC_DECOMPRESS_ONLY)

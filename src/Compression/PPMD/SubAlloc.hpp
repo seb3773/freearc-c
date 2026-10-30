@@ -5,14 +5,41 @@
  *  Contents: memory allocation routines                                    *
  ****************************************************************************/
 
-enum { UNIT_SIZE=4+2*(int)sizeof(void*), N1=4, N2=4, N3=4, N4=(128+3-1*N1-2*N2-3*N3)/4,
+#include <stdint.h>
+
+enum { UNIT_SIZE=12, N1=4, N2=4, N3=4, N4=(128+3-1*N1-2*N2-3*N3)/4,
         N_INDEXES=N1+N2+N3+N4 };
+
+static BYTE* HeapStart;
+
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+#ifndef MAP_32BIT
+#define MAP_32BIT 0x40
+#endif
+#define PPMD_HEAP_MMAP 1
+#endif
+
+#pragma pack(1)
+template<class T>
+struct P32 {
+    DWORD o;
+    T* get() const { return o ? (T*)(HeapStart + (o - 1)) : (T*)0; }
+    T* operator->() const { return get(); }
+    operator T*() const { return get(); }
+    T& operator[](int i) const { return get()[i]; }
+    P32& operator=(T* p) {
+        o = p ? (DWORD)((BYTE*)p - HeapStart) + 1 : 0;
+        return *this;
+    }
+} _PACK_ATTR;
+#pragma pack()
 
 #pragma pack(1)
 struct BLK_NODE {
     DWORD Stamp;
-    BLK_NODE* next;
-    BOOL   avail()      const { return (next != NULL); }
+    P32<BLK_NODE> next;
+    BOOL   avail()      const { return (next.o != 0); }
     void    link(BLK_NODE* p) { p->next=next; next=p; }
     void  unlink()            { next=next->next; }
     void* remove()            {
@@ -23,15 +50,16 @@ struct BLK_NODE {
 } BList[N_INDEXES];
 struct MEM_BLK: public BLK_NODE {
     DWORD NU;
-#ifdef FREEARC_64BIT
-    DWORD Pad;
-#endif
 } _PACK_ATTR;
 #pragma pack()
 
-static BYTE Indx2Units[N_INDEXES], Units2Indx[128]; // constants
+typedef char ppmd_p32_size_check[sizeof(P32<BLK_NODE>)==4 ? 1 : -1];
+typedef char ppmd_mem_blk_size_check[sizeof(MEM_BLK)==UNIT_SIZE ? 1 : -1];
+typedef char ppmd_blk_node_size_check[sizeof(BLK_NODE)==8 ? 1 : -1];
+
+static BYTE Indx2Units[N_INDEXES], Units2Indx[128];
 static DWORD GlueCount, SubAllocatorSize=0;
-static BYTE* HeapStart, * pText, * UnitsStart, * LoUnit, * HiUnit;
+static BYTE * pText, * UnitsStart, * LoUnit, * HiUnit;
 
 inline void PrefetchData(void* Addr)
 {
@@ -44,7 +72,7 @@ inline void BLK_NODE::insert(void* pv,int NU) {
     p->Stamp=~(DWORD)0;                     p->NU=NU;
     Stamp++;
 }
-inline UINT U2B(UINT NU) { return UNIT_SIZE*NU; }
+inline UINT U2B(UINT NU) { return 8*NU+4*NU; }
 inline void SplitBlock(void* pv,UINT OldIndx,UINT NewIndx)
 {
     UINT i, k, UDiff=Indx2Units[OldIndx]-Indx2Units[NewIndx];
@@ -64,14 +92,25 @@ DWORD _STDCALL GetUsedMemory()
 }
 void _STDCALL StopSubAllocator() {
     if ( SubAllocatorSize ) {
-        SubAllocatorSize=0;                 BigFree(HeapStart);
+#ifdef PPMD_HEAP_MMAP
+        ::munmap(HeapStart, SubAllocatorSize);
+#else
+        BigFree(HeapStart);
+#endif
+        SubAllocatorSize=0;                 HeapStart=NULL;
     }
 }
 BOOL _STDCALL StartSubAllocator(UINT t)
 {
     if (SubAllocatorSize == t)              return TRUE;
     StopSubAllocator();
-    HeapStart = (BYTE*) BigAlloc(t);
+#ifdef PPMD_HEAP_MMAP
+    HeapStart = (BYTE*) ::mmap(NULL, t, PROT_READ|PROT_WRITE,
+                             MAP_PRIVATE|MAP_ANONYMOUS|MAP_32BIT, -1, 0);
+    if (HeapStart == MAP_FAILED)            HeapStart = NULL;
+#endif
+    if (HeapStart == NULL)
+            HeapStart = (BYTE*) BigAlloc(t);
     if (HeapStart == NULL)                  return FALSE;
     SubAllocatorSize=t;                     return TRUE;
 }
@@ -87,7 +126,7 @@ static void GlueFreeBlocks()
     UINT i, k, sz;
     MEM_BLK s0, * p, * p0, * p1;
     if (LoUnit != HiUnit)                   *LoUnit=0;
-    for (i=0, (p0=&s0)->next=NULL;i < N_INDEXES;i++)
+    for (i=0, (p0=&s0)->next=(BLK_NODE*)NULL;i < N_INDEXES;i++)
             while ( BList[i].avail() ) {
                 p=(MEM_BLK*) BList[i].remove();
                 if ( !p->NU )               continue;
@@ -140,7 +179,12 @@ inline void* AllocContext()
 }
 inline void UnitsCpy(void* Dest,void* Src,UINT NU)
 {
-    memcpy(Dest, Src, U2B(NU));
+    DWORD* p1=(DWORD*) Dest, * p2=(DWORD*) Src;
+    do {
+        p1[0]=p2[0];                        p1[1]=p2[1];
+        p1[2]=p2[2];
+        p1 += 3;                            p2 += 3;
+    } while ( --NU );
 }
 inline void* ExpandUnits(void* OldPtr,UINT OldNU)
 {
@@ -176,7 +220,7 @@ inline void SpecialFreeUnit(void* ptr)
 inline void* MoveUnitsUp(void* OldPtr,UINT NU)
 {
     UINT indx=Units2Indx[NU-1];
-    if ((BYTE*) OldPtr > UnitsStart+16*1024 || (BLK_NODE*) OldPtr > BList[indx].next)
+    if ((BYTE*) OldPtr > UnitsStart+16*1024 || (BLK_NODE*) OldPtr > (BLK_NODE*)BList[indx].next)
             return OldPtr;
     void* ptr=BList[indx].remove();
     UnitsCpy(ptr,OldPtr,NU);                NU=Indx2Units[indx];

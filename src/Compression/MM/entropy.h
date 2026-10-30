@@ -40,11 +40,11 @@
 extern unsigned char *bit_array_read;
 extern unsigned char *bit_array_write;
 
-void init_bit_array_write (void);
+void init_bit_array_write (unsigned long size);
 void init_bit_array_read (unsigned long size);
 long get_len (void);
 
-void encode_frame (long *data, unsigned long len);
-void decode_frame (long *data, unsigned long len);
+void encode_frame (int32 *data, unsigned long len);
+void decode_frame (int32 *data, unsigned long len);
 
 #endif  /* ENTROPY_H */

@@ -37,7 +37,7 @@ extern "C" {
 #define gb (1024*mb)
 
 // ���������� ����, ������� ������ ��������/������������ �� ���� ��� �� ���� �����������
-#define BUFFER_SIZE (64*kb)
+#define BUFFER_SIZE (256*kb)
 
 // ���������� ����, ������� ������ ��������/������������ �� ���� ��� � ������� ������� � ��� ���������� ������������� ����������
 #define LARGE_BUFFER_SIZE (256*kb)
@@ -179,6 +179,12 @@ typedef int CALLBACK_FUNC (const char *what, void *data, int size, void *auxdata
         fbuffer.put ((byte*)flocalBuf+rem, flocalSize-rem);                \
     }                                                                      \
 }
+#define FWRITE4(value)                                                     \
+{                                                                          \
+    unsigned char flocalHeader[4];                                         \
+    setvalue32 (flocalHeader, value);                                      \
+    FWRITE (flocalHeader, 4);                                              \
+}
 #define FFLUSH()  { WRITE (fbuffer.buf, fbuffer.len());  fbuffer.empty(); }
 #define FCLOSE()  { FFLUSH();  fbuffer.free(); }
 #endif // !FREEARC_STANDALONE_TORNADO
@@ -272,11 +278,30 @@ int copy_data   (CALLBACK_FUNC *callback, void *auxdata);
 
 #ifdef __cplusplus
 
-// ����������� ��������� � ������������� ������ ������
+enum COMPRESSION { COMPRESS, DECOMPRESS };
+
+struct MemBuf
+{
+  MemBuf (void *input, int inputSize, void *output, int outputSize, CALLBACK_FUNC *_callback=0, void *_auxdata=0)
+  {
+    readPtr=(BYTE*)input, readLeft=inputSize, writePtr=(BYTE*)output, writeLeft=writeBufferSize=outputSize, callback=_callback, auxdata=_auxdata;
+  }
+  int written()  {return writeBufferSize-writeLeft;}
+  BYTE *readPtr;
+  int   readLeft;
+  BYTE *writePtr;
+  int   writeLeft;
+  int   writeBufferSize;
+  CALLBACK_FUNC *callback;
+  void *auxdata;
+};
+
+int ReadWriteMemBuf (const char *what, void *buf, int size, void *_membuf);
+
 class COMPRESSION_METHOD
 {
 public:
-  // ������� ���������� � ��������
+  virtual int DeCompressMem (COMPRESSION direction, void *input, int inputSize, void *output, int *outputSize, CALLBACK_FUNC *callback=0, void *auxdata=0, void **CodecState=0);
   virtual int decompress (CALLBACK_FUNC *callback, void *auxdata) = 0;
 #ifndef FREEARC_DECOMPRESS_ONLY
   virtual int compress   (CALLBACK_FUNC *callback, void *auxdata) = 0;

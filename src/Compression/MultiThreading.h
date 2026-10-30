@@ -10,6 +10,7 @@ typedef CCriticalSectionLock Lock;
 typedef CAutoResetEvent      Event;
 typedef CManualResetEvent    ManualEvent;
 typedef CSemaphore           Semaphore;
+typedef CThread              Thread;
 #define Signal Set
 //#define Wait   Lock
 
@@ -76,6 +77,94 @@ public:
 };
 
 
+// *************************************************************************************************
+// *** Multiple background threads performing process() on enqueued jobs ***************************
+// *************************************************************************************************
+
+template <class Job>
+struct MultipleProcessingThreads
+{
+    struct Task         {Job job;  Event *event;};
+
+    int                 NumThreads, MaxJobs;
+    Thread*             WorkerThreadsPtr;
+    SyncQueue<Task>     WorkerQueue, FinishedQueue;
+    SyncQueue<Event*>   FreeEvents;
+    Event               WorkerThreadFinished;
+
+    MultipleProcessingThreads()  {NumThreads=MaxJobs=0; WorkerThreadsPtr=NULL;}
+
+    void Put (Job job)
+    {
+        Event *event = FreeEvents.Get();
+        Task task = {job,event};
+        WorkerQueue.Put(task);
+        FinishedQueue.Put(task);
+    }
+
+    Job Get()
+    {
+        Task task = FinishedQueue.Get();
+        task.event->Lock();
+        FreeEvents.Put(task.event);
+        return task.job;
+    }
+
+    void WorkerThread()
+    {
+        SetCompressionThreadPriority();
+        for(;;)
+        {
+            Task task = WorkerQueue.Get();
+            if (task.event==NULL) break;
+            task.job.process();
+            task.event->Signal();
+        }
+        WorkerThreadFinished.Signal();
+    }
+
+    int start();
+
+    void finish()
+    {
+        for (int i=0; i<NumThreads; i++) {
+            Job job = {0};
+            Task task = {job, NULL};
+            WorkerQueue.Put(task);
+            WorkerThreadFinished.Lock();
+        }
+        delete[] WorkerThreadsPtr;
+        WorkerThreadsPtr = NULL;
+        for (int i=0; i<MaxJobs; i++)
+            delete FreeEvents.Get();
+    }
+};
+
+template <class Job>  static DWORD WINAPI
+MultipleProcessingThreads_RunWorkerThread (void *param)  {((MultipleProcessingThreads<Job>*)param) -> WorkerThread(); return 0;}
+
+template <class Job>
+int MultipleProcessingThreads<Job>::start()
+{
+    if (MaxJobs<=0 || NumThreads<=0)
+        return -1;
+
+    WorkerQueue  .SetSize (MaxJobs+1);
+    FinishedQueue.SetSize (MaxJobs);
+    FreeEvents   .SetSize (MaxJobs);
+    for (int i=0; i<MaxJobs; i++)
+        FreeEvents.Put (new Event);
+
+    WorkerThreadsPtr = new Thread[NumThreads];
+    for (int i=0; i<NumThreads; i++)
+        WorkerThreadsPtr[i].Create (MultipleProcessingThreads_RunWorkerThread<Job>, this);
+
+    return 0;
+}
+
+
+
+#ifndef MULTI_THREADING_BASICS
 // *************************************************************************************************
 // *** Multithreading block-wise compressor or decompressor ****************************************
 // *************************************************************************************************
@@ -235,4 +324,6 @@ void MTCompressor<Job>::CreateJobs ()
 
     if (threads==0)  SetErrCode (FREEARC_ERRCODE_NOT_ENOUGH_MEMORY);   ////
 }
+
+#endif  // !MULTI_THREADING_BASICS
 

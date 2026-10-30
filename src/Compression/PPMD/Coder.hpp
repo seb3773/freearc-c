@@ -66,29 +66,19 @@ inline void ariInitEncoder()
     low=0;                                  range=DWORD(-1);
 }
 #define ARI_ENC_NORMALIZE(stream) {                                         \
-    while (range > 0 && ((low ^ (low+range)) < TOP || (range < BOT &&       \
-            ((range= -low & (BOT-1)),1)))) {                                \
+    while ((low ^ (low+range)) < TOP || range < BOT &&                      \
+            ((range= -low & (BOT-1)),1)) {                                  \
         _PPMD_E_PUTC(low >> 24,stream);                                     \
         range <<= 8;                        low <<= 8;                      \
     }                                                                       \
 }
 inline void ariEncodeSymbol()
 {
-    if (SubRange.HighCount <= SubRange.LowCount) {
-        printf("ARI_ERROR: HighCount (%u) <= LowCount (%u), scale=%u\n",
-            SubRange.HighCount, SubRange.LowCount, SubRange.scale);
-        assert(SubRange.HighCount > SubRange.LowCount);
-    }
     low += SubRange.LowCount*(range /= SubRange.scale);
     range *= SubRange.HighCount-SubRange.LowCount;
 }
 inline void ariShiftEncodeSymbol(UINT SHIFT)
 {
-    if (SubRange.HighCount <= SubRange.LowCount) {
-        printf("ARI_ERROR_SHIFT: HighCount (%u) <= LowCount (%u)\n",
-            SubRange.HighCount, SubRange.LowCount);
-        assert(SubRange.HighCount > SubRange.LowCount);
-    }
     low += SubRange.LowCount*(range >>= SHIFT);
     range *= SubRange.HighCount-SubRange.LowCount;
 }

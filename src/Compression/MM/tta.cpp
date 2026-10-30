@@ -56,9 +56,9 @@ void tta_error (long error, const char *name)
 {
     switch (error) {
     case COMMAND_ERROR:
-        fprintf (stderr, "Error:   unknown command '%s'\n%s\n", name, LINE); break;
+        fprintf (stderr, "Error:   unknown command '%s'\n%s\n", name, LINE); exit(1);
     case FORMAT_ERROR:
-        fprintf (stderr, "Error:   not compatible file format\n%s\n", LINE); break;
+        fprintf (stderr, "Error:   not compatible file format\n%s\n", LINE); exit(1);
     case FIND_ERROR:
         fprintf (stderr, "Error:   file(s) not found '%s'\n%s\n\n", name, LINE); exit(1);
     case CREATE_ERROR:
@@ -66,7 +66,7 @@ void tta_error (long error, const char *name)
     case OPEN_ERROR:
         fprintf (stderr, "Error:   can't open file '%s'\n%s\n\n", name, LINE); exit(1);
     case FILE_ERROR:
-        fprintf (stderr, "\nError:   file is corrupted\n%s\n", LINE); break;
+        fprintf (stderr, "\nError:   file is corrupted\n%s\n", LINE); exit(1);
     case WRITE_ERROR:
         fprintf (stderr, "\nError:   can't write to output file\n%s\n\n", LINE); exit(1);
     case READ_ERROR:
@@ -78,29 +78,32 @@ void tta_error (long error, const char *name)
 
 void *malloc1d (size_t num, size_t size)
 {
-    void    *array;
-
-    if ((array = calloc (num, size)) == NULL)
-        tta_error (MEMORY_ERROR, NULL);
-
+    size_t bytes = num * size;
+    void *array = BigAlloc (bytes);
+    if (array == NULL)   tta_error (MEMORY_ERROR, NULL);
+    memset (array, 0, bytes);
     return (array);
 }
 
-long **malloc2d (long num, unsigned long len)
+int32 **malloc2d (long num, unsigned long len)
 {
-    long    i, **array, *tmp;
+    long    i;
+    int32   **array, *tmp;
+    size_t bytes = num * sizeof(int32 *) + num * (size_t)len * sizeof(int32);
 
-    array = (long **) calloc (num, sizeof(long *) + len * sizeof(long));
-    if (array == NULL) tta_error (MEMORY_ERROR, NULL);
+    array = (int32 **) BigAlloc (bytes);
+    if (array == NULL)   tta_error (MEMORY_ERROR, NULL);
+    memset (array, 0, bytes);
 
-    for(i = 0, tmp = (long *) array + num; i < num; i++)
+    tmp = (int32 *)((char *) array + num * sizeof(int32 *));
+    for(i = 0; i < num; i++)
         array[i] = tmp + i * len;
 
     return (array);
 }
 
 #ifndef FREEARC_DECOMPRESS_ONLY
-static long read_wave (long *data, void *rest, void **bufferptr, void *prevbuf, long prevsize, long byte_size, long num_chan, unsigned long len, CALLBACK_FUNC *callback, void *auxdata)
+static long read_wave (int32 *data, void *rest, void **bufferptr, void *prevbuf, long prevsize, long byte_size, long num_chan, unsigned long len, CALLBACK_FUNC *callback, void *auxdata)
 {
     long i, rest_bytes, elements;
     char *buffer = (char*) malloc1d (len + 2, num_chan*byte_size);
@@ -119,25 +122,25 @@ static long read_wave (long *data, void *rest, void **bufferptr, void *prevbuf, 
         case 1: {
                     unsigned char *sbuffer = (unsigned char *)buffer;
                     for (i = 0; i < elements; i++)
-                        data[i] = (long) sbuffer[i] - 0x80;
+                        data[i] = (int32) sbuffer[i] - 0x80;
                     break;
                 }
         case 2: {
                     short *sbuffer = (short*)buffer;
                     for (i = 0; i < elements; i++)
-                        data[i] = (long) sbuffer[i];
+                        data[i] = (int32) sbuffer[i];
                     break;
                 }
         case 3: {
                     unsigned char *sbuffer = (unsigned char *)buffer;
                     for (i = 0; i < elements; i++) {
-                        unsigned long t = *((long *)(sbuffer + i * byte_size));
-                        data[i] = (long) (t << 8) >> 8;
+                        uint32 t = *((uint32 *)(sbuffer + i * byte_size));
+                        data[i] = (int32) (t << 8) >> 8;
                     }
                     break;
                 }
         case 4: {
-                    long *sbuffer = (long*)buffer;
+                    int32 *sbuffer = (int32*)buffer;
                     for (i = 0; i < elements; i++)
                         data[i] = sbuffer[i];
                     break;
@@ -149,7 +152,7 @@ static long read_wave (long *data, void *rest, void **bufferptr, void *prevbuf, 
 }
 #endif
 
-static long write_wave (long **data, long byte_size, long num_chan, unsigned long len, CALLBACK_FUNC *callback, void *auxdata)
+static long write_wave (int32 **data, long byte_size, long num_chan, unsigned long len, CALLBACK_FUNC *callback, void *auxdata)
 {
     long    n;
     long    i, res;
@@ -174,11 +177,11 @@ static long write_wave (long **data, long byte_size, long num_chan, unsigned lon
                 unsigned char *sbuffer = (unsigned char *)buffer;
                 for (i = 0; i < (len * num_chan); i+= num_chan)
                 for (n = 0; n < num_chan; n++)
-                    *((long *)(sbuffer + (i+n) * byte_size)) = data[n][i/num_chan];
+                    *((int32 *)(sbuffer + (i+n) * byte_size)) = data[n][i/num_chan];
                 break;
             }
     case 4: {
-                long *sbuffer = (long*)buffer;
+                int32 *sbuffer = (int32*)buffer;
                 for (i = 0; i < (len * num_chan); i+= num_chan)
                 for (n = 0; n < num_chan; n++) sbuffer[i+n] = data[n][i/num_chan];
                 break;
@@ -186,32 +189,14 @@ static long write_wave (long **data, long byte_size, long num_chan, unsigned lon
     }
 
     res = callback ("write", buffer, byte_size * len * num_chan, auxdata);
-    free (buffer);
+    BigFreeAndNil (buffer);
     return res;
 }
 
 #ifndef FREEARC_DECOMPRESS_ONLY
-void split_int (long *data, long frame_len, long num_chan, long **buffer)
+void split_int (int32 *data, long frame_len, long num_chan, int32 **buffer)
 {
-    long i, j, n;
-
-    if (num_chan == 1) {
-        memcpy(buffer[0], data, frame_len * sizeof(long));
-        return;
-    }
-
-    if (num_chan == 2) {
-        long *b0 = buffer[0];
-        long *b1 = buffer[1];
-        for (i = 0; i < frame_len; i++) {
-            long d0 = data[2 * i];
-            long d1 = data[2 * i + 1];
-            long diff = d1 - d0;
-            b0[i] = diff;
-            b1[i] = d1 - (diff / 2);
-        }
-        return;
-    }
+    long    i, j, n;
 
     for (i = 0; i < frame_len; i++)
     for (j = 0; j < num_chan; j++) {
@@ -227,25 +212,9 @@ void split_int (long *data, long frame_len, long num_chan, long **buffer)
 }
 #endif
 
-void combine_int (long frame_len, long num_chan, long **buffer)
+void combine_int (long frame_len, long num_chan, int32 **buffer)
 {
-    long i, j, n;
-
-    if (num_chan == 1) {
-        return;
-    }
-
-    if (num_chan == 2) {
-        long *b0 = buffer[0];
-        long *b1 = buffer[1];
-        for (i = 0; i < frame_len; i++) {
-            long diff = b0[i];
-            long mid  = b1[i] + (diff / 2);
-            b1[i] = mid;
-            b0[i] = mid - diff;
-        }
-        return;
-    }
+    long    i, j, n;
 
     if (num_chan > 1)
     for (i = 0, n = (num_chan - 1); i < frame_len; i++) {
@@ -256,16 +225,16 @@ void combine_int (long frame_len, long num_chan, long **buffer)
 }
 
 #ifndef FREEARC_DECOMPRESS_ONLY
-void split_float (long *data, long frame_len, long num_chan, long **buffer)
+void split_float (int32 *data, long frame_len, long num_chan, int32 **buffer)
 {
     long    i, j;
 
     for (i = 0; i < frame_len; i++)
     for (j = 0; j < num_chan; j++) {
-        unsigned long t = data[i * num_chan + j];
-        unsigned long negative = (t & 0x80000000)? -1:1;
-        unsigned long data_hi = (t & 0x7FFF0000) >> 16;
-        unsigned long data_lo = (t & 0x0000FFFF);
+        uint32 t = data[i * num_chan + j];
+        uint32 negative = (t & 0x80000000)? -1:1;
+        uint32 data_hi = (t & 0x7FFF0000) >> 16;
+        uint32 data_lo = (t & 0x0000FFFF);
 
         buffer[j][i] = data_hi - 0x3F80;
         buffer[j+num_chan][i] = (SWAP16(data_lo) + 1) * negative;
@@ -273,15 +242,15 @@ void split_float (long *data, long frame_len, long num_chan, long **buffer)
 }
 #endif
 
-void combine_float (long frame_len, long num_chan, long **buffer)
+void combine_float (long frame_len, long num_chan, int32 **buffer)
 {
     long    i, j;
 
     for (i = 0; i < frame_len; i++)
     for (j = 0; j < num_chan; j++) {
-        unsigned long negative = buffer[j+num_chan][i] & 0x80000000;
-        unsigned long data_hi = buffer[j][i];
-        unsigned long data_lo = abs(buffer[j+num_chan][i]) - 1;
+        uint32 negative = buffer[j+num_chan][i] & 0x80000000;
+        uint32 data_hi = buffer[j][i];
+        uint32 data_lo = abs(buffer[j+num_chan][i]) - 1;
 
         data_hi += 0x3F80;
         buffer[j][i] = (data_hi << 16) | SWAP16(data_lo) | negative;
@@ -292,7 +261,7 @@ void combine_float (long frame_len, long num_chan, long **buffer)
 #ifndef FREEARC_DECOMPRESS_ONLY
 int tta_compress (int level, int skip_header, int is_float, int num_chan, int word_size, int offset, int raw_data, CALLBACK_FUNC *callback, void *auxdata)
 {
-    long            *data=NULL, **buffer=NULL;
+    int32           *data=NULL, **buffer=NULL;
     void            *rest=NULL, *origdata=NULL;
     char            *prevptr=NULL, *prevbuf=NULL;
     unsigned long   i, j, bytes_read, prevsize=0;
@@ -363,7 +332,7 @@ storing:
     //printf ("offset ok\n");
 
     // grab some space for buffers
-    data = (long *) malloc1d (num_chan * frame_size, sizeof (long));
+    data = (int32 *) malloc1d (num_chan * frame_size, sizeof (int32));
     rest = malloc1d (num_chan, byte_size);
     buffer = malloc2d (num_chan << is_float, frame_size);
     //printf ("malloc ok\n");
@@ -373,7 +342,7 @@ storing:
         bytes_read = read_wave (data, rest, &origdata, prevptr, prevsize, byte_size, num_chan, frame_size, callback, auxdata);
         frame_len = bytes_read/(num_chan*byte_size);
         if (bytes_read>=prevsize) {
-            FreeAndNil(prevbuf); prevsize=0;  // Now prevbuf (data read for autodetection) is fully consumed
+            BigFreeAndNil(prevbuf); prevsize=0;  // Now prevbuf (data read for autodetection) is fully consumed
         } else {
             prevptr+=bytes_read; prevsize-=bytes_read;  // There are still (prevptr,prevsize) data to read in prevbuf
         }
@@ -387,7 +356,7 @@ storing:
         else            split_int   (data, frame_len, num_chan, buffer);
         //printf ("Data split\n");
 
-        init_bit_array_write ();
+        init_bit_array_write (num_chan*byte_size*(frame_size+100));
 
         // compress block
         for (i = 0; i < (num_chan << is_float); i++) {
@@ -400,10 +369,10 @@ storing:
                 if (raw_data==2)
                     // Convert signed values to unsigned ones
                     for (j = 0; j < frame_len; j++) {
-                        long t = buffer[i][j];
+                        int32 t = buffer[i][j];
                         buffer[i][j] =  t>=0 ? t*2 : (-t)*2-1;
                     }
-                WRITE (buffer[i], frame_len*sizeof(long));
+                WRITE (buffer[i], frame_len*sizeof(int32));
             }
         }
         //printf ("Data encoded\n");
@@ -421,17 +390,17 @@ storing:
         }
         WRITE (rest, bytes_read%(num_chan*byte_size));
 skip_writing_rest:
-        FreeAndNil (bit_array_write);
-        FreeAndNil (origdata);
+        BigFreeAndNil (bit_array_write);
+        BigFreeAndNil (origdata);
     }
 
 finished:
-    FreeAndNil (bit_array_write);
-    FreeAndNil (origdata);
-    FreeAndNil (buffer);
-    FreeAndNil (rest);
-    FreeAndNil (data);
-    FreeAndNil (prevbuf);
+    BigFreeAndNil (bit_array_write);
+    BigFreeAndNil (origdata);
+    BigFreeAndNil (buffer);
+    BigFreeAndNil (rest);
+    BigFreeAndNil (data);
+    BigFreeAndNil (prevbuf);
 
     return errcode;
 }
@@ -439,9 +408,8 @@ finished:
 
 int tta_decompress (CALLBACK_FUNC *callback, void *auxdata)
 {
-    long    **buffer=NULL;
+    int32   **buffer=NULL;
     void    *rest=NULL;
-    void    *buf1=NULL;
     void    *prevbuf=NULL;
     unsigned long   i, level, raw_data, num_chan, word_size, byte_size, bytes_read, offset;
     unsigned long   is_float, frame_len, bit_array_size;
@@ -474,12 +442,15 @@ int tta_decompress (CALLBACK_FUNC *callback, void *auxdata)
         }
     }
 
-    // Copy header of original data that isn't compressed
+    // Copy uncompressed header of original data
     READ4 (offset);
-    buf1 = malloc(offset);
-    READ (buf1, offset);
-    WRITE(buf1, offset);
-    FreeAndNil (buf1);
+    if (offset)
+    {
+        void *buf1 = malloc1d(1,offset);
+        READ (buf1, offset);
+        WRITE(buf1, offset);
+        BigFreeAndNil (buf1);
+    }
 
     rest = malloc1d (num_chan, byte_size);
 
@@ -500,7 +471,7 @@ int tta_decompress (CALLBACK_FUNC *callback, void *auxdata)
                 prevbuf = malloc1d (bytes_read, 1);  //   copy bytes_read bytes
                 READ  (prevbuf, bytes_read);         //     from input stream
                 WRITE (prevbuf, bytes_read);         //     to output stream
-                FreeAndNil (prevbuf);                //
+                BigFreeAndNil (prevbuf);             //
                 continue;                            //   and go to next block
             }
             init_bit_array_read (bit_array_size);
@@ -512,7 +483,7 @@ int tta_decompress (CALLBACK_FUNC *callback, void *auxdata)
 
         for (i = 0; i < (num_chan << is_float); i++) {
             if (raw_data) {
-                READ (buffer[i], frame_len*sizeof(long));
+                READ (buffer[i], frame_len*sizeof(int32));
             } else {
                 decode_frame (buffer[i], frame_len);
             }
@@ -522,23 +493,22 @@ int tta_decompress (CALLBACK_FUNC *callback, void *auxdata)
         if (is_float)   combine_float (frame_len, num_chan, buffer);
         else            combine_int   (frame_len, num_chan, buffer);
 
-        FreeAndNil (bit_array_read);
+        BigFreeAndNil (bit_array_read);
         if (frame_len) {
             errcode = write_wave (buffer, byte_size, num_chan, frame_len, callback, auxdata);
             if (errcode<0)  goto finished;
         }
-        FreeAndNil (buffer);
+        BigFreeAndNil (buffer);
 
-        // Copy bytes at end of file
+        // Copy bytes at end of block
         READ  (rest, bytes_read%(num_chan*byte_size));
         WRITE (rest, bytes_read%(num_chan*byte_size));
     }
 finished:
-    FreeAndNil (prevbuf);
-    FreeAndNil (buf1);
-    FreeAndNil (bit_array_read);
-    FreeAndNil (buffer);
-    FreeAndNil (rest);
+    BigFreeAndNil (prevbuf);
+    BigFreeAndNil (bit_array_read);
+    BigFreeAndNil (buffer);
+    BigFreeAndNil (rest);
     return errcode;
 }
 

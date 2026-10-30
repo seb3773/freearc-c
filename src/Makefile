@@ -59,35 +59,35 @@ DEC_LINKOBJ = $(DEC_OBJDIR)/unarc.o $(DEC_OBJDIR)/Environment.o $(DEC_OBJDIR)/Co
               $(DEC_OBJDIR)/C_Dict.o $(DEC_OBJDIR)/C_Delta.o $(DEC_OBJDIR)/C_REP.o \
               $(DEC_OBJDIR)/C_LZP.o $(DEC_OBJDIR)/C_PPMD.o $(DEC_OBJDIR)/C_External.o \
               $(DEC_OBJDIR)/C_MM.o $(DEC_OBJDIR)/C_TTA.o $(DEC_OBJDIR)/C_Tornado.o \
-              $(DEC_OBJDIR)/C_GRZip.o $(DEC_OBJDIR)/C_Encryption.o
+              $(DEC_OBJDIR)/C_GRZip.o $(DEC_OBJDIR)/C_4x4.o $(DEC_OBJDIR)/C_Encryption.o
 
 SFX_LINKOBJ = $(DEC_OBJDIR)/unarc_sfx.o $(DEC_OBJDIR)/Environment.o $(DEC_OBJDIR)/Common.o \
               $(DEC_OBJDIR)/CompressionLibrary.o $(DEC_OBJDIR)/C_LZMA.o $(DEC_OBJDIR)/C_BCJ.o \
               $(DEC_OBJDIR)/C_Dict.o $(DEC_OBJDIR)/C_Delta.o $(DEC_OBJDIR)/C_REP.o \
               $(DEC_OBJDIR)/C_LZP.o $(DEC_OBJDIR)/C_PPMD.o $(DEC_OBJDIR)/C_External.o \
               $(DEC_OBJDIR)/C_MM.o $(DEC_OBJDIR)/C_TTA.o $(DEC_OBJDIR)/C_Tornado.o \
-              $(DEC_OBJDIR)/C_GRZip.o $(DEC_OBJDIR)/C_Encryption.o
+              $(DEC_OBJDIR)/C_GRZip.o $(DEC_OBJDIR)/C_4x4.o $(DEC_OBJDIR)/C_Encryption.o
 
 ENC_LINKOBJ = $(ENC_OBJDIR)/arc.o $(ENC_OBJDIR)/Environment.o $(ENC_OBJDIR)/Common.o \
               $(ENC_OBJDIR)/CompressionLibrary.o $(ENC_OBJDIR)/C_LZMA.o $(ENC_OBJDIR)/C_BCJ.o \
               $(ENC_OBJDIR)/C_Dict.o $(ENC_OBJDIR)/C_Delta.o $(ENC_OBJDIR)/C_REP.o \
               $(ENC_OBJDIR)/C_LZP.o $(ENC_OBJDIR)/C_PPMD.o $(ENC_OBJDIR)/C_External.o \
               $(ENC_OBJDIR)/C_MM.o $(ENC_OBJDIR)/C_TTA.o $(ENC_OBJDIR)/C_Tornado.o \
-              $(ENC_OBJDIR)/C_GRZip.o $(ENC_OBJDIR)/C_Encryption.o
+              $(ENC_OBJDIR)/C_GRZip.o $(ENC_OBJDIR)/C_4x4.o $(ENC_OBJDIR)/C_Encryption.o
 
 DEC_WIN64_LINKOBJ = $(DEC_WIN64_OBJDIR)/unarc.o $(DEC_WIN64_OBJDIR)/Environment.o $(DEC_WIN64_OBJDIR)/Common.o \
                     $(DEC_WIN64_OBJDIR)/CompressionLibrary.o $(DEC_WIN64_OBJDIR)/C_LZMA.o $(DEC_WIN64_OBJDIR)/C_BCJ.o \
                     $(DEC_WIN64_OBJDIR)/C_Dict.o $(DEC_WIN64_OBJDIR)/C_Delta.o $(DEC_WIN64_OBJDIR)/C_REP.o \
                     $(DEC_WIN64_OBJDIR)/C_LZP.o $(DEC_WIN64_OBJDIR)/C_PPMD.o $(DEC_WIN64_OBJDIR)/C_External.o \
                     $(DEC_WIN64_OBJDIR)/C_MM.o $(DEC_WIN64_OBJDIR)/C_TTA.o $(DEC_WIN64_OBJDIR)/C_Tornado.o \
-                    $(DEC_WIN64_OBJDIR)/C_GRZip.o $(DEC_WIN64_OBJDIR)/C_Encryption.o
+                    $(DEC_WIN64_OBJDIR)/C_GRZip.o $(DEC_WIN64_OBJDIR)/C_4x4.o $(DEC_WIN64_OBJDIR)/C_Encryption.o
 
 ENC_WIN64_LINKOBJ = $(ENC_WIN64_OBJDIR)/arc.o $(ENC_WIN64_OBJDIR)/Environment.o $(ENC_WIN64_OBJDIR)/Common.o \
                     $(ENC_WIN64_OBJDIR)/CompressionLibrary.o $(ENC_WIN64_OBJDIR)/C_LZMA.o $(ENC_WIN64_OBJDIR)/C_BCJ.o \
                     $(ENC_WIN64_OBJDIR)/C_Dict.o $(ENC_WIN64_OBJDIR)/C_Delta.o $(ENC_WIN64_OBJDIR)/C_REP.o \
                     $(ENC_WIN64_OBJDIR)/C_LZP.o $(ENC_WIN64_OBJDIR)/C_PPMD.o $(ENC_WIN64_OBJDIR)/C_External.o \
                     $(ENC_WIN64_OBJDIR)/C_MM.o $(ENC_WIN64_OBJDIR)/C_TTA.o $(ENC_WIN64_OBJDIR)/C_Tornado.o \
-                    $(ENC_WIN64_OBJDIR)/C_GRZip.o $(ENC_WIN64_OBJDIR)/C_Encryption.o
+                    $(ENC_WIN64_OBJDIR)/C_GRZip.o $(ENC_WIN64_OBJDIR)/C_4x4.o $(ENC_WIN64_OBJDIR)/C_Encryption.o
 
 .PHONY: all win64 both debug clean info info_win64 install uninstall
 
@@ -194,19 +194,22 @@ $(DEC_OBJDIR)/C_REP.o: Compression/REP/C_REP.cpp Compression/REP/C_REP.h Compres
 $(DEC_OBJDIR)/C_LZP.o: Compression/LZP/C_LZP.cpp Compression/LZP/C_LZP.h $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
-$(DEC_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h $(HEADERS) | $(DEC_OBJDIR)
+$(DEC_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h Compression/PPMD/Model.cpp Compression/PPMD/SubAlloc.hpp Compression/PPMD/Coder.hpp Compression/PPMD/PPMd.h Compression/PPMD/PPMdType.h $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS_NO_SA) -o $@ $<
 
-$(DEC_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp $(HEADERS) | $(DEC_OBJDIR)
+$(DEC_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp Compression/MM/mmdet.cpp Compression/MM/mmdet.h $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
-$(DEC_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h $(HEADERS) | $(DEC_OBJDIR)
-	$(CXX) -c $(CFLAGS) -o $@ $<
+$(DEC_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h Compression/MM/tta.cpp Compression/MM/filters.cpp Compression/MM/filters.h Compression/MM/entropy.cpp Compression/MM/entropy.h Compression/MM/mmdet.h $(HEADERS) | $(DEC_OBJDIR)
+	$(CXX) -c $(CFLAGS_NO_SA) -fwrapv -fno-lto -o $@ $<
 
 $(DEC_OBJDIR)/C_Tornado.o: Compression/Tornado/C_Tornado.cpp Compression/Tornado/C_Tornado.h Compression/Tornado/Tornado.cpp Compression/Tornado/MatchFinder.cpp $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
 $(DEC_OBJDIR)/C_GRZip.o: Compression/GRZip/C_GRZip.cpp Compression/GRZip/C_GRZip.h $(HEADERS) | $(DEC_OBJDIR)
+	$(CXX) -c $(CFLAGS) -o $@ $<
+
+$(DEC_OBJDIR)/C_4x4.o: Compression/4x4/C_4x4.cpp Compression/4x4/C_4x4.h $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
 $(DEC_OBJDIR)/C_Encryption.o: Compression/_Encryption/C_Encryption.cpp Compression/_Encryption/C_Encryption.h $(HEADERS) | $(DEC_OBJDIR)
@@ -236,7 +239,7 @@ $(ENC_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h $(H
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
 $(ENC_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(HEADERS) | $(ENC_OBJDIR)
-	$(CXX) -c $(ENC_CFLAGS) -DFREEARC_NO_MF_MT -o $@ $<
+	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
 $(ENC_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
@@ -250,19 +253,22 @@ $(ENC_OBJDIR)/C_REP.o: Compression/REP/C_REP.cpp Compression/REP/C_REP.h Compres
 $(ENC_OBJDIR)/C_LZP.o: Compression/LZP/C_LZP.cpp Compression/LZP/C_LZP.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
-$(ENC_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h $(HEADERS) | $(ENC_OBJDIR)
+$(ENC_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h Compression/PPMD/Model.cpp Compression/PPMD/SubAlloc.hpp Compression/PPMD/Coder.hpp Compression/PPMD/PPMd.h Compression/PPMD/PPMdType.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS_NO_SA) -o $@ $<
 
-$(ENC_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp $(HEADERS) | $(ENC_OBJDIR)
+$(ENC_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp Compression/MM/mmdet.cpp Compression/MM/mmdet.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
-$(ENC_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h $(HEADERS) | $(ENC_OBJDIR)
-	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
+$(ENC_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h Compression/MM/tta.cpp Compression/MM/filters.cpp Compression/MM/filters.h Compression/MM/entropy.cpp Compression/MM/entropy.h Compression/MM/mmdet.h $(HEADERS) | $(ENC_OBJDIR)
+	$(CXX) -c $(ENC_CFLAGS_NO_SA) -fwrapv -fno-lto -o $@ $<
 
 $(ENC_OBJDIR)/C_Tornado.o: Compression/Tornado/C_Tornado.cpp Compression/Tornado/C_Tornado.h Compression/Tornado/Tornado.cpp Compression/Tornado/MatchFinder.cpp $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
 $(ENC_OBJDIR)/C_GRZip.o: Compression/GRZip/C_GRZip.cpp Compression/GRZip/C_GRZip.h $(HEADERS) | $(ENC_OBJDIR)
+	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
+
+$(ENC_OBJDIR)/C_4x4.o: Compression/4x4/C_4x4.cpp Compression/4x4/C_4x4.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
 $(ENC_OBJDIR)/C_Encryption.o: Compression/_Encryption/C_Encryption.cpp Compression/_Encryption/C_Encryption.h $(HEADERS) | $(ENC_OBJDIR)
@@ -316,19 +322,22 @@ $(DEC_WIN64_OBJDIR)/C_REP.o: Compression/REP/C_REP.cpp Compression/REP/C_REP.h C
 $(DEC_WIN64_OBJDIR)/C_LZP.o: Compression/LZP/C_LZP.cpp Compression/LZP/C_LZP.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
-$(DEC_WIN64_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
+$(DEC_WIN64_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h Compression/PPMD/Model.cpp Compression/PPMD/SubAlloc.hpp Compression/PPMD/Coder.hpp Compression/PPMD/PPMd.h Compression/PPMD/PPMdType.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS_NO_SA) -o $@ $<
 
-$(DEC_WIN64_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp $(HEADERS) | $(DEC_WIN64_OBJDIR)
+$(DEC_WIN64_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp Compression/MM/mmdet.cpp Compression/MM/mmdet.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
-$(DEC_WIN64_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
-	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
+$(DEC_WIN64_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h Compression/MM/tta.cpp Compression/MM/filters.cpp Compression/MM/filters.h Compression/MM/entropy.cpp Compression/MM/entropy.h Compression/MM/mmdet.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
+	$(CXX_WIN64) -c $(WIN64_CFLAGS_NO_SA) -fwrapv -fno-lto -o $@ $<
 
 $(DEC_WIN64_OBJDIR)/C_Tornado.o: Compression/Tornado/C_Tornado.cpp Compression/Tornado/C_Tornado.h Compression/Tornado/Tornado.cpp Compression/Tornado/MatchFinder.cpp $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
 $(DEC_WIN64_OBJDIR)/C_GRZip.o: Compression/GRZip/C_GRZip.cpp Compression/GRZip/C_GRZip.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
+	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
+
+$(DEC_WIN64_OBJDIR)/C_4x4.o: Compression/4x4/C_4x4.cpp Compression/4x4/C_4x4.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
 $(DEC_WIN64_OBJDIR)/C_Encryption.o: Compression/_Encryption/C_Encryption.cpp Compression/_Encryption/C_Encryption.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
@@ -372,19 +381,22 @@ $(ENC_WIN64_OBJDIR)/C_REP.o: Compression/REP/C_REP.cpp Compression/REP/C_REP.h C
 $(ENC_WIN64_OBJDIR)/C_LZP.o: Compression/LZP/C_LZP.cpp Compression/LZP/C_LZP.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
-$(ENC_WIN64_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
+$(ENC_WIN64_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h Compression/PPMD/Model.cpp Compression/PPMD/SubAlloc.hpp Compression/PPMD/Coder.hpp Compression/PPMD/PPMd.h Compression/PPMD/PPMdType.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS_NO_SA) -o $@ $<
 
-$(ENC_WIN64_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp $(HEADERS) | $(ENC_WIN64_OBJDIR)
+$(ENC_WIN64_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp Compression/MM/mmdet.cpp Compression/MM/mmdet.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
-$(ENC_WIN64_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
-	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
+$(ENC_WIN64_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h Compression/MM/tta.cpp Compression/MM/filters.cpp Compression/MM/filters.h Compression/MM/entropy.cpp Compression/MM/entropy.h Compression/MM/mmdet.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
+	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS_NO_SA) -fwrapv -fno-lto -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/C_Tornado.o: Compression/Tornado/C_Tornado.cpp Compression/Tornado/C_Tornado.h Compression/Tornado/Tornado.cpp Compression/Tornado/MatchFinder.cpp $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/C_GRZip.o: Compression/GRZip/C_GRZip.cpp Compression/GRZip/C_GRZip.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
+	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_WIN64_OBJDIR)/C_4x4.o: Compression/4x4/C_4x4.cpp Compression/4x4/C_4x4.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/C_Encryption.o: Compression/_Encryption/C_Encryption.cpp Compression/_Encryption/C_Encryption.h $(HEADERS) | $(ENC_WIN64_OBJDIR)

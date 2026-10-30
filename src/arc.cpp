@@ -10,9 +10,14 @@
 #include <string>
 #include <set>
 #include <map>
+#include <algorithm>
+#include <cmath>
 
 #include "Environment.h"
 #include "Compression/Compression.h"
+extern "C" {
+#include "Compression/MM/mmdet.h"
+}
 #include "WinCompat.h"
 #ifndef _WIN32
 #include <pthread.h>
@@ -27,6 +32,7 @@
 #include "ArcStructure.h"
 #define aARCHIVE_VERSION   make4byte(0,0,5,9)
 #define aNO_COMPRESSION    "storing"
+#define aDEFAULT_DIR_COMPRESSION "lzma:mfbt4:d1m"
 
 FILE *g_logfile = NULL;
 
@@ -128,6 +134,7 @@ struct FileRec {
   uint32 mode;
   bool   is_symlink;
   std::string symlink_target;
+  std::string datatype;
 };
 
 struct BlockInfo {
@@ -398,7 +405,7 @@ static inline bool is_multithread_opt(const char *a, std::string &out_val, bool 
     out_val = a + 4;
     return true;
   }
-  if (strncasecmp(a, "-mt", 3) == 0 && a[3] != '\0') {
+  if (strncasecmp(a, "-mt", 3) == 0 && a[3] >= '0' && a[3] <= '9') {
     out_val = a + 3;
     return true;
   }
@@ -490,6 +497,82 @@ static std::string apply_mem_limits(const std::string &method_str, uint64 limit_
     p = plus + 1;
   }
   return result;
+}
+
+static FILESIZE haskell_dict_limit(FILESIZE orig) {
+  if (orig <= 0) return 0;
+  uint64 padded = (uint64)orig + (uint64)orig / 100 + 512;
+  if (padded > (uint64)(MemSize)-1)
+    padded = (uint64)(MemSize)-1;
+  MemSize mem = (MemSize)padded;
+  if (mem >= 4096 * kb)
+    return (FILESIZE)roundUp(mem, mb);
+  return (FILESIZE)roundUp(mem, kb);
+}
+
+static std::string canonize_method_chain(const std::string &method_str, FILESIZE limit_dict) {
+  std::string result;
+  const char *p = method_str.c_str();
+  while (*p) {
+    const char *plus = strchr(p, '+');
+    std::string part = plus ? std::string(p, plus - p) : std::string(p);
+    char buf[MAX_METHOD_STRLEN];
+    strncopy(buf, (char *)part.c_str(), sizeof(buf));
+    if (limit_dict > 0) {
+      char limited[MAX_METHOD_STRLEN];
+      if (LimitDictionary(buf, (MemSize)limit_dict, limited) == FREEARC_OK)
+        strncopy(buf, limited, sizeof(buf));
+    }
+    char canon[MAX_METHOD_STRLEN];
+    if (CanonizeCompressionMethod(buf, canon) == FREEARC_OK)
+      strncopy(buf, canon, sizeof(buf));
+    if (!result.empty()) result += '+';
+    result += buf;
+    if (!plus) break;
+    p = plus + 1;
+  }
+  return result.empty() ? method_str : result;
+}
+
+static std::string purify_stored_method(const std::string &method_str) {
+  std::string result;
+  const char *p = method_str.c_str();
+  while (*p) {
+    const char *plus = strchr(p, '+');
+    std::string part = plus ? std::string(p, plus - p) : std::string(p);
+    if (part.size() >= 4 && part.compare(0, 4, "rep:") == 0) {
+      std::string cleaned;
+      cleaned.reserve(part.size());
+      for (size_t i = 0; i < part.size(); ) {
+        if (part[i] == ':' && i + 2 < part.size() && part[i + 1] == 'c' &&
+            isdigit((unsigned char)part[i + 2])) {
+          i += 2;
+          while (i < part.size() && isdigit((unsigned char)part[i])) i++;
+          continue;
+        }
+        cleaned += part[i++];
+      }
+      part.swap(cleaned);
+    }
+    if (part.size() >= 6 && part.compare(0, 6, "grzip:") == 0) {
+      std::string cleaned;
+      cleaned.reserve(part.size());
+      for (size_t i = 0; i < part.size(); ) {
+        if (part[i] == ':' && i + 1 < part.size() && part[i + 1] == 'a' &&
+            (i + 2 == part.size() || part[i + 2] == ':')) {
+          i += 2;
+          continue;
+        }
+        cleaned += part[i++];
+      }
+      part.swap(cleaned);
+    }
+    if (!result.empty()) result += '+';
+    result += part;
+    if (!plus) break;
+    p = plus + 1;
+  }
+  return result.empty() ? method_str : result;
 }
 
 static bool is_absolute_path(const std::string &path) {
@@ -1042,25 +1125,17 @@ static std::string map_one_method(const char *m) {
   if (!m || !*m || strequ(m, "0") || strequ(m, "storing"))
     return "storing";
   if (strequ(m, "1"))
-    return "tor:1";
+    return "tor:4";
   if (strequ(m, "2"))
-    return "tor:2";
+    return "tor:6";
   if (strequ(m, "3"))
-    return "tor:3";
-  if (strequ(m, "4"))
-    return "lzma:8m";
-  if (strequ(m, "5"))
-    return "lzma:16m";
-  if (strequ(m, "4x"))
-    return "rep:64m+lzma:8m";
-  if (strequ(m, "5x") || strequ(m, "x") || strequ(m, "mx") || strequ(m, "max") || strequ(m, "ultra"))
-    return "rep:64m+lzma:16m";
+    return "lzma:96m:fast:32:mc4";
   if (strequ(m, "lzma"))
     return "lzma:8m";
   if (strequ(m, "tor") || strequ(m, "tornado"))
     return "tor:3";
   if (strequ(m, "ppmd"))
-    return "ppmd:8:16m";
+    return "ppmd:8:1m";
   if (strequ(m, "bcj") || strequ(m, "exe"))
     return "exe";
   if (strequ(m, "rep"))
@@ -1074,7 +1149,7 @@ static std::string map_one_method(const char *m) {
   if (strequ(m, "mm"))
     return "mm";
   if (strequ(m, "grzip"))
-    return "grzip";
+    return "grzip:a";
   if (strequ(m, "tta"))
     return "tta";
   return m;
@@ -1127,6 +1202,360 @@ static std::string map_method(const char *m) {
     p = plus + 1;
   }
   return out.empty() ? std::string("storing") : out;
+}
+
+static int auto_method_level(const char *name) {
+  if (!name || !*name) return 4;
+  if (name[0] >= '1' && name[0] <= '9') return name[0] - '0';
+  if (strequ(name, "x") || strequ(name, "mx") || strequ(name, "max") || strequ(name, "ultra"))
+    return 9;
+  return 4;
+}
+
+static bool is_auto_method_name(const char *m) {
+  return m && (strequ(m, "1") || strequ(m, "2") || strequ(m, "3")
+               || strequ(m, "1x") || strequ(m, "2x") || strequ(m, "3x")
+               || strequ(m, "4") || strequ(m, "5") || strequ(m, "4x") || strequ(m, "5x")
+               || strequ(m, "x") || strequ(m, "mx") || strequ(m, "max") || strequ(m, "ultra"));
+}
+
+static bool method_is_nonsolid(const std::string &method_str) {
+  if (method_str.empty()) return false;
+  std::string first = method_str;
+  size_t plus = first.find('+');
+  if (plus != std::string::npos) first.resize(plus);
+  if (first.empty()) return false;
+  int r = CompressionService((char *)first.c_str(), (char *)"nosolid?");
+  return r > 0;
+}
+
+static std::string apply_extra_filters(const std::string &base, const std::vector<std::string> &filters) {
+  std::string r = base;
+  for (size_t i = 0; i < filters.size(); i++) {
+    const std::string &f = filters[i];
+    if (f.empty()) continue;
+    r = f + '+' + r;
+  }
+  return r;
+}
+
+static std::vector<std::pair<std::string, std::string> > expand_auto_groups(const char *name, int cpus) {
+  std::vector<std::pair<std::string, std::string> > out;
+  if (!name || !*name) return out;
+  bool mt = cpus >= 2;
+  bool mt3 = cpus >= 3;
+  std::string lzma4 = mt3 ? "4x4:lzma:96m:normal:16:mc8" : "lzma:96m:normal:16:mc8";
+  std::string lzma5 = mt3 ? "4x4:lzma:96m:normal:32:mc32" : "lzma:96m:normal:32:mc32";
+  std::string etor_c3 = mt ? "4x4:tor:c3" : "tor:c3";
+  std::string bmp = "mm+grzip:m1:l2048:a";
+  std::string bin1 = mt ? "4x4:tor:3:8mb" : "tor:4";
+  std::string bin2 = mt ? "4x4:tor:5" : "tor:6";
+  std::string bin3 = mt ? "4x4:lzma:96m:fast:32:mc4" : "lzma:96m:fast:32:mc4";
+  std::string bmpfastest = std::string("mm:d1+") + bin1 + ":t0";
+  if (strequ(name, "1") || strequ(name, "1x")) {
+    out.push_back(std::make_pair(std::string(""), std::string("rep:96m:256:c256+") + bin1));
+    out.push_back(std::make_pair(std::string("$compressed"), mt ? std::string("rep:96m:256:c256") : std::string("storing")));
+    if (cpus >= 4) {
+      out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
+      out.push_back(std::make_pair(std::string("$bmp"), bmpfastest));
+    }
+  } else if (strequ(name, "2")) {
+    out.push_back(std::make_pair(std::string(""), std::string("rep:96m:256:c256+exe+") + bin2));
+    out.push_back(std::make_pair(std::string("$obj"), std::string("rep:96m:256:c256+") + bin2));
+    out.push_back(std::make_pair(std::string("$text"), mt ? "grzip:m4" : "grzip:m4:8m:32:h15"));
+    out.push_back(std::make_pair(std::string("$compressed"), std::string("rep:96m:256:c256+") + bin1));
+    out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
+    out.push_back(std::make_pair(std::string("$bmp"), mt ? "mm+grzip:m4:l:a" : bmpfastest));
+  } else if (strequ(name, "2x")) {
+    out.push_back(std::make_pair(std::string(""), std::string("exe+") + bin2));
+    out.push_back(std::make_pair(std::string("$obj"), bin2));
+    out.push_back(std::make_pair(std::string("$text"), bin2));
+    out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
+    out.push_back(std::make_pair(std::string("$bmp"), bmpfastest));
+    out.push_back(std::make_pair(std::string("$compressed"), std::string("rep:96m:256:c256:8m+") + bin1));
+  } else if (strequ(name, "3")) {
+    out.push_back(std::make_pair(std::string(""), std::string("rep:96m+exe+delta+") + bin3));
+    out.push_back(std::make_pair(std::string("$obj"), std::string("rep:96m+delta+") + bin3));
+    out.push_back(std::make_pair(std::string("$text"), mt ? "grzip:m2" : "dict:p:64m:85%+lzp:64m:24:h20:92%+grzip:m3:8m:l"));
+    out.push_back(std::make_pair(std::string("$compressed"), std::string("rep:96m+") + bin1));
+    out.push_back(std::make_pair(std::string("$wav"), "tta"));
+    out.push_back(std::make_pair(std::string("$bmp"), mt ? bmp : "mm+grzip:m4:l:a"));
+  } else if (strequ(name, "3x")) {
+    out.push_back(std::make_pair(std::string(""), std::string("exe+delta+") + bin3));
+    out.push_back(std::make_pair(std::string("$obj"), std::string("delta+") + bin3));
+    out.push_back(std::make_pair(std::string("$text"), "dict:64m:80%+tor:7:96m:h64m"));
+    out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
+    out.push_back(std::make_pair(std::string("$bmp"), std::string("mm+") + bin3));
+    out.push_back(std::make_pair(std::string("$compressed"), std::string("rep:96m:8m+") + bin1));
+  } else if (strequ(name, "4")) {
+    out.push_back(std::make_pair(std::string(""), std::string("rep:96m+exe+delta+") + lzma4));
+    out.push_back(std::make_pair(std::string("$obj"), std::string("rep:96m+delta+") + lzma4));
+    out.push_back(std::make_pair(std::string("$text"), mt ? "grzip:m1" : "dict:p:64m:80%+lzp:64m:65:d1m:s16:h20:90%+ppmd:8:96m"));
+    out.push_back(std::make_pair(std::string("$compressed"), std::string("rep:96m+") + etor_c3));
+    out.push_back(std::make_pair(std::string("$wav"), "tta"));
+    out.push_back(std::make_pair(std::string("$bmp"), bmp));
+  } else if (strequ(name, "4x")) {
+    out.push_back(std::make_pair(std::string(""), std::string("exe+delta+") + lzma4));
+    out.push_back(std::make_pair(std::string("$obj"), std::string("delta+") + lzma4));
+    out.push_back(std::make_pair(std::string("$text"), std::string("dict:64m:75%+") + lzma4));
+    out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
+    out.push_back(std::make_pair(std::string("$bmp"), std::string("mm+") + lzma4));
+    out.push_back(std::make_pair(std::string("$compressed"), mt ? "4x4:tor:8m:c3" : "tor:8m:c3"));
+  } else if (strequ(name, "5")) {
+    out.push_back(std::make_pair(std::string(""), std::string("rep:96m+exe+delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$obj"), std::string("rep:96m+delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$text"), "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:12:192m"));
+    out.push_back(std::make_pair(std::string("$wav"), "tta"));
+    out.push_back(std::make_pair(std::string("$bmp"), bmp));
+  } else if (strequ(name, "5x") || strequ(name, "x") || strequ(name, "mx") || strequ(name, "max") || strequ(name, "ultra")) {
+    out.push_back(std::make_pair(std::string(""), std::string("exe+delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$obj"), std::string("delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$text"), std::string("dict:128m:75%+") + lzma5));
+    out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
+    out.push_back(std::make_pair(std::string("$bmp"), std::string("mm+") + lzma5));
+  }
+  return out;
+}
+
+static std::string auto_default_method(const std::vector<std::pair<std::string, std::string> > &groups) {
+  for (size_t i = 0; i < groups.size(); i++) {
+    if (groups[i].first.empty()) return groups[i].second;
+  }
+  return groups.empty() ? std::string("storing") : groups[0].second;
+}
+
+static std::string auto_method_for_type(const std::vector<std::pair<std::string, std::string> > &groups,
+                                       const std::string &typ) {
+  const std::string *fallback = NULL;
+  for (size_t i = 0; i < groups.size(); i++) {
+    if (groups[i].first.empty()) fallback = &groups[i].second;
+    else if (groups[i].first == typ) return groups[i].second;
+  }
+  return fallback ? *fallback : std::string("storing");
+}
+
+static bool auto_has_detectable_types(const std::vector<std::pair<std::string, std::string> > &groups) {
+  for (size_t i = 0; i < groups.size(); i++) {
+    if (!groups[i].first.empty())
+      return true;
+  }
+  return false;
+}
+
+enum FileDataType {
+  DT_DEFAULT = 0,
+  DT_COMPRESSED,
+  DT_TEXT
+};
+
+static const int aCHUNKS = 5;
+static const uint64 aCHUNK_SIZE = 64ull * 1024ull;
+
+static bool ext_in_list(const std::string &name, const char *const *exts) {
+  const char *dot = strrchr(name.c_str(), '.');
+  if (!dot || dot == name.c_str() || !dot[1]) return false;
+  std::string e = dot + 1;
+  for (size_t i = 0; i < e.size(); i++)
+    e[i] = (char)tolower((unsigned char)e[i]);
+  for (int i = 0; exts[i]; i++)
+    if (e == exts[i]) return true;
+  return false;
+}
+
+static bool name_in_list(const std::string &name, const char *const *names) {
+  const char *slash = strrchr(name.c_str(), '/');
+#ifdef _WIN32
+  const char *bslash = strrchr(name.c_str(), '\\');
+  if (bslash && (!slash || bslash > slash)) slash = bslash;
+#endif
+  std::string base = slash ? (slash + 1) : name;
+  for (size_t i = 0; i < base.size(); i++)
+    base[i] = (char)tolower((unsigned char)base[i]);
+  for (int i = 0; names[i]; i++)
+    if (base == names[i]) return true;
+  return false;
+}
+
+static std::string group_type_from_name(const std::string &name) {
+  static const char *obj_exts[] = {"dcu", "obj", "o", "a", "lib", NULL};
+  static const char *bmp_exts[] = {"bmp", "tif", "tiff", "tga", "wbm", "wbmp", "pgm", "pnm", "ppm", NULL};
+  static const char *wav_exts[] = {"wav", "wave", "pcm", "aif", "aifc", "aiff", "au", "snd", "xac", "iff", "voc", "paf", "sd2", NULL};
+  static const char *text_names[] = {"file_id.diz", "descript.ion", "files.bbs", "read.me", "readme", "makefile", NULL};
+  static const char *text_exts[] = {
+    "txt", "asc", "lng", "css", "dtd", "dtdxml", "htm", "html", "shtml", "xml",
+    "xsl", "xsd", "docbook", "fo", "vcproj", "sgml", "yaml", "asp", "cgi", "rd",
+    "cue", "1", "man", "pod", "pl", "prl", "pm", "rex", "rb", "rbw", "py", "sed",
+    "awk", "tcl", "lua", "mlua", "php", "m4", "el", "elc", "vim", "sh", "ksh",
+    "csh", "bash", "bat", "cmd", "btm", "bas", "vbs", "fpp", "for", "f", "ada",
+    "adb", "ads", "lfm", "lpi", "lrs", "dfm", "pas", "src", "s", "asi", "inc",
+    "asm", "xs", "y", "h", "hpp", "ipp", "hxx", "c", "cpp", "cxx", "c++", "cc",
+    "objc", "d", "cs", "java", "js", "hc", "gc", "hsc", "hs", "lhs", "mli", "ml",
+    "hrl", "erl", "scm", "vi", "lst", "log", "ini", "cfg", "mak", "in", "dsp",
+    "dsw", "rc", "idl", "tar", "sql", "pkt", "xbm", "xpm", "reg", "ps", "dvi",
+    "tex", "txi", "texi", "texinfo", "info", "hlf", "eng", "rus", "cnt", "tbb",
+    "tbi", "toc", "mbx", "csv", "rtf", "wrd", "wri", NULL
+  };
+  static const char *comp_exts[] = {
+    "mp3", "ogg", "aac", "flv", "avi", "wmv", "mov", "vob", "3gp", "asf", "mp4",
+    "m4v", "mpg", "mkv", "ts", "mts", "m2ts", "divx", "pmd", "pmm", "pms", "bz",
+    "bz2", "zoo", "arc", "hyp", "pak", "lzh", "chz", "arj", "lim", "ark", "hpk",
+    "cab", "bs2", "bsn", "ain", "rar", "uc2", "ha", "ufa", "bix", "7z", "j",
+    "uha", "ccm", "ccmx", "chm", "djvu", NULL
+  };
+  static const char *exe_exts[] = {
+    "com", "exe", "scr", "sfx", "dll", "so", "ocx", "bpl", "dpl", "ovr", "ovl",
+    "rtl", "386", "vxd", "drv", "sys", NULL
+  };
+  static const char *iso_exts[] = {
+    "iso", "nrg", "bin", "img", "mds", "mdf", "c2d", "ashdisc", "isz", "b6t",
+    "b5t", "b5i", "bwt", "bwi", "lcd", "ccd", "dvd", "000", "cdi", "dao", "tao",
+    "cif", "xmf", "xmd", "p01", "md1", "xa", "pdi", "dmg", "vaporcd", "ncd",
+    "pxi", "rif", "rdf", "gcd", "gi", "ixa", "fc4", "fcd", "vcd", "vdi", "ima",
+    "bif", NULL
+  };
+  static const char *precomp_exts[] = {
+    "pdf", "swf", "zip", "jar", "png", "gif", "gz", "tgz", "svgz", "sis", "gadget",
+    "fb2z", "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "xlam",
+    "pptx", "pptm", "potx", "potm", "ppam", "ppsx", "ppsm", "odt", "ott", "odm",
+    "oth", "ods", "ots", "odg", "otg", "odp", "otp", "odf", "odb", "oxt", "sxw",
+    "stw", "sxg", "sxc", "stc", "sxi", "sti", "sxd", "std", "sxm", "itz", "xmz",
+    "s3z", "mdz", "pk3", "pk4", "eaz", "age3scn", "scx", "xmb", "a2c", "acm",
+    "ahm", "frame", "jaz", "sequence", "wd", "rfd", "rfh", "gtr", "lod", "ezd",
+    "cmo", "nmo", "sue", "trc", "clz", "sga", "gsv", NULL
+  };
+
+  if (ext_in_list(name, wav_exts)) return "$wav";
+  if (ext_in_list(name, bmp_exts)) return "$bmp";
+  if (ext_in_list(name, obj_exts)) return "$obj";
+  if (name_in_list(name, text_names) || ext_in_list(name, text_exts)) return "$text";
+  if (ext_in_list(name, comp_exts)) return "$compressed";
+  if (ext_in_list(name, exe_exts)) return "$exe";
+  if (ext_in_list(name, iso_exts)) return "$iso";
+  if (ext_in_list(name, precomp_exts)) return "$precomp";
+  return "";
+}
+
+static bool read_file_chunk(FILE *fp, uint64 pos, uint64 want, std::vector<char> &buf, size_t &got) {
+  if (fseeko(fp, (off_t)pos, SEEK_SET) != 0) return false;
+  if (buf.size() < (size_t)want) buf.resize((size_t)want);
+  got = fread(&buf[0], 1, (size_t)want, fp);
+  return got > 0;
+}
+
+static bool detect_file_mm(FILE *fp, uint64 filesize, int detect_level) {
+  std::vector<char> buf;
+  size_t got = 0;
+  uint64 hdr = filesize < 1024ull ? filesize : 1024ull;
+  if (hdr > 0 && read_file_chunk(fp, 0, hdr, buf, got) && detect_mm_header(detect_level, &buf[0], (int)got))
+    return true;
+  int bytes = detect_mm_bytes(detect_level, (int)(filesize > 0x7fffffff ? 0x7fffffff : filesize));
+  if (bytes <= 0 || filesize == 0) return false;
+  uint64 pos = ((filesize - (uint64)bytes) / 2);
+  if (!read_file_chunk(fp, pos, (uint64)bytes, buf, got)) return false;
+  return detect_mm(detect_level, &buf[0], (int)got) != 0;
+}
+
+static std::string choose_detected_type(const std::vector<std::string> &dataTypes, const std::string &defaultType) {
+  int total = (int)dataTypes.size();
+  int n_nondef = 0;
+  std::string x;
+  bool x_same = true;
+  for (int i = 0; i < total; i++) {
+    if (dataTypes[i] == "default") continue;
+    if (n_nondef == 0) x = dataTypes[i];
+    else if (dataTypes[i] != x) x_same = false;
+    n_nondef++;
+  }
+  std::string best = "default";
+  if (n_nondef > 0 && x_same &&
+      (n_nondef == total || (total >= aCHUNKS && n_nondef == total - 1) || n_nondef * 12 >= total * 11))
+    best = x;
+  if (best == "default") {
+    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj")
+      return defaultType;
+    return "default";
+  }
+  return best;
+}
+
+static std::string detect_file_datatype(const FileRec &f, int detect_level) {
+  if (f.isdir || f.is_symlink || f.size == 0 || f.path.empty())
+    return "default";
+  std::string defaultType = group_type_from_name(f.name);
+  if (detect_level <= 1) {
+    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj" ||
+        defaultType == "$text" || defaultType == "$compressed" || defaultType == "$exe" ||
+        defaultType == "$iso" || defaultType == "$precomp")
+      return defaultType;
+    return "default";
+  }
+  FILE *fp = fopen(f.path.c_str(), "rb");
+  if (!fp) {
+    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj")
+      return defaultType;
+    return "default";
+  }
+  if ((defaultType == "$wav" || defaultType == "$bmp") && detect_file_mm(fp, f.size, detect_level)) {
+    fclose(fp);
+    return defaultType;
+  }
+  uint64 filesize = f.size;
+  uint64 chunks = filesize / aCHUNK_SIZE + 1;
+  int n;
+  if ((int)chunks < aCHUNKS)
+    n = (int)chunks;
+  else
+    n = (int)(sqrt((double)aCHUNKS * (double)chunks) + 0.5);
+  if (n < 1) n = 1;
+  uint64 blocksize = aCHUNK_SIZE;
+  if (filesize / (uint64)n < blocksize)
+    blocksize = filesize / (uint64)n;
+  if (blocksize == 0) blocksize = filesize < aCHUNK_SIZE ? filesize : aCHUNK_SIZE;
+  uint64 step = 0;
+  if ((uint64)n * blocksize < filesize)
+    step = (filesize - (uint64)n * blocksize) / (uint64)n;
+  std::vector<char> buf((size_t)blocksize);
+  std::vector<std::string> dataTypes;
+  for (int i = 0; i < n; i++) {
+    uint64 pos = (uint64)i * (blocksize + step);
+    size_t got = 0;
+    if (!read_file_chunk(fp, pos, blocksize, buf, got)) break;
+    char typ[64];
+    detect_datatype((BYTE *)&buf[0], (int)got, typ);
+    dataTypes.push_back(typ);
+  }
+  fclose(fp);
+  if (dataTypes.empty()) {
+    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj")
+      return defaultType;
+    return "default";
+  }
+  return choose_detected_type(dataTypes, defaultType);
+}
+
+static void detect_file_types(std::vector<FileRec> &files, int detect_level) {
+  for (size_t i = 0; i < files.size(); i++) {
+    if (files[i].datatype.empty())
+      files[i].datatype = detect_file_datatype(files[i], detect_level);
+  }
+}
+
+static std::string file_ext_lc(const std::string &name) {
+  const char *dot = strrchr(name.c_str(), '.');
+  if (!dot || dot == name.c_str()) return "";
+  std::string e = dot + 1;
+  for (size_t i = 0; i < e.size(); i++)
+    e[i] = (char)tolower((unsigned char)e[i]);
+  return e;
+}
+
+static bool file_sort_epn(const FileRec &a, const FileRec &b) {
+  std::string ea = file_ext_lc(a.name);
+  std::string eb = file_ext_lc(b.name);
+  if (ea != eb) return ea < eb;
+  if (a.dir != b.dir) return a.dir < b.dir;
+  if (a.name != b.name) return a.name < b.name;
+  return a.size < b.size;
 }
 
 static std::string normalize_stored(const char *path) {
@@ -1404,6 +1833,7 @@ static void add_entry(std::vector<FileRec> &files, std::set<std::string> &seen,
   f.mode = (uint32)st.st_mode;
   f.is_symlink = false;
   f.symlink_target.clear();
+  f.datatype.clear();
   files.push_back(f);
 }
 
@@ -1430,6 +1860,7 @@ static void add_symlink_entry(std::vector<FileRec> &files, std::set<std::string>
   f.mode = (uint32)st.st_mode;
   f.is_symlink = true;
   f.symlink_target = target ? target : "";
+  f.datatype.clear();
   files.push_back(f);
 }
 
@@ -1626,27 +2057,27 @@ static void write_dir_block(ByteWriter &w, std::vector<DataBlockRec> &blocks,
   for (int i = 0; i < nfiles; i++)
     w.write_u32(files[i].crc);
 
-  // Extended metadata:
-  // Tag 1: POSIX modes
-  w.writeInteger(1);
-  w.writeInteger((uint64)nfiles);
-  for (int i = 0; i < nfiles; i++)
-    w.write_u32(files[i].mode);
-
-  // Tag 2: Symlinks
+  bool need_posix = false;
   bool any_symlink = false;
   for (int i = 0; i < nfiles; i++) {
-    if (files[i].is_symlink) { any_symlink = true; break; }
+    uint32 def = files[i].isdir ? 0755u : 0644u;
+    if ((files[i].mode & 07777) != def)
+      need_posix = true;
+    if (files[i].is_symlink)
+      any_symlink = true;
+  }
+  if (need_posix) {
+    w.writeInteger(1);
+    w.writeInteger((uint64)nfiles);
+    for (int i = 0; i < nfiles; i++)
+      w.write_u32(files[i].mode);
   }
   if (any_symlink) {
     w.writeInteger(2);
     w.writeInteger((uint64)nfiles);
-    for (int i = 0; i < nfiles; i++) {
+    for (int i = 0; i < nfiles; i++)
       w.writeString(files[i].is_symlink ? files[i].symlink_target.c_str() : "");
-    }
   }
-
-  // Tag 0: End of extension tags
   w.writeInteger(0);
 }
 
@@ -1759,16 +2190,17 @@ public:
 static BlockInfo compress_range(IArchiveWriter *out, const char *method, const char *password,
                                 const char *algorithm, FileRec *files, int start, int count,
                                 bool allow_io_pipeline = true) {
-  char compress_m[MAX_METHOD_STRLEN], store_m[MAX_METHOD_STRLEN];
-  wrap_encryption(method, password, algorithm, compress_m, store_m);
-  BlockInfo b;
-  memset(&b, 0, sizeof(b));
-  b.type = DATA_BLOCK;
-  strncopy(b.compressor, store_m, MAX_METHOD_STRLEN);
-  b.pos = out->tell();
   uint64 orig = 0;
   for (int i = 0; i < count; i++)
     orig += files[start + i].size;
+  std::string prepared = canonize_method_chain(method ? method : aNO_COMPRESSION, haskell_dict_limit((FILESIZE)orig));
+  char compress_m[MAX_METHOD_STRLEN], store_m[MAX_METHOD_STRLEN];
+  wrap_encryption(prepared.c_str(), password, algorithm, compress_m, store_m);
+  BlockInfo b;
+  memset(&b, 0, sizeof(b));
+  b.type = DATA_BLOCK;
+  strncopy(b.compressor, (char *)purify_stored_method(store_m).c_str(), MAX_METHOD_STRLEN);
+  b.pos = out->tell();
   b.origsize = (FILESIZE)orig;
 
   if (orig == 0) {
@@ -1878,12 +2310,14 @@ static BlockInfo compress_range(IArchiveWriter *out, const char *method, const c
 struct BlockTask {
   int start;
   int count;
+  std::string method;
 };
 
 struct BlockCompressJob {
   int             block_idx;
   int             start;
   int             count;
+  std::string     method;
   TempBlockWriter writer;
   BlockInfo       info;
   int             errcode;
@@ -1917,7 +2351,8 @@ static ARC_THREAD_CALL block_worker_func(void *arg) {
     ctx->mutex.unlock();
 
     BlockCompressJob *job = (*ctx->jobs)[idx];
-    job->info = compress_range(&job->writer, ctx->method, ctx->password, ctx->algorithm, ctx->files, job->start, job->count, false);
+    const char *job_method = job->method.empty() ? ctx->method : job->method.c_str();
+    job->info = compress_range(&job->writer, job_method, ctx->password, ctx->algorithm, ctx->files, job->start, job->count, false);
     job->done = true;
   }
   return ARC_THREAD_RET_VAL;
@@ -1932,7 +2367,9 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
                           uint64 &out_total_written,
                           const std::string &sfx_stub = "",
                           uint64 solid_block_size = 0,
-                          int solid_block_files = 0) {
+                          int solid_block_files = 0,
+                          const std::vector<std::string> &extra_filters = std::vector<std::string>(),
+                          bool sort_files = true) {
   VolumeWriter out(arcname, vol_size);
   CHECK(out.open(), (s, "ERROR: can't create archive %s", arcname.c_str()));
 
@@ -1945,6 +2382,10 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
       CHECK(out.write(sfx_buf, nr), (s, "ERROR: failed writing SFX stub into %s", arcname.c_str()));
     }
     fclose(sf);
+  }
+
+  if (sort_files) {
+    std::sort(files.begin(), files.end(), file_sort_epn);
   }
 
   ByteWriter header;
@@ -1962,12 +2403,59 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
       msg("Compressing %s (%llu bytes)\n", disp.c_str(), (unsigned long long)files[i].size);
   }
 
+  std::vector<std::pair<std::string, std::string> > auto_groups;
+  std::string default_method = method ? method : aNO_COMPRESSION;
+  bool use_auto = is_auto_method_name(method);
+  if (use_auto) {
+    auto_groups = expand_auto_groups(method, GetCompressionThreads());
+    if (!extra_filters.empty()) {
+      for (size_t gi = 0; gi < auto_groups.size(); gi++)
+        auto_groups[gi].second = apply_extra_filters(auto_groups[gi].second, extra_filters);
+    }
+    default_method = auto_default_method(auto_groups);
+    if (sort_files)
+      std::sort(files.begin(), files.end(), file_sort_epn);
+    if (auto_has_detectable_types(auto_groups))
+      detect_file_types(files, auto_method_level(method));
+    std::map<std::string, std::vector<FileRec> > by_method;
+    std::vector<std::string> method_order;
+    for (size_t i = 0; i < files.size(); i++) {
+      std::string mth = auto_method_for_type(auto_groups, files[i].datatype);
+      if (by_method.find(mth) == by_method.end())
+        method_order.push_back(mth);
+      by_method[mth].push_back(files[i]);
+    }
+    std::sort(method_order.begin(), method_order.end());
+    std::vector<FileRec> reordered;
+    reordered.reserve(files.size());
+    for (size_t i = 0; i < method_order.size(); i++) {
+      std::vector<FileRec> &grp = by_method[method_order[i]];
+      reordered.insert(reordered.end(), grp.begin(), grp.end());
+    }
+    files.swap(reordered);
+  }
+
   std::vector<BlockTask> tasks;
-  if (solid == 1 && solid_block_size == 0 && solid_block_files == 0) {
+  if (use_auto && !files.empty()) {
+    int i = 0;
+    while (i < (int)files.size()) {
+      std::string mth = auto_method_for_type(auto_groups, files[i].datatype);
+      int j = i + 1;
+      while (j < (int)files.size() && auto_method_for_type(auto_groups, files[j].datatype) == mth)
+        j++;
+      BlockTask t;
+      t.start = i;
+      t.count = j - i;
+      t.method = mth;
+      tasks.push_back(t);
+      i = j;
+    }
+  } else if (solid == 1 && solid_block_size == 0 && solid_block_files == 0) {
     if (!files.empty()) {
       BlockTask t;
       t.start = 0;
       t.count = (int)files.size();
+      t.method = default_method;
       tasks.push_back(t);
     }
   } else if (solid == 0 || solid_block_files == 1) {
@@ -1975,6 +2463,7 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
       BlockTask t;
       t.start = i;
       t.count = 1;
+      t.method = default_method;
       tasks.push_back(t);
     }
   } else if (solid_block_files > 1) {
@@ -1982,6 +2471,7 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
       BlockTask t;
       t.start = i;
       t.count = std::min(solid_block_files, (int)files.size() - i);
+      t.method = default_method;
       tasks.push_back(t);
     }
   } else if (solid_block_size > 0) {
@@ -1993,6 +2483,7 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
         BlockTask t;
         t.start = cur_start;
         t.count = i - cur_start + 1;
+        t.method = default_method;
         tasks.push_back(t);
         cur_start = i + 1;
         cur_size = 0;
@@ -2002,6 +2493,7 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
       BlockTask t;
       t.start = cur_start;
       t.count = (int)files.size() - cur_start;
+      t.method = default_method;
       tasks.push_back(t);
     }
   } else {
@@ -2009,8 +2501,29 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
       BlockTask t;
       t.start = 0;
       t.count = (int)files.size();
+      t.method = default_method;
       tasks.push_back(t);
     }
+  }
+
+  {
+    std::vector<BlockTask> expanded;
+    expanded.reserve(tasks.size());
+    for (size_t i = 0; i < tasks.size(); i++) {
+      const std::string &mth = tasks[i].method.empty() ? default_method : tasks[i].method;
+      if (tasks[i].count > 1 && method_is_nonsolid(mth)) {
+        for (int k = 0; k < tasks[i].count; k++) {
+          BlockTask t;
+          t.start = tasks[i].start + k;
+          t.count = 1;
+          t.method = mth;
+          expanded.push_back(t);
+        }
+      } else {
+        expanded.push_back(tasks[i]);
+      }
+    }
+    tasks.swap(expanded);
   }
 
   std::vector<DataBlockRec> data_blocks;
@@ -2022,7 +2535,8 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
       DataBlockRec rec;
       rec.start = tasks[i].start;
       rec.count = tasks[i].count;
-      rec.info = compress_range(&out, method, password, algorithm, files_ptr, rec.start, rec.count, true);
+      const char *block_method = tasks[i].method.empty() ? default_method.c_str() : tasks[i].method.c_str();
+      rec.info = compress_range(&out, block_method, password, algorithm, files_ptr, rec.start, rec.count, true);
       data_blocks.push_back(rec);
     }
   } else {
@@ -2032,6 +2546,7 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
       job->block_idx = (int)i;
       job->start = tasks[i].start;
       job->count = tasks[i].count;
+      job->method = tasks[i].method.empty() ? default_method : tasks[i].method;
       jobs.push_back(job);
     }
 
@@ -2069,16 +2584,18 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
     }
   }
 
+  std::string dir_method = canonize_method_chain(aDEFAULT_DIR_COMPRESSION, 0);
   char dir_compress_m[MAX_METHOD_STRLEN], dir_store_m[MAX_METHOD_STRLEN];
-  wrap_encryption(aNO_COMPRESSION, hp_password, algorithm, dir_compress_m, dir_store_m);
+  wrap_encryption(dir_method.c_str(), hp_password, algorithm, dir_compress_m, dir_store_m);
 
   FILESIZE dir_pos = out.tell();
   ByteWriter dir;
   write_dir_block(dir, data_blocks, files, dir_pos);
   BlockInfo dir_block = write_control_block(&out, DIR_BLOCK, dir_compress_m, dir_store_m, dir);
 
+  std::string footer_method = canonize_method_chain(aDEFAULT_DIR_COMPRESSION, 0);
   char footer_compress_m[MAX_METHOD_STRLEN], footer_store_m[MAX_METHOD_STRLEN];
-  wrap_encryption(aNO_COMPRESSION, hp_password, algorithm, footer_compress_m, footer_store_m);
+  wrap_encryption(footer_method.c_str(), hp_password, algorithm, footer_compress_m, footer_store_m);
 
   FILESIZE footer_pos = out.tell();
   BlockInfo control[2];
@@ -2472,6 +2989,7 @@ int main(int argc, char **argv) {
   int solid_block_files = 0;
   int ep = 0;
   int noarcext = 0;
+  bool sort_files = true;
   bool create_sfx = false;
   std::string sfx_stub_path;
   uint64 vol_size = 0;
@@ -2581,6 +3099,7 @@ int main(int argc, char **argv) {
       else if (strequ(a, "-dict") || strequ(a, "--dict")) filters.push_back("dict");
       else if (strequ(a, "-lzp") || strequ(a, "--lzp")) filters.push_back("lzp");
       else if (strequ(a, "-mm") || strequ(a, "--mm")) filters.push_back("mm");
+      else if (strequ(a, "-tta") || strequ(a, "--tta")) filters.push_back("tta");
       else if (is_diskpath_opt(a, opt_val, opt_next)) {
         if (opt_next && argi + 1 < argc) diskpath = clean_option_path(argv[++argi]);
         else diskpath = clean_option_path(opt_val);
@@ -2606,7 +3125,13 @@ int main(int argc, char **argv) {
         if (argi + 1 < argc && argv[argi + 1][0] != '-') argi++;
       }
       else if (start_with(a, "-w") || strncasecmp(a, "--workdir=", 10) == 0) {}
-      else if (strncasecmp(a, "-di", 3) == 0 || strncasecmp(a, "-ds", 3) == 0 ||
+      else if (strcasecmp(a, "-ds-") == 0 || strcasecmp(a, "--sort=-") == 0) {
+        sort_files = false;
+      }
+      else if (start_with(a, "-ds") || start_with(a, "--sort")) {
+        sort_files = true;
+      }
+      else if (strncasecmp(a, "-di", 3) == 0 ||
                strncasecmp(a, "-ed", 3) == 0 || strcasecmp(a, "-o+") == 0 ||
                strcasecmp(a, "-o-") == 0 || strcasecmp(a, "-y") == 0 ||
                strcasecmp(a, "-n") == 0 || strcasecmp(a, "--nodir") == 0 ||
@@ -2679,21 +3204,17 @@ int main(int argc, char **argv) {
   if (hp_password && !*hp_password) hp_password = NULL;
   if (hp_password && !password) password = hp_password;
 
-  std::string base_method = method ? map_method(method) : (!filters.empty() ? "lzma:8m" : "storing");
-  std::string final_method;
-  for (size_t i = 0; i < filters.size(); i++) {
-    const std::string &f = filters[i];
-    if (base_method.find(f) == std::string::npos && final_method.find(f) == std::string::npos) {
-      if (!final_method.empty()) final_method += '+';
-      final_method += f;
-    }
-  }
-  if (!final_method.empty()) {
-    final_method += '+';
-    final_method += base_method;
+  bool auto_m = method && is_auto_method_name(method);
+  std::vector<std::string> extra_filters;
+  std::string base_method;
+  if (auto_m) {
+    base_method = method;
+    extra_filters = filters;
   } else {
-    final_method = base_method;
+    base_method = method ? map_method(method) : (!filters.empty() ? "lzma:8m" : "storing");
+    extra_filters.clear();
   }
+  std::string final_method = auto_m ? base_method : apply_extra_filters(base_method, filters);
   if (limit_decomp_mem > 0 || limit_comp_mem > 0) {
     final_method = apply_mem_limits(final_method, limit_decomp_mem, limit_comp_mem);
   }
@@ -2702,6 +3223,7 @@ int main(int argc, char **argv) {
 
   int num_threads = (custom_threads > 0) ? custom_threads : GetProcessorsCount();
   SetCompressionThreads(num_threads);
+  method = method_str.c_str();
 
   ExistingArchiveInfo existing_info;
   bool archive_exists = inspect_archive(arcname, password ? password : hp_password, existing_info);
@@ -2823,6 +3345,7 @@ int main(int argc, char **argv) {
         f.mode = ef.mode;
         f.is_symlink = ef.is_symlink;
         f.symlink_target = ef.symlink_target;
+        f.datatype.clear();
         new_files.push_back(f);
       }
     }
@@ -2834,7 +3357,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> out_vols;
     uint64 total_w = 0;
     write_archive(tmp_arc, vol_size, new_files, solid, method, password, hp_password, algorithm,
-                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files);
+                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files, extra_filters);
     replace_archive_files(arcname, tmp_arc, vol_size, !active_sfx_stub.empty());
     remove_dir_recursive(temp_dir);
     if (vol_size > 0 && out_vols.size() > 1) {
@@ -2910,6 +3433,7 @@ int main(int argc, char **argv) {
         f.mode = ef.mode;
         f.is_symlink = ef.is_symlink;
         f.symlink_target = ef.symlink_target;
+        f.datatype.clear();
         combined_files.push_back(f);
       }
     }
@@ -2926,7 +3450,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> out_vols;
     uint64 total_w = 0;
     write_archive(tmp_arc, vol_size, combined_files, solid, method, password, hp_password, algorithm,
-                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files);
+                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files, extra_filters);
     replace_archive_files(arcname, tmp_arc, vol_size, !active_sfx_stub.empty());
     remove_dir_recursive(temp_dir);
     if (vol_size > 0 && out_vols.size() > 1) {
@@ -3006,6 +3530,7 @@ int main(int argc, char **argv) {
         f.mode = ef.mode;
         f.is_symlink = ef.is_symlink;
         f.symlink_target = ef.symlink_target;
+        f.datatype.clear();
         combined_files.push_back(f);
       }
     }
@@ -3022,7 +3547,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> out_vols;
     uint64 total_w = 0;
     write_archive(tmp_arc, vol_size, combined_files, solid, method, password, hp_password, algorithm,
-                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files);
+                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files, extra_filters);
     replace_archive_files(arcname, tmp_arc, vol_size, !active_sfx_stub.empty());
     remove_dir_recursive(temp_dir);
     if (vol_size > 0 && out_vols.size() > 1) {
@@ -3072,6 +3597,7 @@ int main(int argc, char **argv) {
         f.mode = ef.mode;
         f.is_symlink = ef.is_symlink;
         f.symlink_target = ef.symlink_target;
+        f.datatype.clear();
         combined_files.push_back(f);
       }
     }
@@ -3085,7 +3611,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> out_vols;
     uint64 total_w = 0;
     write_archive(tmp_arc, vol_size, combined_files, solid, method, password, hp_password, algorithm,
-                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files);
+                  comment.empty() ? existing_info.comment : comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files, extra_filters);
     replace_archive_files(arcname, tmp_arc, vol_size, !active_sfx_stub.empty());
     remove_dir_recursive(temp_dir);
     if (vol_size > 0 && out_vols.size() > 1) {
@@ -3123,7 +3649,7 @@ int main(int argc, char **argv) {
 
   std::vector<std::string> out_vols;
   uint64 total_w = 0;
-  write_archive(arcname, vol_size, files, solid, method, password, hp_password, algorithm, comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files);
+  write_archive(arcname, vol_size, files, solid, method, password, hp_password, algorithm, comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files, extra_filters, sort_files);
   if (!active_sfx_stub.empty()) {
     chmod(arcname.c_str(), 0755);
     msg("Created SFX archive %s (%llu bytes)\n", arcname.c_str(), (unsigned long long)total_w);

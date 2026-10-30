@@ -278,6 +278,30 @@ int  RunCommand (const CFILENAME command,  const CFILENAME curdir, int wait_fini
 void RunFile    (const CFILENAME filename, const CFILENAME curdir, int wait_finish);  // Execute file `filename` in the directory `curdir` optionally waiting until it finished
 void SetTempDir (const CFILENAME dir);     // Set temporary files directory
 CFILENAME GetTempDir (void);               // Return last value set or GetTempPath (%TEMP)
+void SetCompressionThreadPriority (void);
+
+
+#define GCC_VERSION (__GNUC__ * 100 + __GNUC_MINOR__)
+
+#if (GCC_VERSION >= 302) || (__INTEL_COMPILER >= 800) || defined(__clang__)
+#  define expect(expr,value)    (__builtin_expect ((expr),(value)) )
+#else
+#  define expect(expr,value)    (expr)
+#endif
+
+#define likely(expr)     expect((expr) != 0, 1)
+#define unlikely(expr)   expect((expr) != 0, 0)
+
+#if (GCC_VERSION >= 304)
+#  define prefetch(var)   __builtin_prefetch(&(var))
+#elif 1
+#include <xmmintrin.h>
+#  define prefetch(var)   (_mm_prefetch((char*)&(var),_MM_HINT_T0))
+#else
+#  define prefetch(var)   ((void)0)
+#endif
+
+#define CACHE_ROW 64
 
 
 // ****************************************************************************
@@ -481,8 +505,10 @@ extern FILE *g_logfile;
 // Include statements marked as stat(..)  only if we enabled gathering stats
 #ifdef STAT
 #define stat(stmt)  stmt
+#define stat_only(stmt)  stmt
 #else
 #define stat(stmt)  ((void)0)
+#define stat_only(stmt)  ((void)0)
 #endif
 
 // Define default parameter value only when compiled as C++
@@ -537,6 +563,7 @@ char *str_replace   (char *orig, char *from, char *to);    // Replace substring 
 MemSize parseInt (char *param, int *error);  // If the string param contains an integer, return it - otherwise set error=1
 MemSize parseMem (char *param, int *error);  // Similarly, but the string param can contain a suffix b/k/m/g/^, representing units of memory, or in the case of '^' (default), the relevant power of 2
 void showMem (MemSize mem, char *result);    // Returns a string with the amount of memory
+MemSize rounddown_mem (MemSize n);           // Round memory amount down to a "human" boundary
 
 
 // Round first number *down* to divisible by second one

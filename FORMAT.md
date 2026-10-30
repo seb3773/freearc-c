@@ -128,6 +128,8 @@ The `DIR_BLOCK` contains the complete catalog of files stored in the archive:
    - `issymlink[]`: Symbolic link indicators.
    - `symlink_target[]`: Symlink target path string.
 
+The `DIR_BLOCK` payload is compressed with LZMA (default `lzma:1mb:normal:bt4:32`), minimizing metadata overhead across large file sets while maintaining fast directory retrieval.
+
 ---
 
 ## 7. Compression Pipelines & Filters
@@ -143,6 +145,7 @@ FreeArc combines preprocessors and compressors using string specifications. Filt
 | | GRZip | `grzip` | Burrows-Wheeler transform + block-sorting |
 | | Tornado | `tor` | High-speed LZ77 compressor |
 | | TTA | `tta` | True Audio lossless multichannel codec |
+| | 4x4 | `4x4` | Intra-stream multithreading chunked wrapper (`4x4:method[:size][:threads]`) |
 | **Filters** | BCJ | `bcj` | Branch/Call/Jump converter for x86 binaries |
 | | REP | `rep` | Long-distance repetition preprocessor |
 | | DICT | `dict` | Dictionary-based word preprocessor |
