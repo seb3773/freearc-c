@@ -848,7 +848,7 @@ struct MYFILE
     }
     return false;
   }
-  virtual bool rename (MYFILE &other)     {return rename_file(filename, other.filename);}
+  virtual bool rename (MYFILE &other)     {return rename_file(filename, other.filename) == 0;}
   virtual int  remove ()                  {return remove_file(filename);}
 
   bool tryOpen (MODE mode)
@@ -1020,8 +1020,10 @@ struct MYFILE
 
   FILESIZE tryRead (void *buf, FILESIZE size)
   {
+    if (size <= 0) return 0;
+    if (handle < 0) return -1;
     if (num_vols > 0) {
-      if (virt_pos >= total_virt_size || size <= 0) return 0;
+      if (virt_pos >= total_virt_size) return 0;
       char *dst = (char*)buf;
       FILESIZE total_read = 0;
       while (total_read < size && virt_pos < total_virt_size) {
@@ -1049,14 +1051,22 @@ struct MYFILE
         }
         FILESIZE want = size - total_read;
         if (want > left_in_vol) want = left_in_vol;
-        int res = ::read(handle, dst + total_read, (size_t)want);
+        size_t to_read = (size_t)want;
+#ifdef FREEARC_WIN
+        if (to_read > 0x7FFFFFFF) to_read = 0x7FFFFFFF;
+#endif
+        int res = ::read(handle, dst + total_read, to_read);
         if (res <= 0) break;
         total_read += res;
         virt_pos += res;
       }
       return total_read;
     } else {
-      int result = ::read (handle, buf, size);
+      size_t to_read = (size_t)size;
+#ifdef FREEARC_WIN
+      if (to_read > 0x7FFFFFFF) to_read = 0x7FFFFFFF;
+#endif
+      int result = ::read (handle, buf, to_read);
       CHECK(result>=0, (s,"ERROR: file read operation failed"));
       return result;
     }

@@ -208,6 +208,7 @@ Generate_Setter(LimitBlockSize)
 
 #endif  // !defined (FREEARC_DECOMPRESS_ONLY)
 
+
 // ���������� � ������, ����������� ��� ����������
 MemSize GetDecompressionMem (char *method)
 {

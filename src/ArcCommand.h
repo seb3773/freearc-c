@@ -310,7 +310,7 @@ void RegisterExternalCompressors (char *progname)
 #ifndef FREEARC_TINY
   // Open config file arc.ini found in the same dir as sfx/unarc
   char *cfgfile = "arc.ini";
-  char *name = (char*) malloc (strlen(progname) + strlen(cfgfile));
+  char *name = (char*) malloc (strlen(progname) + strlen(cfgfile) + 2);
                                                  if (!name)  return;
   strcpy(name, progname);
   strcpy(drop_dirname(name), cfgfile);
@@ -321,8 +321,8 @@ void RegisterExternalCompressors (char *progname)
   FILESIZE size = f.size();                      if (!size)  return;
   char *contents = (char*) malloc(size+2);       if (!contents)  return;
   *contents = '\n';
-  size = f.tryRead(contents+1, size);            if (size<0)  return;
-  contents[size] = '\0';
+  FILESIZE bytes_read = f.tryRead(contents+1, size); if (bytes_read<0)  return;
+  contents[bytes_read+1] = '\0';
 
   // Register each external compressor found in config file
   char *ANY_HEADING = "\n[", *EXT_HEADING = "[External compressor:";

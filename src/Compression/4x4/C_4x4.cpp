@@ -19,7 +19,7 @@ static MemSize _4x4_effective_block (_4x4_METHOD *method)
   if (method->BlockSize) return method->BlockSize;
 #ifndef FREEARC_DECOMPRESS_ONLY
   MemSize dict = GetDictionary (method->Method);
-  if (dict) return dict;
+  if (dict > 0 && dict < 1024*mb) return dict;
 #endif
   return 8*mb;
 }
@@ -141,6 +141,8 @@ struct _4x4Job : WorkerThread
   _4x4MTCompressor *compressor;
   uint32 orig_size;
   void *CodecState;
+  int InBufSize;
+  int OutBufSize;
   int init();
   int process();
   int done();
@@ -189,11 +191,15 @@ int _4x4Job::init()
   compressor = (_4x4MTCompressor *) task;
   InBuf = NULL;
   OutBuf = NULL;
+  InBufSize = 0;
+  OutBufSize = 0;
   orig_size = 0;
   CodecState = NULL;
   if (compressor->direction == 0) {
     InBuf  = (char *) BigAlloc (compressor->in_buf_size);
     OutBuf = (char *) BigAlloc (compressor->out_buf_size);
+    InBufSize = compressor->in_buf_size;
+    OutBufSize = compressor->out_buf_size;
     return (InBuf && OutBuf) ? 0 : FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
   }
   return 0;
@@ -204,8 +210,8 @@ int _4x4Job::done()
   if (CodecState && compressor && compressor->cmethod)
     compressor->cmethod->DeCompressMem ((COMPRESSION) compressor->direction, NULL, 0, NULL, NULL, NULL, NULL, &CodecState);
   CodecState = NULL;
-  BigFree (OutBuf); OutBuf = NULL;
-  BigFree (InBuf);  InBuf  = NULL;
+  BigFree (OutBuf); OutBuf = NULL; OutBufSize = 0;
+  BigFree (InBuf);  InBuf  = NULL; InBufSize = 0;
   return 0;
 }
 
@@ -273,17 +279,26 @@ int _4x4MTCompressor::main_cycle()
 #endif
   }
 
+  int n;
   unsigned char ver[4];
-  int n = cb ("read", ver, 4, cbdata);
-  if (n == 0) return FREEARC_OK;
-  if (n != 4) return n < 0 ? n : FREEARC_ERRCODE_READ;
+  int read_ver = 0;
+  while (read_ver < 4) {
+    n = cb ("read", ver + read_ver, 4 - read_ver, cbdata);
+    if (n == 0 && read_ver == 0) return FREEARC_OK;
+    if (n <= 0) return n < 0 ? n : FREEARC_ERRCODE_READ;
+    read_ver += n;
+  }
   if (value32 (ver) != _4x4_VERSION) return FREEARC_ERRCODE_BAD_COMPRESSED_DATA;
 
   for (;;) {
     unsigned char hdr[_4x4_HEADER_SIZE];
-    n = cb ("read", hdr, _4x4_HEADER_SIZE, cbdata);
-    if (n == 0) return FREEARC_OK;
-    if (n != _4x4_HEADER_SIZE) return n < 0 ? n : FREEARC_ERRCODE_READ;
+    int read_hdr = 0;
+    while (read_hdr < _4x4_HEADER_SIZE) {
+      n = cb ("read", hdr + read_hdr, _4x4_HEADER_SIZE - read_hdr, cbdata);
+      if (n == 0 && read_hdr == 0) return FREEARC_OK;
+      if (n <= 0) return n < 0 ? n : FREEARC_ERRCODE_READ;
+      read_hdr += n;
+    }
 
     uint32 out_size = value32 (hdr);
     uint32 in_size  = value32 (hdr + 4);
@@ -294,24 +309,35 @@ int _4x4MTCompressor::main_cycle()
     _4x4Job *job = FreeJobs.Get();
     if (job == NULL || errcode < 0) return errcode < 0 ? errcode : 0;
 
-    if (job->InBuf == NULL) {
-      int alloc_in  = need_in;
-      int alloc_out = need_out;
+    if (job->InBuf == NULL || need_in > job->InBufSize) {
+      int alloc_in = need_in;
       if (alloc_in < BlockSize) alloc_in = BlockSize;
-      if (alloc_out < BlockSize) alloc_out = BlockSize;
-      job->InBuf  = (char *) BigAlloc (alloc_in);
-      job->OutBuf = (char *) BigAlloc (alloc_out);
-      if (!job->InBuf || !job->OutBuf) return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
-      in_buf_size = alloc_in;
-      out_buf_size = alloc_out;
-      BlockSize = alloc_out > alloc_in ? alloc_out : alloc_in;
+      BigFree (job->InBuf);
+      job->InBuf = (char *) BigAlloc (alloc_in);
+      if (!job->InBuf) return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+      job->InBufSize = alloc_in;
+      if (alloc_in > in_buf_size) in_buf_size = alloc_in;
     }
-    if (need_in > in_buf_size || need_out > out_buf_size)
-      return FREEARC_ERRCODE_BAD_COMPRESSED_DATA;
+
+    if (job->OutBuf == NULL || need_out > job->OutBufSize) {
+      int alloc_out = need_out;
+      if (alloc_out < BlockSize) alloc_out = BlockSize;
+      BigFree (job->OutBuf);
+      job->OutBuf = (char *) BigAlloc (alloc_out);
+      if (!job->OutBuf) return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+      job->OutBufSize = alloc_out;
+      if (alloc_out > out_buf_size) out_buf_size = alloc_out;
+    }
 
     if (need_in > 0) {
-      n = cb ("read", job->InBuf, need_in, cbdata);
-      if (n != need_in) return n < 0 ? n : FREEARC_ERRCODE_READ;
+      char *p = job->InBuf;
+      int left = need_in;
+      while (left > 0) {
+        n = cb ("read", p, left, cbdata);
+        if (n <= 0) return n < 0 ? n : FREEARC_ERRCODE_READ;
+        p += n;
+        left -= n;
+      }
     }
     job->InSize = need_in;
     job->orig_size = out_size;

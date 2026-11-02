@@ -13,9 +13,9 @@ extern "C" {
 int long_path_size (void);                                 // Максимальная длина имени файла
 void FormatDateTime (char *buf, int bufsize, time_t t);    // Отформатировать время/дату для команды листинга
 FILENAME GetExeName (FILENAME buf, int bufsize);          // Вернуть имя исполняемого файла программы
-unsigned GetPhysicalMemory (void);                         // Объём физической памяти компьютера
-unsigned GetMaxMemToAlloc (void);                          // Макс. объём памяти который мы можем выделить в адресном пространстве нашего процесса
-unsigned GetAvailablePhysicalMemory (void);                // Объём свободной физической памяти компьютера
+uint64 GetPhysicalMemory (void);                         // Объём физической памяти компьютера
+uint64 GetMaxMemToAlloc (void);                          // Макс. объём памяти который мы можем выделить в адресном пространстве нашего процесса
+uint64 GetAvailablePhysicalMemory (void);                // Объём свободной физической памяти компьютера
 void TestMalloc (void);                                    // Печатает статистику свободной памяти
 int GetProcessorsCount (void);                             // Общее количество процессоров (точнее, физических ядер) в системе. Используется для определения того, сколько "тяжёлых" вычислительных потоков целесообразно запустить в программе
 uint UpdateCRC (void *Addr, uint Size, uint StartCRC);     // Обновить CRC содержимым блока данных

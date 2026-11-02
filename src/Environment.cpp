@@ -151,24 +151,31 @@ FILENAME GetExeName (FILENAME buf, int bufsize)
   return buf;
 }
 
-unsigned GetPhysicalMemory (void)
+uint64 GetPhysicalMemory (void)
 {
-  MEMORYSTATUS buf;
-    GlobalMemoryStatus (&buf);
-  return buf.dwTotalPhys;
+  MEMORYSTATUSEX buf;
+  buf.dwLength = sizeof (buf);
+  if (GlobalMemoryStatusEx (&buf))
+    return buf.ullTotalPhys;
+  return 0;
 }
 
-unsigned GetMaxMemToAlloc (void)
+uint64 GetMaxMemToAlloc (void)
 {
-  LargestMemoryBlock block;
-  return block.size - 5*mb;
+  MEMORYSTATUSEX buf;
+  buf.dwLength = sizeof (buf);
+  if (GlobalMemoryStatusEx (&buf))
+    return buf.ullAvailVirtual > 5*mb ? buf.ullAvailVirtual - 5*mb : 0;
+  return 4ULL * gb;
 }
 
-unsigned GetAvailablePhysicalMemory (void)
+uint64 GetAvailablePhysicalMemory (void)
 {
-  MEMORYSTATUS buf;
-    GlobalMemoryStatus (&buf);
-  return buf.dwAvailPhys;
+  MEMORYSTATUSEX buf;
+  buf.dwLength = sizeof (buf);
+  if (GlobalMemoryStatusEx (&buf))
+    return buf.ullAvailPhys;
+  return 0;
 }
 
 int GetProcessorsCount (void)
@@ -231,25 +238,23 @@ DWORD RegistryDeleteTree(HKEY hStartKey, LPTSTR pKeyName)
 #include <unistd.h>
 #include <sys/sysinfo.h>
 
-unsigned GetPhysicalMemory (void)
+uint64 GetPhysicalMemory (void)
 {
   struct sysinfo si;
     sysinfo(&si);
-  return si.totalram*si.mem_unit;
+  return (uint64)si.totalram*si.mem_unit;
 }
 
-unsigned GetMaxMemToAlloc (void)
+uint64 GetMaxMemToAlloc (void)
 {
-  //struct sysinfo si;
-  //  sysinfo(&si);
-  return UINT_MAX;
+  return UINT64_MAX;
 }
 
-unsigned GetAvailablePhysicalMemory (void)
+uint64 GetAvailablePhysicalMemory (void)
 {
   struct sysinfo si;
     sysinfo(&si);
-  return si.freeram*si.mem_unit;
+  return (uint64)si.freeram*si.mem_unit;
 }
 
 int GetProcessorsCount (void)

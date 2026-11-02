@@ -159,8 +159,9 @@ void PROCESS::outfile_close()
 int PROCESS::DecompressCallback (const char *what, void *buf, int size)
 {
   if (strequ (what, "read")) {
-    int read_bytes = mymin (bytes_left, size);
-    if (read_bytes==0)  return 0;
+    if (bytes_left <= 0 || size <= 0)  return 0;
+    int read_bytes = (int)mymin ((uint64)bytes_left, (uint64)size);
+    if (read_bytes <= 0)  return 0;
     if (!UI->ProgressRead (archive_pos))  quit(FREEARC_ERRCODE_OPERATION_TERMINATED);
     int len = infile->tryRead (buf, read_bytes);
     if (len>0)  bytes_left -= len,  archive_pos += len;
@@ -202,9 +203,19 @@ char *AddTempfile (char *compressor)
     mem += memi[i] = GetDecompressionMem(cm[i]);
 
   // Maximum memory allowed to use
-  uint64 maxmem = mymin (GetPhysicalMemory()/4*3, GetMaxMemToAlloc());
+  uint64 phys = GetPhysicalMemory();
+  uint64 maxmem = phys > 0 ? (phys / 4 * 3) : (4ULL * gb);
+  uint64 maxalloc = GetMaxMemToAlloc();
+  if (maxalloc > 0)
+    maxmem = mymin (maxmem, maxalloc);
   if (CurrentProcess && CurrentProcess->cmd && CurrentProcess->cmd->limit_decomp_mem > 0)
     maxmem = mymin (maxmem, CurrentProcess->cmd->limit_decomp_mem);
+  else
+  {
+    // On 64-bit systems with no explicit -ld limit, do not inject tempfile buffering
+    free(compressor);
+    return NULL;
+  }
 
   // If memreqs are too large - add "tempfile" between methods
   if (mem > maxmem)
