@@ -321,4 +321,6 @@ sudo dpkg -i freearc_1.3.2-1_amd64.deb
 
 * **Native C/C++ Implementation**: [seb3773](https://github.com/seb3773)
 * **Original FreeArc Format & Algorithms**: Bulat Ziganshin
+* **Special Thanks & Testing**: [@ant-sh](https://github.com/ant-sh) for rigorous stress-testing on large real-world multi-gigabyte datasets, valuable edge-case bug reports, and validating extraction parity against the reference engine.
+
 
