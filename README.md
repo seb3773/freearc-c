@@ -31,6 +31,7 @@ This project fills this 15-year gap by providing a **100% native C/C++ suite** t
 * **Zero Haskell, Zero GHC, Zero Wine**: Pure standard C/C++ that compiles cleanly with standard GCC or Clang on any modern Linux system.
 * **Zero External Dependencies**: Produces lean, self-contained binaries (< 1 MB total suite: `arc` ~427 KB, `unarc` ~197 KB, `arc.sfx` ~194 KB).
 * **Total Binary Format Parity**: Strictly generates standard compliant blocks (`HEADER_BLOCK`, `DATA_BLOCK`, `DIR_BLOCK`, `FOOTER_BLOCK`) with 100% bit-exact DATA and DIR parity vs original Windows FreeArc 0.67 (`Arc.exe`) across all codecs and auto-profiles (`-m1` to `-m5x`).
+* **True 64-bit Architecture (No 2 GB RAM Ceiling)**: Fully breaks the 32-bit architectural barrier of legacy FreeArc 0.67 (which was strictly capped at 2 GB of virtual address space, causing notorious `Out of memory` and `data compression failed (-11)` crashes when handling large datasets, high thread counts `-mt`, or heavy dictionaries like `-ld3600m`). `freearc-c` natively supports 8 GB, 16 GB, 32 GB, 64 GB+ RAM allocations, enabling massive multi-gigabyte dictionaries and multi-core throughput on modern hardware.
 * **True Intra-Stream Multithreading (4x4)**: High-performance multi-core compression of single solid streams without breaking solid compression ratios, splitting streams into in-memory chunks processed concurrently.
 * **Historical 64-bit Bug Fixes & Codec Hardening**: Porting and running the codecs on modern 64-bit Linux addressed critical issues present in legacy FreeArc:
   * 64-bit pointer truncations in **LZP** and **GRZip**.
@@ -48,6 +49,7 @@ This project fills this 15-year gap by providing a **100% native C/C++ suite** t
 
 * **100% Native C/C++**: Zero Haskell, zero GHC, zero Wine, zero external library dependencies. Compiles cleanly with standard GCC/Clang on modern Linux and MinGW on Windows 64-bit.
 * **100% Bit-Exact Legacy Parity**: Full bit-for-bit parity on compressed payload (`DATA`) and directory block metadata (`DIR`) against original Windows FreeArc 0.67 (`Arc.exe`) across all codecs, filters, and auto-profiles (`-m1` through `-m5x`).
+* **True 64-bit Memory Freedom (No 2 GB Barrier)**: Unlike legacy 32-bit FreeArc (which failed with error `-11` or out-of-memory when RAM approached ~1.8 GB), `freearc-c` runs on a native 64-bit flat address space, allowing massive dictionaries (e.g. `-ld3600m`, `-lc8g`) and high concurrency (`-mt14`, `-mt32`) on multi-gigabyte/terabyte workloads.
 * **Intra-Stream Multithreading (4x4)**: Multi-core parallel compression inside single solid streams (`4x4:lzma`, `4x4:tor`), scaling linearly across CPU cores without creating separate solid block boundaries.
 * **Intelligent Auto-Profiles & File Grouping**: Complete `arc.groups` classification table (`$text`, `$compressed`, `$exe`, `$iso`, `$precomp`, `$obj`, `$bmp`, `$wav`) with dynamic content detection routing files to optimal compression pipelines.
 * **Full Archive Management**: Complete command set — add (`a`), update (`u`), freshen (`f`), delete (`d`), move (`m`), list (`l`/`v`), test (`t`), extract (`x`/`e`), and pipe (`p`/`-so`).
@@ -241,7 +243,10 @@ The native C/C++ engine incorporates a multi-tier multithreading architecture an
   * Automatically deployed in auto-profiles (`-m4`, `-m5`, `-m4x`, `-m5x`) whenever $\ge 3$ CPU cores are detected.
 * **Multi-Threaded Codec Internals**:
   * **REP Hasher**: Long-distance repetition filter uses `MultipleProcessingThreads` to parallelize match hash-table lookups across CPU cores.
-  * **LZMA Match Finder (`LzFindMt`)**: Dedicated worker threads for multi-threaded dictionary match finding.
+  * **LZMA Match Finder**: Multi-threaded dictionary match finding (`LzFindMt`) for standalone LZMA streams, with clean thread isolation inside `4x4` chunks to avoid thread over-subscription and excessive RAM usage.
+* **True 64-bit Address Space & Memory Scaling**:
+  * Legacy FreeArc 0.67 was a 32-bit application limited to 2 GB of virtual memory, making it prone to crashes on mixed-datatype datasets, high thread counts, or dictionary sizes $> 1\text{ GB}$.
+  * `freearc-c` operates with native 64-bit pointer and allocation models across Linux (`x86_64`) and Windows (`win64`), effortlessly scaling to 32 GB, 64 GB, or more RAM without address space fragmentation or memory exhaustion.
 * **Overlapping Asynchronous I/O Pipeline & Multi-Block Engine**:
   * Dual-buffering background `reader` thread with on-the-fly SIMD CRC-32 and dedicated background `writer` thread.
   * Thread pool for multi-block archives (non-solid `-s-`, partitioned `-s<size>`, `-s<N>f`) with deterministic ordered archive flushing.
