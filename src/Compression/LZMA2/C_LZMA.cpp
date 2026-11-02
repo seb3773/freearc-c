@@ -183,7 +183,7 @@ static void FillLzmaEncProps (CLzmaEncProps *props,
     case kBT4:  props->btMode = MF_BinaryTree;  props->numHashBytes = 4; break;
     case kHT4:  props->btMode = MF_HashTable;   props->numHashBytes = 4; break;
   }
-  props->numThreads = GetCompressionThreads();
+  props->numThreads = compress_all_at_once ? 1 : GetCompressionThreads();
   props->writeEndMark = 1;
   LzmaEncProps_Normalize(props);
 }
@@ -259,6 +259,8 @@ int lzma_compress2  (int dictionarySize,
     CLzmaEncProps props;
     FillLzmaEncProps (&props, dictionarySize, hashSize, algorithm, numFastBytes,
                       matchFinder, matchFinderCycles, posStateBits, litContextBits, litPosBits);
+    if (input && output && outputSize)
+      props.numThreads = 1;
     enc = LzmaEnc_Create(&g_Alloc);
     if (enc == 0)   return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
     res = LzmaEnc_SetProps(enc, &props);

@@ -258,11 +258,16 @@ static std::string clean_option_path(const std::string &raw) {
         (s[0] == '\'' && s[s.size() - 1] == '\'')) {
       s = s.substr(1, s.size() - 2);
       changed = true;
-    } else if (s[0] == '{' && s[s.size() - 1] == '}') {
-      s = s.substr(1, s.size() - 2);
-      changed = true;
     }
   }
+  // FreeArc brace syntax {disk_prefix}stored_dir -> strip braces for filesystem access
+  std::string no_braces;
+  no_braces.reserve(s.size());
+  for (size_t i = 0; i < s.size(); i++) {
+    if (s[i] != '{' && s[i] != '}')
+      no_braces.push_back(s[i]);
+  }
+  s.swap(no_braces);
   while (s.size() > 1 && (s[s.size() - 1] == '/' || s[s.size() - 1] == '\\')) {
 #ifdef _WIN32
     if (s.size() == 3 && isalpha((unsigned char)s[0]) && s[1] == ':') break;
@@ -591,7 +596,11 @@ static std::string join_fspath(const std::string &base, const std::string &rel) 
   char last = base[base.size() - 1];
   if (last == '/' || last == '\\')
     return base + rel;
+#ifdef _WIN32
+  return base + "\\" + rel;
+#else
   return base + "/" + rel;
+#endif
 }
 
 static char parse_arc_cmd(const char *s) {
@@ -1648,6 +1657,11 @@ static void read_listfile(const char *list, std::vector<std::string> &paths, con
     while (e > p && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t'))
       *--e = 0;
     if (!*p || *p == '#') continue;
+#ifndef _WIN32
+    for (char *c = p; *c; c++) {
+      if (*c == '\\') *c = '/';
+    }
+#endif
     paths.push_back(clean_option_path(p));
   }
   fclose(f);
@@ -2155,7 +2169,20 @@ public:
         std::vector<char>().swap(mem_buf);
       }
     }
-    if (fwrite(p, 1, n, temp_file) != n) return false;
+    const size_t CHUNK = 16 * 1024 * 1024;
+    size_t to_write = n;
+    const char *ptr = p;
+    while (to_write > 0) {
+      size_t cur = to_write < CHUNK ? to_write : CHUNK;
+      size_t written_now = fwrite(ptr, 1, cur, temp_file);
+      if (written_now != cur) {
+        msg("ERROR: failed to write %llu bytes to temporary file %s (disk full?)\n",
+            (unsigned long long)cur, temp_path.c_str());
+        return false;
+      }
+      ptr += cur;
+      to_write -= cur;
+    }
     written += n;
     return true;
   }
@@ -2369,7 +2396,9 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
                           uint64 solid_block_size = 0,
                           int solid_block_files = 0,
                           const std::vector<std::string> &extra_filters = std::vector<std::string>(),
-                          bool sort_files = true) {
+                          bool sort_files = true,
+                          uint64 limit_decomp_mem = 0,
+                          uint64 limit_comp_mem = 0) {
   VolumeWriter out(arcname, vol_size);
   CHECK(out.open(), (s, "ERROR: can't create archive %s", arcname.c_str()));
 
@@ -2411,6 +2440,10 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
     if (!extra_filters.empty()) {
       for (size_t gi = 0; gi < auto_groups.size(); gi++)
         auto_groups[gi].second = apply_extra_filters(auto_groups[gi].second, extra_filters);
+    }
+    if (limit_decomp_mem > 0 || limit_comp_mem > 0) {
+      for (size_t gi = 0; gi < auto_groups.size(); gi++)
+        auto_groups[gi].second = apply_mem_limits(auto_groups[gi].second, limit_decomp_mem, limit_comp_mem);
     }
     default_method = auto_default_method(auto_groups);
     if (sort_files)
@@ -2530,7 +2563,16 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
   FileRec *files_ptr = files.empty() ? NULL : &files[0];
   int threads = GetCompressionThreads();
 
-  if (threads <= 1 || tasks.size() <= 1) {
+  bool has_4x4 = false;
+  for (size_t i = 0; i < tasks.size(); i++) {
+    const std::string &mth = tasks[i].method.empty() ? default_method : tasks[i].method;
+    if (mth.find("4x4") != std::string::npos) {
+      has_4x4 = true;
+      break;
+    }
+  }
+
+  if (threads <= 1 || tasks.size() <= 1 || has_4x4 || use_auto) {
     for (size_t i = 0; i < tasks.size(); i++) {
       DataBlockRec rec;
       rec.start = tasks[i].start;
@@ -3649,7 +3691,7 @@ int main(int argc, char **argv) {
 
   std::vector<std::string> out_vols;
   uint64 total_w = 0;
-  write_archive(arcname, vol_size, files, solid, method, password, hp_password, algorithm, comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files, extra_filters, sort_files);
+  write_archive(arcname, vol_size, files, solid, method, password, hp_password, algorithm, comment, out_vols, total_w, active_sfx_stub, solid_block_size, solid_block_files, extra_filters, sort_files, limit_decomp_mem, limit_comp_mem);
   if (!active_sfx_stub.empty()) {
     chmod(arcname.c_str(), 0755);
     msg("Created SFX archive %s (%llu bytes)\n", arcname.c_str(), (unsigned long long)total_w);
