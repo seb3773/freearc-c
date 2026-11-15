@@ -386,7 +386,46 @@ struct Job
     int    bytes;
     int    L;
 
+    // PERF : 4 chaînes de hachage roulant indépendantes entrelacées (ILP : la boucle scalaire est
+    // limitée par la latence de la multiplication). Le hash roulant d'une fenêtre ne dépend que
+    // de ses L octets (arith. mod 2^32), donc ré-initialiser une chaîne au début d'un bloc donne
+    // exactement les mêmes valeurs -> hashtable[] identique (bit-exact).
     void process()
+    {
+        const int NL = 4;
+        int num_blocks = bytes/L;
+        if (num_blocks < NL*16)  {process_ref(); return;}
+        const uint32 P = PRIME, PL = power(PRIME,L);
+        const int per = num_blocks/NL;
+        uint32 h[NL];  byte *pt[NL];  int *out[NL];
+        for (int k=0; k<NL; k++) {
+            pt[k] = buf + (size_t)k*per*L;  out[k] = hashtable + 2*k*per;  h[k] = 0;
+            for (int i=0; i<L; i++)  h[k] = h[k]*P + pt[k][i];
+        }
+        for (int b=0; b<per; b++) {
+            int32 mh[NL];  int mi[NL];
+            for (int k=0; k<NL; k++)  mh[k] = (int32)h[k], mi[k] = 0;
+            for (int i=0; i<L; i++) {
+                for (int k=0; k<NL; k++) {
+                    if unlikely((int32)h[k] > mh[k])  mh[k] = (int32)h[k], mi[k] = i;
+                    h[k] = h[k]*P + pt[k][L] - (uint32)pt[k][0]*PL;
+                    pt[k]++;
+                }
+            }
+            for (int k=0; k<NL; k++)  *out[k]++ = mh[k], *out[k]++ = mi[k];
+        }
+        // blocs restants : la chaîne 3 continue (son état correspond déjà à la bonne fenêtre)
+        for (int b=NL*per; b<num_blocks; b++) {
+            int32 mh = (int32)h[NL-1];  int mi = 0;
+            for (int i=0; i<L; i++, pt[NL-1]++) {
+                if unlikely((int32)h[NL-1] > mh)  mh = (int32)h[NL-1], mi = i;
+                h[NL-1] = h[NL-1]*P + pt[NL-1][L] - (uint32)pt[NL-1][0]*PL;
+            }
+            *out[NL-1]++ = mh;  *out[NL-1]++ = mi;
+        }
+    }
+
+    void process_ref()   // version originale
     {
         int   PRIME_power_L = power(PRIME,L);
         int  *hashptr       = hashtable;
@@ -445,6 +484,10 @@ int rep_compress (unsigned BlockSize, int MinCompression, int ChunkSize, int Min
     int *ht = (int*) BigAlloc(HTBUFS*HTCOUNT*sizeof(*ht));
     MultipleProcessingThreads<Job> HashingThreads;  HashingThreads.MaxJobs = HTBUFS;  HashingThreads.NumThreads = HTJOBS;
     if (ht==NULL || HashingThreads.start()!=0)  {errcode=FREEARC_ERRCODE_NOT_ENOUGH_MEMORY; goto finished;}
+    // BUGFIX: sous Windows (legacy) BigAlloc = VirtualAlloc -> mémoire à zéro. Sous Linux c'est malloc :
+    // quand les jobs ne sont pas alignés sur L, la boucle de matching lit des entrées ht[] jamais
+    // écrites -> indices aléatoires -> segfault. Zéro = comportement exact de l'encodeur legacy.
+    memset (ht, 0, HTBUFS*HTCOUNT*sizeof(*ht));
 
    {bool DoItOnce       = true;
     bool MoreInputData  = true;

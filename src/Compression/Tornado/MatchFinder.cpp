@@ -512,6 +512,50 @@ void CachingMatchFinder<N>::shift (BYTE *buf, int shift)
 // One more caching match finder. This one doesn't shift data in hash rows, but keeps head index instead
 // *****************************************************************************************************
 
+// PERF (SIMD) : saut vectoriel des paires {ptr,key} d'une ligne de hash qui ne peuvent rien
+// changer. Renvoie la 1re paire de [t,lim) avec ptr==0 OU ((key^K)&mask)==0, sinon lim.
+// Les paires sautées n'auraient eu AUCUN effet dans la boucle scalaire -> ordre de
+// traitement et résultat strictement identiques (bit-exact). SSE2 = base x86-64, pas de dispatch.
+#if defined(__SSE2__)
+#include <emmintrin.h>
+static inline PtrVal* cmf_skip (PtrVal *t, PtrVal *lim, UINT K, UINT mask)
+{
+    const __m128i kv = _mm_set_epi32 (K, 0, K, 0);        // lanes: ptr0 key0 ptr1 key1
+    const __m128i mv = _mm_set_epi32 (mask, -1, mask, -1);
+    const __m128i z  = _mm_setzero_si128();
+    while (lim - t >= 8) {                                  // 4 paires / itération
+        __m128i a = _mm_loadu_si128 ((const __m128i*) t);
+        __m128i b = _mm_loadu_si128 ((const __m128i*) (t+4));
+        a = _mm_cmpeq_epi32 (_mm_and_si128 (_mm_xor_si128 (a, kv), mv), z);
+        b = _mm_cmpeq_epi32 (_mm_and_si128 (_mm_xor_si128 (b, kv), mv), z);
+        int m = _mm_movemask_ps (_mm_castsi128_ps (a)) | (_mm_movemask_ps (_mm_castsi128_ps (b)) << 4);
+        if (m)  return t + ((__builtin_ctz(m) >> 1) << 1);
+        t += 8;
+    }
+    for (; t < lim; t += 2)
+        if (t[0]==0 || ((t[1]^K)&mask)==0)  return t;
+    return t;
+}
+#else
+static inline PtrVal* cmf_skip (PtrVal *t, PtrVal *lim, UINT K, UINT mask)
+{
+    for (; t < lim; t += 2)
+        if (t[0]==0 || ((t[1]^K)&mask)==0)  return t;
+    return t;
+}
+#endif
+// Variante cyclique : parcourt [table..rowend) puis [rowstart..tabend)
+static inline PtrVal* cmf_skip_cyc (PtrVal *table, PtrVal *tabend, PtrVal *rowstart, PtrVal *rowend, UINT K, UINT mask)
+{
+    if (table == tabend)  return table;
+    if (tabend < table) {
+        PtrVal *r = cmf_skip (table, rowend, K, mask);
+        if (r != rowend)  return r;
+        table = rowstart;
+    }
+    return cmf_skip (table, tabend, K, mask);
+}
+
 template <uint N>  // N is minimum match length (4..7)
 struct CycledCachingMatchFinder : BaseMatchFinder
 {
@@ -542,6 +586,7 @@ struct CycledCachingMatchFinder : BaseMatchFinder
         *table++ = fromPtr(p);
         *table++ = key(p);
         if (table==rowend)  table = rowstart;
+        const UINT K = key(p);
 
         // Check hash elements, searching for longest match
         // (there are five loops here - one used before any match is found,
@@ -556,6 +601,7 @@ struct CycledCachingMatchFinder : BaseMatchFinder
 
 //len0:
         while (table!=tabend) {
+            table = cmf_skip_cyc (table, tabend, rowstart, rowend, K, 0xffu);  if (table==tabend) break;
             next_pair();
             if ((t&0xff) == 0) {
                      if (t==0)        goto len7;
@@ -568,6 +614,7 @@ struct CycledCachingMatchFinder : BaseMatchFinder
 
 len4:   q = toPtr(x1);
         while (table!=tabend) {
+            table = cmf_skip_cyc (table, tabend, rowstart, rowend, K, 0xffffu);  if (table==tabend) break;
             next_pair();
             if ((t&0xffff) == 0) {
                      if (t==0)        goto len7;
@@ -579,6 +626,7 @@ len4:   q = toPtr(x1);
 
 len5:   q = toPtr(x1);
         while (table!=tabend) {
+            table = cmf_skip_cyc (table, tabend, rowstart, rowend, K, 0xffffffu);  if (table==tabend) break;
             next_pair();
             if ((t&0xffffff) == 0) {
                      if (t==0)        goto len7;
@@ -589,6 +637,7 @@ len5:   q = toPtr(x1);
 
 len6:   q = toPtr(x1);
         while (table!=tabend) {
+            table = cmf_skip_cyc (table, tabend, rowstart, rowend, K, 0xffffffffu);  if (table==tabend) break;
             next_pair();
             if (t==0) {
                 BYTE *q1 = toPtr(x1);
@@ -606,6 +655,7 @@ len7:   len = MINLEN-1;
         }
 
         while (table!=tabend) {
+            table = cmf_skip_cyc (table, tabend, rowstart, rowend, K, 0xffffffffu);  if (table==tabend) break;
             next_pair();
             BYTE *q1 = toPtr(x1);
             if (t == 0 && p[len] == q1[len] && val32equ(p, q1)) {

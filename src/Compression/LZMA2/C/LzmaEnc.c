@@ -999,7 +999,7 @@ static UInt32 GetOptimum(CLzmaEnc *p, UInt32 position, UInt32 *backRes)
       repLens[i] = 0;
       continue;
     }
-    for (lenTest = 2; lenTest < numAvail && data[lenTest] == data2[lenTest]; lenTest++);
+    lenTest = LzExt (data, data2, 2, numAvail);
     repLens[i] = lenTest;
     if (lenTest > repLens[repMaxIndex])
       repMaxIndex = i;
@@ -1340,7 +1340,7 @@ static UInt32 GetOptimum(CLzmaEnc *p, UInt32 position, UInt32 *backRes)
       const Byte *data2 = data - (reps[repIndex] + 1);
       if (data[0] != data2[0] || data[1] != data2[1])
         continue;
-      for (lenTest = 2; lenTest < numAvail && data[lenTest] == data2[lenTest]; lenTest++);
+      lenTest = LzExt (data, data2, 2, numAvail);
       while (lenEnd < cur + lenTest)
         p->opt[++lenEnd].price = kInfinityPrice;
       lenTestTemp = lenTest;
@@ -1370,7 +1370,7 @@ static UInt32 GetOptimum(CLzmaEnc *p, UInt32 position, UInt32 *backRes)
           UInt32 nextRepMatchPrice;
           if (limit > numAvailFull)
             limit = numAvailFull;
-          for (; lenTest2 < limit && data[lenTest2] == data2[lenTest2]; lenTest2++);
+          lenTest2 = LzExt (data, data2, lenTest2, limit);
           lenTest2 -= lenTest + 1;
           if (lenTest2 >= 2)
           {
@@ -1460,7 +1460,7 @@ static UInt32 GetOptimum(CLzmaEnc *p, UInt32 position, UInt32 *backRes)
           UInt32 nextRepMatchPrice;
           if (limit > numAvailFull)
             limit = numAvailFull;
-          for (; lenTest2 < limit && data[lenTest2] == data2[lenTest2]; lenTest2++);
+          lenTest2 = LzExt (data, data2, lenTest2, limit);
           lenTest2 -= lenTest + 1;
           if (lenTest2 >= 2)
           {

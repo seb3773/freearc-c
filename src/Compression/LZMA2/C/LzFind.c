@@ -378,10 +378,7 @@ static UInt32 * Hc_GetMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, 
       curMatch = son[_cyclicBufferPos - delta + ((delta > _cyclicBufferPos) ? _cyclicBufferSize : 0)];
       if (pb[maxLen] == cur[maxLen] && *pb == *cur)
       {
-        UInt32 len = 0;
-        while (++len != lenLimit)
-          if (pb[len] != cur[len])
-            break;
+        UInt32 len = LzExt (pb, cur, 1, lenLimit);
         if (maxLen < len)
         {
           *distances++ = maxLen = len;
@@ -414,12 +411,8 @@ static UInt32 * Ht_GetMatchesSpec(CMatchFinder *p, UInt32 lenLimit, UInt32 *curM
     const Byte *pb = cur - delta;
     if (pb[maxLen] == cur[maxLen]  &&  *(UInt32*)pb == *(UInt32*)cur)
     {
-      UInt32 len;
-      for (len = sizeof(UInt32);  len != lenLimit;  len++)
-      {
-        if (pb[len] != cur[len])
-          goto breakout;
-      }
+      UInt32 len = LzExt (pb, cur, sizeof(UInt32), lenLimit);
+      if (len != lenLimit)  goto breakout;
 
       *distances++ = len;
       *distances++ = delta - 1;
@@ -460,9 +453,7 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
       if (pb[len] == cur[len])
       {
         if (++len != lenLimit && pb[len] == cur[len])
-          while (++len != lenLimit)
-            if (pb[len] != cur[len])
-              break;
+          len = LzExt (pb, cur, len+1, lenLimit);
         if (maxLen < len)
         {
           *distances++ = maxLen = len;
@@ -514,9 +505,7 @@ static void SkipMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const 
       UInt32 len = (len0 < len1 ? len0 : len1);
       if (pb[len] == cur[len])
       {
-        while (++len != lenLimit)
-          if (pb[len] != cur[len])
-            break;
+        len = LzExt (pb, cur, len+1, lenLimit);
         {
           if (len == lenLimit)
           {
@@ -610,9 +599,7 @@ static UInt32 Bt3_MatchFinder_GetMatches(CMatchFinder *p, UInt32 *distances)
   offset = 0;
   if (delta2 < p->cyclicBufferSize && *(cur - delta2) == *cur)
   {
-    for (; maxLen != lenLimit; maxLen++)
-      if (cur[(ptrdiff_t)maxLen - delta2] != cur[maxLen])
-        break;
+    maxLen = LzExt (cur - delta2, cur, maxLen, lenLimit);
     distances[0] = maxLen;
     distances[1] = delta2 - 1;
     offset = 2;
@@ -657,9 +644,7 @@ static UInt32 Bt4_MatchFinder_GetMatches(CMatchFinder *p, UInt32 *distances)
   }
   if (offset != 0)
   {
-    for (; maxLen != lenLimit; maxLen++)
-      if (cur[(ptrdiff_t)maxLen - delta2] != cur[maxLen])
-        break;
+    maxLen = LzExt (cur - delta2, cur, maxLen, lenLimit);
     distances[offset - 2] = maxLen;
     if (maxLen == lenLimit)
     {
@@ -704,9 +689,7 @@ static UInt32 Hc4_MatchFinder_GetMatches(CMatchFinder *p, UInt32 *distances)
   }
   if (offset != 0)
   {
-    for (; maxLen != lenLimit; maxLen++)
-      if (cur[(ptrdiff_t)maxLen - delta2] != cur[maxLen])
-        break;
+    maxLen = LzExt (cur - delta2, cur, maxLen, lenLimit);
     distances[offset - 2] = maxLen;
     if (maxLen == lenLimit)
     {
@@ -751,9 +734,7 @@ static UInt32 Ht4_MatchFinder_GetMatches(CMatchFinder *p, UInt32 *distances)
   }
   if (offset != 0)
   {
-    for (; maxLen != lenLimit; maxLen++)
-      if (cur[(ptrdiff_t)maxLen - delta2] != cur[maxLen])
-        break;
+    maxLen = LzExt (cur - delta2, cur, maxLen, lenLimit);
     distances[offset - 2] = maxLen;
     if (maxLen == lenLimit)
     {

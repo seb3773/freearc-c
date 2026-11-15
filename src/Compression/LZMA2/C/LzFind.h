@@ -6,6 +6,20 @@
 
 #include "Types.h"
 
+/* PERF : extension de correspondance par mots de 64 bits (bit-exact : renvoie exactement le
+   premier indice i>=start où a[i]!=b[i], borné par lim ; ne lit jamais au-delà de lim). */
+#include <string.h>
+static inline UInt32 LzExt (const Byte *a, const Byte *b, UInt32 i, UInt32 lim)
+{
+  while (i + 8 <= lim) {
+    UInt64 x, y;  memcpy (&x, a+i, 8);  memcpy (&y, b+i, 8);  x ^= y;
+    if (x)  return i + (UInt32)(__builtin_ctzll (x) >> 3);
+    i += 8;
+  }
+  while (i < lim && a[i] == b[i])  i++;
+  return i;
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
