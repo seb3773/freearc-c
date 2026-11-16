@@ -203,9 +203,9 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
   while(Range<ARI_RangeTOP) {ARI_ShiftLow();Range<<=8;}    \
 }                                                          \
 
-/* PERF : ARI_Encode_1/_0(V) + UpdateVCtx_1/_0 sans branche (bit imprévisible), arithmétique
-   identique : Model_MaxFreq = 2^Model_NumBits ; bit=1 : -(V>>S) == ((2^S-1)-V)>>S (décalage
-   arithmétique). */
+/* PERF: ARI_Encode_1/_0(V) + UpdateVCtx_1/_0 without branches (unpredictable bit),
+   identical arithmetic: Model_MaxFreq = 2^Model_NumBits; bit=1: -(V>>S) == ((2^S-1)-V)>>S
+   (arithmetic shift). */
 #define ARI_EncodeBit_BL(V,Bit,S)                                          \
 {                                                                          \
   uint32 wfcM_=0u-(uint32)(Bit);                                              \
@@ -232,9 +232,9 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
   Init_Models();
 
 #if defined(__SSE2__)
-  /* PERF : liste MTF en octets (alignée, 1 octet de garde devant) : rang trouvé par
-     pcmpeqb/pmovmskb, décalage par blocs de 16 octets (loadu à -1) du haut vers le bas.
-     Même liste, même rang que l'implémentation scalaire MTF_List/MTF_Pos. */
+  /* PERF: MTF list in bytes (aligned, 16-byte guard prefix): rank found by
+     pcmpeqb/pmovmskb, shift using 16-byte blocks (loadu at -1) from top to bottom.
+     Same list, same rank as scalar MTF_List/MTF_Pos implementation. */
   uint8 MTFL_Buf[16+ARI_MaxByte] __attribute__((aligned(16)));
   uint8* MTFL=MTFL_Buf+16;
   for (i=0; i<ARI_MaxByte; i++) MTFL[i] = (uint8)i;

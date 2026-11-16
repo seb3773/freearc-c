@@ -555,13 +555,13 @@ inline SEE2_CONTEXT* PPM_CONTEXT::makeEscFreq2()
 }
 inline void PPM_CONTEXT::encodeSymbol2(int symbol)
 {
-    // PERF (bit-exact) : une seule passe sans branche imprévisible sur tous les états.
-    //  - somme des fréquences des symboles NON masqués (masque = CharMask[s]==EscCount),
-    //    position cumulée du symbole codé (jamais masqué : vu dans aucun contexte supérieur) ;
-    //  - CharMask[s]=EscCount écrit pour tous les états : identique à l'original dans le cas
-    //    "escape" (il masque tous les non-masqués, les masqués valent déjà EscCount), et sans
-    //    effet dans le cas "trouvé" car update2() incrémente EscCount (EscCount ne fait que
-    //    croître jusqu'au ClearMask, une valeur périmée ne peut jamais lui redevenir égale).
+    // PERF (bit-exact): single branchless pass over all states with no unpredictable branches.
+    //  - Sum of frequencies of NON-masked symbols (mask = CharMask[s] == EscCount),
+    //    cumulative position of encoded symbol (never masked: not present in any higher context);
+    //  - CharMask[s]=EscCount written for all states: identical to original in the "escape"
+    //    case (masks all unmasked symbols; already-masked symbols already equal EscCount),
+    //    and harmless in the "found" case because update2() increments EscCount (EscCount only
+    //    grows until ClearMask; a stale value can never match a future EscCount).
     SEE2_CONTEXT* psee2c=makeEscFreq2();
     STATE* p=Stats, * pe=p+NumStats, * found=NULL;
     UINT LoCnt=0, Tot=0;

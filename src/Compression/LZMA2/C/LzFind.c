@@ -392,14 +392,14 @@ static UInt32 * Hc_GetMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, 
 }
 
 
-/* PERF : Ht_GetMatchesSpec bit-exact, réécrit en 2 temps.
- * L'original parcourt la ligne de cutValue entrées en la décalant d'une case à chaque pas
- * (insertion en tête) et ne regarde en détail que les entrées dont le tag correspond.
- * Ici : (1) les entrées à tag correspondant sont repérées par comparaison SIMD (SSE2, base
- * x86-64) en masque de bits, puis traitées dans le MÊME ordre avec exactement les mêmes tests
- * (rupture sur delta >= cyclicBufferSize ou len == lenLimit) ; (2) le décalage de la ligne
- * est fait en un seul memmove des entrées [0..k-1] -> [1..k] (k = index de rupture, ou
- * cutValue-1), l'ancienne entrée k étant écrasée comme dans l'original. */
+/* PERF: Bit-exact Ht_GetMatchesSpec, rewritten in two phases.
+ * The original code traverses a row of cutValue entries, shifting by one slot at each step
+ * (head insertion), inspecting only entries with matching tags.
+ * Here: (1) entries with matching tags are identified via SIMD comparison (SSE2) as a bitmask,
+ * then processed in the SAME order with identical early-exit conditions
+ * (break on delta >= cyclicBufferSize or len == lenLimit); (2) row shifting is performed
+ * with a single memmove of entries [0..k-1] -> [1..k] (where k = break index or cutValue-1),
+ * overwriting the old entry k exactly as in the original code. */
 #if defined(__SSE2__)
 #include <emmintrin.h>
 #endif
@@ -424,7 +424,7 @@ static UInt32 * Ht_GetMatchesSpec(CMatchFinder *p, UInt32 lenLimit, UInt32 *curM
 {
   if (cutValue <= HT_SIMD_MIN_ROW)
   {
-    /* lignes courtes (ex. mc4 de -m3) : boucle d'origine, l'appel memmove coûterait plus cher */
+    /* short rows (e.g. mc4 in -m3): original loop, memmove call would have higher overhead */
     UInt32 *lastMatchPtr = curMatchPtr + cutValue;
     UInt32 tag = computeTag(p,cur);
     UInt32 prevMatch = saveMatch(pos,tag);
@@ -458,7 +458,7 @@ static UInt32 * Ht_GetMatchesSpec(CMatchFinder *p, UInt32 lenLimit, UInt32 *curM
   UInt32 n = cutValue;
   UInt32 tag = computeTag(p,cur);
   UInt32 newEntry = saveMatch(pos,tag);
-  UInt32 last = n - 1;                              /* index de rupture */
+  UInt32 last = n - 1;                              /* break index */
   UInt32 base;
   for (base = 0; base < n; base += 32)
   {
@@ -911,7 +911,7 @@ static void Ht4_MatchFinder_Skip(CMatchFinder *p, UInt32 num)
     p->hash[kFix3HashSize + hash3Value] = p->pos;
     {
       UInt32 *curMatchPtr  = &(p->hash[kFix4HashSize + hashValue * p->cutValue]);   // First entry in hash table to check
-      UInt32 half = p->cutValue/2;                                                  // do{}while : au moins 1
+      UInt32 half = p->cutValue/2;                                                  // do{}while: at least 1
       if (half > HT_SIMD_MIN_ROW)
       {
         memmove (curMatchPtr + 1, curMatchPtr, (size_t)(half - 1) * sizeof(UInt32));

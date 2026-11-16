@@ -6,8 +6,8 @@
 
 #include "Types.h"
 
-/* PERF : extension de correspondance par mots de 64 bits (bit-exact : renvoie exactement le
-   premier indice i>=start où a[i]!=b[i], borné par lim ; ne lit jamais au-delà de lim). */
+/* PERF: 64-bit word match length extension (bit-exact: returns exactly the first
+   index i>=start where a[i]!=b[i], bounded by lim; never reads past lim). */
 #include <string.h>
 static inline UInt32 LzExt (const Byte *a, const Byte *b, UInt32 i, UInt32 lim)
 {

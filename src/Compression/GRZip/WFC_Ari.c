@@ -356,9 +356,9 @@ sint32 GRZip_WFC_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
   while(Range<ARI_RangeTOP) {ARI_ShiftLow();Range<<=8;}    \
 }                                                          \
 
-/* PERF : ARI_Encode_1/_0(V) + UpdateVCtx_1/_0 sans branche (bit imprévisible), arithmétique
-   identique : Model_MaxFreq = 2^Model_NumBits ; bit=1 : -(V>>S) == ((2^S-1)-V)>>S (décalage
-   arithmétique). */
+/* PERF: ARI_Encode_1/_0(V) + UpdateVCtx_1/_0 without branches (unpredictable bit),
+   identical arithmetic: Model_MaxFreq = 2^Model_NumBits; bit=1: -(V>>S) == ((2^S-1)-V)>>S
+   (arithmetic shift). */
 #define ARI_EncodeBit_BL(V,Bit,S)                                          \
 {                                                                          \
   uint32 wfcM_=0u-(uint32)(Bit);                                              \
@@ -475,9 +475,9 @@ sint32 GRZip_WFC_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
 
        VCtx=&Model_L2_0[GrNum][0];
 
-       /* PERF : bits de GrPos quasi aléatoires -> codage binaire sans branche, arithmétique
-          identique à ARI_Encode_1/ARI_Encode_0 + UpdateVCtx_1/_0 (Model_MaxFreq = 2^Model_NumBits ;
-          bit=1 : -(V>>S) == ((2^S-1)-V)>>S en décalage arithmétique). */
+       /* PERF: GrPos bits are pseudo-random -> branchless binary coding,
+          identical arithmetic to ARI_Encode_1/ARI_Encode_0 + UpdateVCtx_1/_0 (Model_MaxFreq = 2^Model_NumBits;
+          bit=1: -(V>>S) == ((2^S-1)-V)>>S via arithmetic shift). */
        for (CtxL2=1,i=0;i<=GrNum;i++,Mask>>=1)
           {
             uint32 wfcB_=(GrPos&Mask)!=0;

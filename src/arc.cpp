@@ -2301,7 +2301,7 @@ static BlockInfo compress_range(IArchiveWriter *out, const char *method, const c
 
   int rc = MultiCompress(compress_m, pipelined_solid_callback, &cb_state);
 
-  // Signaler fin au Reader et Writer
+  // Signal completion to Reader and Writer
   in_queue.stop();
   free_in_chunks.stop();
 

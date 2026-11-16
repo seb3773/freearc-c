@@ -386,10 +386,10 @@ struct Job
     int    bytes;
     int    L;
 
-    // PERF : 4 chaînes de hachage roulant indépendantes entrelacées (ILP : la boucle scalaire est
-    // limitée par la latence de la multiplication). Le hash roulant d'une fenêtre ne dépend que
-    // de ses L octets (arith. mod 2^32), donc ré-initialiser une chaîne au début d'un bloc donne
-    // exactement les mêmes valeurs -> hashtable[] identique (bit-exact).
+    // PERF: 4 independent rolling hash streams interleaved (ILP: scalar loop is latency-bound
+    // by integer multiplication). The rolling hash of a window depends only on its L bytes
+    // (mod 2^32 arithmetic), so re-initializing a stream at the beginning of a block yields
+    // identical values -> hashtable[] is bit-exact.
     void process()
     {
         const int NL = 4;
@@ -414,7 +414,7 @@ struct Job
             }
             for (int k=0; k<NL; k++)  *out[k]++ = mh[k], *out[k]++ = mi[k];
         }
-        // blocs restants : la chaîne 3 continue (son état correspond déjà à la bonne fenêtre)
+        // Remaining blocks: stream 3 continues (its state already corresponds to the correct window)
         for (int b=NL*per; b<num_blocks; b++) {
             int32 mh = (int32)h[NL-1];  int mi = 0;
             for (int i=0; i<L; i++, pt[NL-1]++) {
@@ -425,7 +425,7 @@ struct Job
         }
     }
 
-    void process_ref()   // version originale
+    void process_ref()   // original reference version
     {
         int   PRIME_power_L = power(PRIME,L);
         int  *hashptr       = hashtable;
@@ -484,9 +484,9 @@ int rep_compress (unsigned BlockSize, int MinCompression, int ChunkSize, int Min
     int *ht = (int*) BigAlloc(HTBUFS*HTCOUNT*sizeof(*ht));
     MultipleProcessingThreads<Job> HashingThreads;  HashingThreads.MaxJobs = HTBUFS;  HashingThreads.NumThreads = HTJOBS;
     if (ht==NULL || HashingThreads.start()!=0)  {errcode=FREEARC_ERRCODE_NOT_ENOUGH_MEMORY; goto finished;}
-    // BUGFIX: sous Windows (legacy) BigAlloc = VirtualAlloc -> mémoire à zéro. Sous Linux c'est malloc :
-    // quand les jobs ne sont pas alignés sur L, la boucle de matching lit des entrées ht[] jamais
-    // écrites -> indices aléatoires -> segfault. Zéro = comportement exact de l'encodeur legacy.
+    // BUGFIX: On Windows (legacy), BigAlloc wraps VirtualAlloc which zero-initializes memory.
+    // On Linux, BigAlloc uses malloc/mmap: when jobs are not aligned to L, matching loop reads
+    // uninitialized ht[] entries -> random indices -> segfault. Zeroing matches legacy encoder behavior.
     memset (ht, 0, HTBUFS*HTCOUNT*sizeof(*ht));
 
    {bool DoItOnce       = true;

@@ -512,10 +512,10 @@ void CachingMatchFinder<N>::shift (BYTE *buf, int shift)
 // One more caching match finder. This one doesn't shift data in hash rows, but keeps head index instead
 // *****************************************************************************************************
 
-// PERF (SIMD) : saut vectoriel des paires {ptr,key} d'une ligne de hash qui ne peuvent rien
-// changer. Renvoie la 1re paire de [t,lim) avec ptr==0 OU ((key^K)&mask)==0, sinon lim.
-// Les paires sautées n'auraient eu AUCUN effet dans la boucle scalaire -> ordre de
-// traitement et résultat strictement identiques (bit-exact). SSE2 = base x86-64, pas de dispatch.
+// PERF (SIMD): Vectorized skipping of useless {ptr,key} pairs in a hash row.
+// Returns the first pair in [t,lim) with ptr==0 OR ((key^K)&mask)==0, else lim.
+// Skipped pairs would have had NO effect in the scalar loop -> processing order
+// and outcome are strictly identical (bit-exact). SSE2 is baseline x86-64, no dispatch needed.
 #if defined(__SSE2__)
 #include <emmintrin.h>
 static inline PtrVal* cmf_skip (PtrVal *t, PtrVal *lim, UINT K, UINT mask)
@@ -523,7 +523,7 @@ static inline PtrVal* cmf_skip (PtrVal *t, PtrVal *lim, UINT K, UINT mask)
     const __m128i kv = _mm_set_epi32 (K, 0, K, 0);        // lanes: ptr0 key0 ptr1 key1
     const __m128i mv = _mm_set_epi32 (mask, -1, mask, -1);
     const __m128i z  = _mm_setzero_si128();
-    while (lim - t >= 8) {                                  // 4 paires / itération
+    while (lim - t >= 8) {                                  // 4 pairs / iteration
         __m128i a = _mm_loadu_si128 ((const __m128i*) t);
         __m128i b = _mm_loadu_si128 ((const __m128i*) (t+4));
         a = _mm_cmpeq_epi32 (_mm_and_si128 (_mm_xor_si128 (a, kv), mv), z);
@@ -544,7 +544,7 @@ static inline PtrVal* cmf_skip (PtrVal *t, PtrVal *lim, UINT K, UINT mask)
     return t;
 }
 #endif
-// Variante cyclique : parcourt [table..rowend) puis [rowstart..tabend)
+// Cyclic variant: traverses [table..rowend) then [rowstart..tabend)
 static inline PtrVal* cmf_skip_cyc (PtrVal *table, PtrVal *tabend, PtrVal *rowstart, PtrVal *rowend, UINT K, UINT mask)
 {
     if (table == tabend)  return table;
@@ -556,18 +556,18 @@ static inline PtrVal* cmf_skip_cyc (PtrVal *table, PtrVal *tabend, PtrVal *rowst
     return cmf_skip (table, tabend, K, mask);
 }
 
-// Politique de saut par défaut (SSE2 / scalaire) : code historique inchangé.
+// Default skip policy (SSE2 / scalar): legacy code unchanged.
 struct CmfSkipBase {
     static inline PtrVal* cyc (PtrVal *table, PtrVal *tabend, PtrVal *rowstart, PtrVal *rowend, UINT K, UINT mask)
     {   return cmf_skip_cyc (table, tabend, rowstart, rowend, K, mask);   }
 };
 
 #if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__)) && !defined(FREEARC_NO_AVX2)
-// PERF (AVX2, dispatch runtime) : même saut des paires {ptr,key} inutiles, 4 paires par
-// registre ymm, boucle principale de 16 paires avec un seul test de sortie (vptest sur l'OR).
-// Renvoie exactement la même paire que cmf_skip (1re paire ptr==0 ou clé compatible) ->
-// mêmes candidats examinés dans le même ordre -> bit-exact. Utilisé uniquement via
-// find_matchlen_avx2 (target avx2 + flatten), jamais inliné dans du code non-AVX2.
+// PERF (AVX2, runtime dispatch): Vectorized skip of unmatching {ptr,key} pairs, 4 pairs per
+// ymm register, main loop processes 16 pairs with a single exit test (vptest on combined OR).
+// Returns the exact same pair as cmf_skip (first pair with ptr==0 or matching key) ->
+// same candidates inspected in identical order -> bit-exact. Used only via
+// find_matchlen_avx2 (target avx2 + flatten), never inlined into non-AVX2 code.
 #include <immintrin.h>
 #define CMF_HAVE_AVX2 1
 struct CmfSkipAVX2 {
@@ -578,11 +578,11 @@ struct CmfSkipAVX2 {
         const __m256i mv = _mm256_set_epi32 (mask, -1, mask, -1, mask, -1, mask, -1);
         const __m256i z  = _mm256_setzero_si256();
 #define CMF_CMP8(P) _mm256_cmpeq_epi32 (_mm256_and_si256 (_mm256_xor_si256 (_mm256_loadu_si256 ((const __m256i*)(P)), kv), mv), z)
-        if (lim - t >= 8) {                                   // 1er bloc de 4 paires : sortie rapide fréquente
+        if (lim - t >= 8) {                                   // 1st block of 4 pairs: common fast exit
             UINT m = (UINT)_mm256_movemask_ps (_mm256_castsi256_ps (CMF_CMP8(t)));
             if (m)  return t + ((__builtin_ctz(m) >> 1) << 1);
             t += 8;
-            while (lim - t >= 32) {                           // 16 paires / itération
+            while (lim - t >= 32) {                           // 16 pairs / iteration
                 __m256i a = CMF_CMP8(t), b = CMF_CMP8(t+8), c = CMF_CMP8(t+16), d = CMF_CMP8(t+24);
                 __m256i o = _mm256_or_si256 (_mm256_or_si256 (a, b), _mm256_or_si256 (c, d));
                 if (!_mm256_testz_si256 (o, o)) {
