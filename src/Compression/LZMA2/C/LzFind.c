@@ -392,41 +392,105 @@ static UInt32 * Hc_GetMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, 
 }
 
 
+/* PERF : Ht_GetMatchesSpec bit-exact, réécrit en 2 temps.
+ * L'original parcourt la ligne de cutValue entrées en la décalant d'une case à chaque pas
+ * (insertion en tête) et ne regarde en détail que les entrées dont le tag correspond.
+ * Ici : (1) les entrées à tag correspondant sont repérées par comparaison SIMD (SSE2, base
+ * x86-64) en masque de bits, puis traitées dans le MÊME ordre avec exactement les mêmes tests
+ * (rupture sur delta >= cyclicBufferSize ou len == lenLimit) ; (2) le décalage de la ligne
+ * est fait en un seul memmove des entrées [0..k-1] -> [1..k] (k = index de rupture, ou
+ * cutValue-1), l'ancienne entrée k étant écrasée comme dans l'original. */
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
+#define HT_SIMD_MIN_ROW 8
+static inline UInt32 Ht_TagBits32 (const UInt32 *r, UInt32 cnt, UInt32 tagMask, UInt32 tag)
+{
+  UInt32 bits = 0, j = 0;
+#if defined(__SSE2__)
+  const __m128i m = _mm_set1_epi32 ((int)tagMask), t = _mm_set1_epi32 ((int)tag);
+  for (; j + 4 <= cnt; j += 4)
+    bits |= (UInt32)_mm_movemask_ps (_mm_castsi128_ps (_mm_cmpeq_epi32 (
+              _mm_and_si128 (_mm_loadu_si128 ((const __m128i*)(r + j)), m), t))) << j;
+#endif
+  for (; j < cnt; j++)
+    bits |= (UInt32)((r[j] & tagMask) == tag) << j;
+  return bits;
+}
+
 static UInt32 * Ht_GetMatchesSpec(CMatchFinder *p, UInt32 lenLimit, UInt32 *curMatchPtr, UInt32 pos, const Byte *cur, CLzRef *son,
     UInt32 _cyclicBufferPos, UInt32 _cyclicBufferSize, UInt32 cutValue,
     UInt32 *distances, UInt32 maxLen)
 {
-  //UInt32 *curMatchPtr= &_hash[kFix4HashSize + hashValue*p->cutValue];  // First entry in hash table to check
-  UInt32 *lastMatchPtr = curMatchPtr + cutValue;                         // Last entry to check + 1
-  UInt32 tag = computeTag(p,cur);
-  UInt32 prevMatch = saveMatch(pos,tag);
-
-  do {
-    UInt32 curMatch = *curMatchPtr;   *curMatchPtr++ = prevMatch;   prevMatch = curMatch;
-    if (getTag(p,curMatch) != tag)   continue;   // Check tag stored in higher bits of hash entry
-    curMatch = getMatch(p,curMatch);
-    UInt32 delta = pos - curMatch;
-    if (delta >= _cyclicBufferSize)
-      break;
-    const Byte *pb = cur - delta;
-    if (pb[maxLen] == cur[maxLen]  &&  *(UInt32*)pb == *(UInt32*)cur)
-    {
-      UInt32 len = LzExt (pb, cur, sizeof(UInt32), lenLimit);
-      if (len != lenLimit)  goto breakout;
-
-      *distances++ = len;
-      *distances++ = delta - 1;
-      break;
-
-breakout:
-      if (len > maxLen)
+  if (cutValue <= HT_SIMD_MIN_ROW)
+  {
+    /* lignes courtes (ex. mc4 de -m3) : boucle d'origine, l'appel memmove coûterait plus cher */
+    UInt32 *lastMatchPtr = curMatchPtr + cutValue;
+    UInt32 tag = computeTag(p,cur);
+    UInt32 prevMatch = saveMatch(pos,tag);
+    do {
+      UInt32 curMatch = *curMatchPtr;   *curMatchPtr++ = prevMatch;   prevMatch = curMatch;
+      if (getTag(p,curMatch) != tag)   continue;
+      curMatch = getMatch(p,curMatch);
+      UInt32 delta = pos - curMatch;
+      if (delta >= _cyclicBufferSize)
+        break;
+      const Byte *pb = cur - delta;
+      if (pb[maxLen] == cur[maxLen]  &&  *(UInt32*)pb == *(UInt32*)cur)
       {
-        *distances++ = maxLen = len;
-        *distances++ = delta - 1;
+        UInt32 len = LzExt (pb, cur, sizeof(UInt32), lenLimit);
+        if (len == lenLimit)
+        {
+          *distances++ = len;
+          *distances++ = delta - 1;
+          break;
+        }
+        if (len > maxLen)
+        {
+          *distances++ = maxLen = len;
+          *distances++ = delta - 1;
+        }
+      }
+    } while (curMatchPtr < lastMatchPtr);
+    return distances;
+  }
+  UInt32 *row = curMatchPtr;
+  UInt32 n = cutValue;
+  UInt32 tag = computeTag(p,cur);
+  UInt32 newEntry = saveMatch(pos,tag);
+  UInt32 last = n - 1;                              /* index de rupture */
+  UInt32 base;
+  for (base = 0; base < n; base += 32)
+  {
+    UInt32 cnt = n - base;  if (cnt > 32) cnt = 32;
+    UInt32 bits = Ht_TagBits32 (row + base, cnt, p->TagMask, tag);
+    while (bits)
+    {
+      UInt32 i = base + (UInt32)__builtin_ctz (bits);   bits &= bits - 1;
+      UInt32 curMatch = getMatch(p,row[i]);
+      UInt32 delta = pos - curMatch;
+      if (delta >= _cyclicBufferSize)  { last = i;  goto done; }
+      const Byte *pb = cur - delta;
+      if (pb[maxLen] == cur[maxLen]  &&  *(UInt32*)pb == *(UInt32*)cur)
+      {
+        UInt32 len = LzExt (pb, cur, sizeof(UInt32), lenLimit);
+        if (len == lenLimit)
+        {
+          *distances++ = len;
+          *distances++ = delta - 1;
+          last = i;  goto done;
+        }
+        if (len > maxLen)
+        {
+          *distances++ = maxLen = len;
+          *distances++ = delta - 1;
+        }
       }
     }
-  } while (curMatchPtr < lastMatchPtr);
-
+  }
+done:
+  memmove (row + 1, row, (size_t)last * sizeof(UInt32));
+  row[0] = newEntry;
   return distances;
 }
 
@@ -847,11 +911,20 @@ static void Ht4_MatchFinder_Skip(CMatchFinder *p, UInt32 num)
     p->hash[kFix3HashSize + hash3Value] = p->pos;
     {
       UInt32 *curMatchPtr  = &(p->hash[kFix4HashSize + hashValue * p->cutValue]);   // First entry in hash table to check
-      UInt32 *lastMatchPtr = curMatchPtr + p->cutValue/2;                           // Last entry+1
-      UInt32 prevMatch = saveMatch (p->pos, computeTag(p,cur));
-      do {
-        UInt32 curMatch = *curMatchPtr;   *curMatchPtr++ = prevMatch;   prevMatch = curMatch;
-      } while (curMatchPtr < lastMatchPtr);
+      UInt32 half = p->cutValue/2;                                                  // do{}while : au moins 1
+      if (half > HT_SIMD_MIN_ROW)
+      {
+        memmove (curMatchPtr + 1, curMatchPtr, (size_t)(half - 1) * sizeof(UInt32));
+        curMatchPtr[0] = saveMatch (p->pos, computeTag(p,cur));
+      }
+      else
+      {
+        UInt32 *lastMatchPtr = curMatchPtr + half;
+        UInt32 prevMatch = saveMatch (p->pos, computeTag(p,cur));
+        do {
+          UInt32 curMatch = *curMatchPtr;   *curMatchPtr++ = prevMatch;   prevMatch = curMatch;
+        } while (curMatchPtr < lastMatchPtr);
+      }
     }
     MOVE_POS
   }

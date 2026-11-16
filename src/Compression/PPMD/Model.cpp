@@ -555,26 +555,32 @@ inline SEE2_CONTEXT* PPM_CONTEXT::makeEscFreq2()
 }
 inline void PPM_CONTEXT::encodeSymbol2(int symbol)
 {
+    // PERF (bit-exact) : une seule passe sans branche imprévisible sur tous les états.
+    //  - somme des fréquences des symboles NON masqués (masque = CharMask[s]==EscCount),
+    //    position cumulée du symbole codé (jamais masqué : vu dans aucun contexte supérieur) ;
+    //  - CharMask[s]=EscCount écrit pour tous les états : identique à l'original dans le cas
+    //    "escape" (il masque tous les non-masqués, les masqués valent déjà EscCount), et sans
+    //    effet dans le cas "trouvé" car update2() incrémente EscCount (EscCount ne fait que
+    //    croître jusqu'au ClearMask, une valeur périmée ne peut jamais lui redevenir égale).
     SEE2_CONTEXT* psee2c=makeEscFreq2();
-    UINT Sym, LoCnt=0, i=NumStats-NumMasked;
-    STATE* p1, * p=Stats-1;
+    STATE* p=Stats, * pe=p+NumStats, * found=NULL;
+    UINT LoCnt=0, Tot=0;
+    const BYTE Esc=EscCount;
     do {
-        do { Sym=p[1].Symbol;   p++; } while (CharMask[Sym] == EscCount);
-        CharMask[Sym]=EscCount;
-        if (Sym == symbol)                  goto SYMBOL_FOUND;
-        LoCnt += p->Freq;
-    } while ( --i );
-    SubRange.HighCount=(SubRange.scale += (SubRange.LowCount=LoCnt));
-    psee2c->Summ += SubRange.scale;         NumMasked = NumStats;
-    return;
-SYMBOL_FOUND:
-    SubRange.LowCount=LoCnt;                SubRange.HighCount=(LoCnt+=p->Freq);
-    for (p1=p; --i ; ) {
-        do { Sym=p1[1].Symbol;  p1++; } while (CharMask[Sym] == EscCount);
-        LoCnt += p1->Freq;
+        UINT Sym=p->Symbol;
+        UINT f=p->Freq & (UINT)-(UINT)(CharMask[Sym] != Esc);
+        if (Sym == (UINT)symbol) { found=p; LoCnt=Tot; }
+        Tot += f;
+        CharMask[Sym]=Esc;
+    } while (++p <= pe);
+    if ( !found ) {
+        SubRange.HighCount=(SubRange.scale += (SubRange.LowCount=Tot));
+        psee2c->Summ += SubRange.scale;         NumMasked = NumStats;
+        return;
     }
-    SubRange.scale += LoCnt;
-    psee2c->update();                       update2(p);
+    SubRange.LowCount=LoCnt;                SubRange.HighCount=LoCnt+found->Freq;
+    SubRange.scale += Tot;
+    psee2c->update();                       update2(found);
 }
 inline void PPM_CONTEXT::decodeSymbol2()
 {

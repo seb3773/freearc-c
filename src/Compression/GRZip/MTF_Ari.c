@@ -1,3 +1,6 @@
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 /*-------------------------------------------------*/
 /* GRZipII/libGRZip compressor           MTF_Ari.c */
 /* RLE + MTF + Entropy Coder Functions             */
@@ -200,6 +203,20 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
   while(Range<ARI_RangeTOP) {ARI_ShiftLow();Range<<=8;}    \
 }                                                          \
 
+/* PERF : ARI_Encode_1/_0(V) + UpdateVCtx_1/_0 sans branche (bit imprévisible), arithmétique
+   identique : Model_MaxFreq = 2^Model_NumBits ; bit=1 : -(V>>S) == ((2^S-1)-V)>>S (décalage
+   arithmétique). */
+#define ARI_EncodeBit_BL(V,Bit,S)                                          \
+{                                                                          \
+  uint32 wfcM_=0u-(uint32)(Bit);                                              \
+  uint32 wfcF_=(V);                                                           \
+  uint32 wfcR_=Range>>Model_NumBits;                                          \
+  Low+=(uint32)((wfcF_*wfcR_)&wfcM_);                                               \
+  Range=(wfcF_^((wfcF_^(Model_MaxFreq-wfcF_))&wfcM_))*wfcR_;                              \
+  while(Range<ARI_RangeTOP) {ARI_ShiftLow();Range<<=8;}                    \
+  (V)=wfcF_+(uint32)((sint32)((Model_MaxFreq-(wfcM_&(Model_MaxFreq-((1u<<(S))-1))))-wfcF_)>>(S)); \
+}
+
 #define ARI_Encode_0(FFreq0)                               \
 {                                                          \
   sint32 FTFreq0=FFreq0;                                   \
@@ -214,8 +231,17 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
 
   Init_Models();
 
+#if defined(__SSE2__)
+  /* PERF : liste MTF en octets (alignée, 1 octet de garde devant) : rang trouvé par
+     pcmpeqb/pmovmskb, décalage par blocs de 16 octets (loadu à -1) du haut vers le bas.
+     Même liste, même rang que l'implémentation scalaire MTF_List/MTF_Pos. */
+  uint8 MTFL_Buf[16+ARI_MaxByte] __attribute__((aligned(16)));
+  uint8* MTFL=MTFL_Buf+16;
+  for (i=0; i<ARI_MaxByte; i++) MTFL[i] = (uint8)i;
+#else
   uint8 MTF_Pos[ARI_MaxByte];
   for (i=0; i<ARI_MaxByte; i++) MTF_Pos[i] = (uint8)i;
+#endif
 
   uint32 Mask,Log2RunSize,RunSize,WFCMTF_Rank,PredChar,Char=0;
 
@@ -233,6 +259,26 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
     RunSize=1;
     while ((Input<InputEnd)&&(*Input==Char)) RunSize++,Input++;
 
+#if defined(__SSE2__)
+    {
+      const __m128i vc=_mm_set1_epi8((char)Char);
+      uint32 k=0, m;
+      while (!(m=(uint32)_mm_movemask_epi8(_mm_cmpeq_epi8(_mm_load_si128((const __m128i*)(MTFL+k)),vc)))) k+=16;
+      WFCMTF_Rank = k + (uint32)__builtin_ctz(m);
+      if (WFCMTF_Rank)
+      {
+        MTFL[-1]=(uint8)Char;
+        const __m128i iota=_mm_setr_epi8(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15);
+        sint32 kk=(sint32)(WFCMTF_Rank&~15u);
+        __m128i msk=_mm_cmplt_epi8(iota,_mm_set1_epi8((char)(WFCMTF_Rank-kk+1)));
+        __m128i nw=_mm_loadu_si128((const __m128i*)(MTFL+kk-1));
+        __m128i od=_mm_load_si128((const __m128i*)(MTFL+kk));
+        _mm_store_si128((__m128i*)(MTFL+kk),_mm_or_si128(_mm_and_si128(msk,nw),_mm_andnot_si128(msk,od)));
+        for (kk-=16; kk>=0; kk-=16)
+          _mm_store_si128((__m128i*)(MTFL+kk),_mm_loadu_si128((const __m128i*)(MTFL+kk-1)));
+      }
+    }
+#else
     WFCMTF_Rank = MTF_Pos[Char];
 
     if (WFCMTF_Rank)
@@ -244,6 +290,7 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
       MTF_List[0] = Char;
       MTF_Pos[Char] = 0;
     }
+#endif
 
     WFCMTF_Rank=(WFCMTF_Rank-1)&0xFF;
 
@@ -293,17 +340,10 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
        VCtx=&Model_L2_0[GrNum][0];
 
        for (CtxL2=1,i=0;i<=GrNum;i++,Mask>>=1)
-         if (GrPos&Mask)
           {
-            ARI_Encode_1(VCtx[CtxL2]);
-            UpdateVCtx_1(CtxL2,M_L2_Shift);
-            CtxL2=(CtxL2<<1)|1;
-          }
-         else
-          {
-            ARI_Encode_0(VCtx[CtxL2]);
-            UpdateVCtx_0(CtxL2,M_L2_Shift);
-            CtxL2<<=1;
+            uint32 wfcB_=(GrPos&Mask)!=0;
+            ARI_EncodeBit_BL(VCtx[CtxL2],wfcB_,M_L2_Shift);
+            CtxL2=(CtxL2<<1)|wfcB_;
           }
      }
 
@@ -344,16 +384,7 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
     VCtx=&Model_Log2RLE_2[Log2RunSize][0];
 
     for (i=0;i<Log2RunSize;i++,Mask>>=1,VCtx++)
-      if (RunSize&Mask)
-      {
-        ARI_Encode_1(VCtx[0]);
-        UpdateVCtx_1(0,M_Log2RLE_Shift_2);
-      }
-      else
-      {
-        ARI_Encode_0(VCtx[0]);
-        UpdateVCtx_0(0,M_Log2RLE_Shift_2);
-      }
+      ARI_EncodeBit_BL(VCtx[0],(RunSize&Mask)!=0,M_Log2RLE_Shift_2);
   }
 
   VCtx=&Model_L0_1[Char][0]; UCtx=&Model_L0_2[4*CtxL0+(CtxRLE&3)][0];
@@ -396,6 +427,7 @@ sint32 GRZip_MTF_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
 #undef ARI_Encode
 #undef ARI_Encode_0
 #undef ARI_Encode_1
+#undef ARI_EncodeBit_BL
 
 #define ARI_InTgtByte()      (*Input++)
 #define ARI_GetFreq(TotFreq) (ARICode/(Range/=(TotFreq)))

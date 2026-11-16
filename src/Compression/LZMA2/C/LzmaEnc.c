@@ -597,12 +597,35 @@ static void RangeEnc_EncodeBit(CRangeEnc *p, CLzmaProb *prob, UInt32 symbol)
   }
 }
 
+/* PERF : variante sans branche de RangeEnc_EncodeBit pour les bits de litteraux (quasi
+   aleatoires -> branche "symbol==0" tres mal predite). Arithmetique strictement identique :
+   bit=0 : range=bound, prob+=(2048-prob)>>5 ; bit=1 : low+=bound, range-=bound, prob-=prob>>5. */
+static inline void RangeEnc_EncodeBitBL(CRangeEnc *p, CLzmaProb *prob, UInt32 bit)
+{
+  UInt32 ttt = *prob;
+  UInt32 range = p->range;
+  UInt32 newBound = (range >> kNumBitModelTotalBits) * ttt;
+  UInt32 mask = 0u - bit;
+  p->low += newBound & mask;
+  range = newBound + ((range - newBound - newBound) & mask);
+  /* bit=0 : +((2048-ttt)>>5) ; bit=1 : -(ttt>>5) == ((31-ttt)>>5) en décalage arithmétique */
+  ttt += (UInt32)((Int32)((kBitModelTotal - (mask & (kBitModelTotal - 31))) - ttt) >> kNumMoveBits);
+  *prob = (CLzmaProb)ttt;
+  if (range < kTopValue)
+  {
+    p->range = range << 8;
+    RangeEnc_ShiftLow(p);
+  }
+  else
+    p->range = range;
+}
+
 static void LitEnc_Encode(CRangeEnc *p, CLzmaProb *probs, UInt32 symbol)
 {
   symbol |= 0x100;
   do
   {
-    RangeEnc_EncodeBit(p, probs + (symbol >> 8), (symbol >> 7) & 1);
+    RangeEnc_EncodeBitBL(p, probs + (symbol >> 8), (symbol >> 7) & 1);
     symbol <<= 1;
   }
   while (symbol < 0x10000);
@@ -615,7 +638,7 @@ static void LitEnc_EncodeMatched(CRangeEnc *p, CLzmaProb *probs, UInt32 symbol, 
   do
   {
     matchByte <<= 1;
-    RangeEnc_EncodeBit(p, probs + (offs + (matchByte & offs) + (symbol >> 8)), (symbol >> 7) & 1);
+    RangeEnc_EncodeBitBL(p, probs + (offs + (matchByte & offs) + (symbol >> 8)), (symbol >> 7) & 1);
     symbol <<= 1;
     offs &= ~(matchByte ^ symbol);
   }

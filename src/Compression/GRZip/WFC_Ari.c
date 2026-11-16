@@ -260,6 +260,82 @@
 
 #ifndef FREEARC_DECOMPRESS_ONLY
 
+/* ---- WFC rank by key counting (encoder only, bit-exact) ---------------------
+ * The encoder only needs Char2Index[Char] (the WFC rank of the current char);
+ * the list itself is never read otherwise. The original list is always ordered
+ * by (weight desc, time-of-last-weight-change desc):
+ *  - Update_Weight0 puts Char at the front with weight >= WFC_Val0 (> any other
+ *    char weight, which is bounded by ~98000 since consecutive runs differ);
+ *  - Update_Weight re-inserts a decremented char before the first entry whose
+ *    weight is <= its new weight, i.e. first among its new equal-weight group;
+ *  - initial order 0..255 with all weights 0 = decreasing initial "time".
+ * Hence rank(Char) = #{x : Key[x] > Key[Char]} with Key = weight<<32 | time,
+ * which is computed with SIMD over the 256 keys; every weight update becomes a
+ * single O(1) key store instead of a list shift with Char2Index scatter. */
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__)) && !defined(FREEARC_NO_AVX2)
+#include <immintrin.h>
+#define WFCK_HAVE_AVX2_PATH 1
+__attribute__((target("avx2"),noinline))
+static uint32 WFCK_CountGreater_AVX2(const unsigned long long* K,unsigned long long kc)
+{
+  const __m256i v=_mm256_set1_epi64x((long long)kc);
+  __m256i a0=_mm256_setzero_si256(),a1=a0,a2=a0,a3=a0;
+  for (int i=0;i<256;i+=16)
+  {
+    a0=_mm256_sub_epi64(a0,_mm256_cmpgt_epi64(_mm256_load_si256((const __m256i*)(K+i   )),v));
+    a1=_mm256_sub_epi64(a1,_mm256_cmpgt_epi64(_mm256_load_si256((const __m256i*)(K+i+4 )),v));
+    a2=_mm256_sub_epi64(a2,_mm256_cmpgt_epi64(_mm256_load_si256((const __m256i*)(K+i+8 )),v));
+    a3=_mm256_sub_epi64(a3,_mm256_cmpgt_epi64(_mm256_load_si256((const __m256i*)(K+i+12)),v));
+  }
+  a0=_mm256_add_epi64(_mm256_add_epi64(a0,a1),_mm256_add_epi64(a2,a3));
+  __m128i s=_mm_add_epi64(_mm256_castsi256_si128(a0),_mm256_extracti128_si256(a0,1));
+  s=_mm_add_epi64(s,_mm_unpackhi_epi64(s,s));
+  return (uint32)_mm_cvtsi128_si32(s);
+}
+static int WFCK_UseAVX2()
+{
+  return __builtin_cpu_supports("avx2");
+}
+#endif
+static uint32 WFCK_CountGreater_Base(const unsigned long long* K,unsigned long long kc)
+{
+#if defined(__SSE2__)
+  /* keys are < 2^63: K[x] > kc  <=>  (kc - K[x]) has bit 63 set */
+  const __m128i v=_mm_set1_epi64x((long long)kc);
+  __m128i a0=_mm_setzero_si128(),a1=a0,a2=a0,a3=a0;
+  for (int i=0;i<256;i+=8)
+  {
+    a0=_mm_add_epi64(a0,_mm_srli_epi64(_mm_sub_epi64(v,_mm_load_si128((const __m128i*)(K+i  ))),63));
+    a1=_mm_add_epi64(a1,_mm_srli_epi64(_mm_sub_epi64(v,_mm_load_si128((const __m128i*)(K+i+2))),63));
+    a2=_mm_add_epi64(a2,_mm_srli_epi64(_mm_sub_epi64(v,_mm_load_si128((const __m128i*)(K+i+4))),63));
+    a3=_mm_add_epi64(a3,_mm_srli_epi64(_mm_sub_epi64(v,_mm_load_si128((const __m128i*)(K+i+6))),63));
+  }
+  a0=_mm_add_epi64(_mm_add_epi64(a0,a1),_mm_add_epi64(a2,a3));
+  a0=_mm_add_epi64(a0,_mm_unpackhi_epi64(a0,a0));
+  return (uint32)_mm_cvtsi128_si32(a0);
+#else
+  uint32 n=0; for (int i=0;i<256;i++) n+=(K[i]>kc); return n;
+#endif
+}
+
+#define WFCK_Key(w)   ((((unsigned long long)(uint32)(w))<<32)|(unsigned long long)(WFCK_Time++))
+
+#define WFCK_Update0(c,Rank)                              \
+{                                                         \
+  Rank=WFCK_Count(WFCK,WFCK[c]);                          \
+  CharWeight[c]+=WFC_Val0; WFCK[c]=WFCK_Key(CharWeight[c]); \
+}
+
+#define WFCK_Update_Full(Weight,Pos)                      \
+  if (WFCBufPos>=Pos)                                     \
+  {                                                       \
+    uint32 c=WFCBuf[WFCBufPos-Pos];                       \
+    CharWeight[c]-=Weight; WFCK[c]=WFCK_Key(CharWeight[c]); \
+  }                                                       \
+
 sint32 GRZip_WFC_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
 {
   uint8 * InputEnd=Input+Size;
@@ -280,6 +356,20 @@ sint32 GRZip_WFC_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
   while(Range<ARI_RangeTOP) {ARI_ShiftLow();Range<<=8;}    \
 }                                                          \
 
+/* PERF : ARI_Encode_1/_0(V) + UpdateVCtx_1/_0 sans branche (bit imprévisible), arithmétique
+   identique : Model_MaxFreq = 2^Model_NumBits ; bit=1 : -(V>>S) == ((2^S-1)-V)>>S (décalage
+   arithmétique). */
+#define ARI_EncodeBit_BL(V,Bit,S)                                          \
+{                                                                          \
+  uint32 wfcM_=0u-(uint32)(Bit);                                              \
+  uint32 wfcF_=(V);                                                           \
+  uint32 wfcR_=Range>>Model_NumBits;                                          \
+  Low+=(uint32)((wfcF_*wfcR_)&wfcM_);                                               \
+  Range=(wfcF_^((wfcF_^(Model_MaxFreq-wfcF_))&wfcM_))*wfcR_;                              \
+  while(Range<ARI_RangeTOP) {ARI_ShiftLow();Range<<=8;}                    \
+  (V)=wfcF_+(uint32)((sint32)((Model_MaxFreq-(wfcM_&(Model_MaxFreq-((1u<<(S))-1))))-wfcF_)>>(S)); \
+}
+
 #define ARI_Encode_0(FFreq0)                               \
 {                                                          \
   sint32 FTFreq0=FFreq0;                                   \
@@ -293,6 +383,16 @@ sint32 GRZip_WFC_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
 }                                                          \
 
   Init_Models();
+
+  unsigned long long WFCK[WFC_MaxByte] __attribute__((aligned(32)));
+  uint32 WFCK_Time=WFC_MaxByte;
+  for (i=0;i<WFC_MaxByte;i++) WFCK[i]=(unsigned long long)(WFC_MaxByte-1-i);
+#if defined(WFCK_HAVE_AVX2_PATH)
+  uint32 (*WFCK_Count)(const unsigned long long*,unsigned long long)=
+      WFCK_UseAVX2()?WFCK_CountGreater_AVX2:WFCK_CountGreater_Base;
+#else
+  uint32 (*WFCK_Count)(const unsigned long long*,unsigned long long)=WFCK_CountGreater_Base;
+#endif
 
   uint32 Mask,Log2RunSize,RunSize,WFCMTF_Rank,PredChar,Char=0;
 
@@ -311,20 +411,20 @@ sint32 GRZip_WFC_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
     RunSize=1;
     while ((Input<InputEnd)&&(*Input==Char)) RunSize++,Input++;
 
-    WFCBuf[WFCBufPos]=Char; WFCMTF_Rank=Char2Index[Char];
-    Update_Weight0(Char);
-    Update_Weight_Full(WFC_Val1,WFC_Pos1);
-    Update_Weight_Full(WFC_Val2,WFC_Pos2);
-    Update_Weight_Full(WFC_Val3,WFC_Pos3);
-    Update_Weight_Full(WFC_Val4,WFC_Pos4);
-    Update_Weight_Full(WFC_Val5,WFC_Pos5);
-    Update_Weight_Full(WFC_Val6,WFC_Pos6);
-    Update_Weight_Full(WFC_Val7,WFC_Pos7);
-    Update_Weight_Full(WFC_Val8,WFC_Pos8);
-    Update_Weight_Full(WFC_Val9,WFC_Pos9);
-    Update_Weight_Full(WFC_Val10,WFC_Pos10);
-    Update_Weight_Full(WFC_Val11,WFC_Pos11);
-    Update_Weight_Full(WFC_Val12,WFC_Pos12);
+    WFCBuf[WFCBufPos]=Char;
+    WFCK_Update0(Char,WFCMTF_Rank);
+    WFCK_Update_Full(WFC_Val1,WFC_Pos1);
+    WFCK_Update_Full(WFC_Val2,WFC_Pos2);
+    WFCK_Update_Full(WFC_Val3,WFC_Pos3);
+    WFCK_Update_Full(WFC_Val4,WFC_Pos4);
+    WFCK_Update_Full(WFC_Val5,WFC_Pos5);
+    WFCK_Update_Full(WFC_Val6,WFC_Pos6);
+    WFCK_Update_Full(WFC_Val7,WFC_Pos7);
+    WFCK_Update_Full(WFC_Val8,WFC_Pos8);
+    WFCK_Update_Full(WFC_Val9,WFC_Pos9);
+    WFCK_Update_Full(WFC_Val10,WFC_Pos10);
+    WFCK_Update_Full(WFC_Val11,WFC_Pos11);
+    WFCK_Update_Full(WFC_Val12,WFC_Pos12);
 
     WFCBufPos++;
 
@@ -375,18 +475,14 @@ sint32 GRZip_WFC_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
 
        VCtx=&Model_L2_0[GrNum][0];
 
+       /* PERF : bits de GrPos quasi aléatoires -> codage binaire sans branche, arithmétique
+          identique à ARI_Encode_1/ARI_Encode_0 + UpdateVCtx_1/_0 (Model_MaxFreq = 2^Model_NumBits ;
+          bit=1 : -(V>>S) == ((2^S-1)-V)>>S en décalage arithmétique). */
        for (CtxL2=1,i=0;i<=GrNum;i++,Mask>>=1)
-         if (GrPos&Mask)
           {
-            ARI_Encode_1(VCtx[CtxL2]);
-            UpdateVCtx_1(CtxL2,M_L2_Shift);
-            CtxL2=(CtxL2<<1)|1;
-          }
-         else
-          {
-            ARI_Encode_0(VCtx[CtxL2]);
-            UpdateVCtx_0(CtxL2,M_L2_Shift);
-            CtxL2<<=1;
+            uint32 wfcB_=(GrPos&Mask)!=0;
+            ARI_EncodeBit_BL(VCtx[CtxL2],wfcB_,M_L2_Shift);
+            CtxL2=(CtxL2<<1)|wfcB_;
           }
      }
 
@@ -427,16 +523,7 @@ sint32 GRZip_WFC_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
     VCtx=&Model_Log2RLE_2[Log2RunSize][0];
 
     for (i=0;i<Log2RunSize;i++,Mask>>=1,VCtx++)
-      if (RunSize&Mask)
-      {
-        ARI_Encode_1(VCtx[0]);
-        UpdateVCtx_1(0,M_Log2RLE_Shift_2);
-      }
-      else
-      {
-        ARI_Encode_0(VCtx[0]);
-        UpdateVCtx_0(0,M_Log2RLE_Shift_2);
-      }
+      ARI_EncodeBit_BL(VCtx[0],(RunSize&Mask)!=0,M_Log2RLE_Shift_2);
   }
 
   VCtx=&Model_L0_1[Char][0]; UCtx=&Model_L0_2[4*CtxL0+(CtxRLE&3)][0];
@@ -475,6 +562,7 @@ sint32 GRZip_WFC_Ari_Encode(uint8* Input,sint32 Size,uint8* Output)
 #undef ARI_Encode
 #undef ARI_Encode_0
 #undef ARI_Encode_1
+#undef ARI_EncodeBit_BL
 
 #endif  // !defined (FREEARC_DECOMPRESS_ONLY)
 
@@ -702,6 +790,9 @@ sint32 GRZip_WFC_Ari_Decode(uint8* Input,uint32 Size,uint8* Output)
 #undef Update_Weight
 #undef Update_Weight0
 #undef Update_Weight_Full
+#undef WFCK_Key
+#undef WFCK_Update0
+#undef WFCK_Update_Full
 
 #undef ARI_MaxByte
 #undef WFC_MaxByte

@@ -556,6 +556,70 @@ static inline PtrVal* cmf_skip_cyc (PtrVal *table, PtrVal *tabend, PtrVal *rowst
     return cmf_skip (table, tabend, K, mask);
 }
 
+// Politique de saut par défaut (SSE2 / scalaire) : code historique inchangé.
+struct CmfSkipBase {
+    static inline PtrVal* cyc (PtrVal *table, PtrVal *tabend, PtrVal *rowstart, PtrVal *rowend, UINT K, UINT mask)
+    {   return cmf_skip_cyc (table, tabend, rowstart, rowend, K, mask);   }
+};
+
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__)) && !defined(FREEARC_NO_AVX2)
+// PERF (AVX2, dispatch runtime) : même saut des paires {ptr,key} inutiles, 4 paires par
+// registre ymm, boucle principale de 16 paires avec un seul test de sortie (vptest sur l'OR).
+// Renvoie exactement la même paire que cmf_skip (1re paire ptr==0 ou clé compatible) ->
+// mêmes candidats examinés dans le même ordre -> bit-exact. Utilisé uniquement via
+// find_matchlen_avx2 (target avx2 + flatten), jamais inliné dans du code non-AVX2.
+#include <immintrin.h>
+#define CMF_HAVE_AVX2 1
+struct CmfSkipAVX2 {
+    __attribute__((target("avx2")))
+    static inline PtrVal* skip (PtrVal *t, PtrVal *lim, UINT K, UINT mask)
+    {
+        const __m256i kv = _mm256_set_epi32 (K, 0, K, 0, K, 0, K, 0);   // lanes: ptr key ptr key ...
+        const __m256i mv = _mm256_set_epi32 (mask, -1, mask, -1, mask, -1, mask, -1);
+        const __m256i z  = _mm256_setzero_si256();
+#define CMF_CMP8(P) _mm256_cmpeq_epi32 (_mm256_and_si256 (_mm256_xor_si256 (_mm256_loadu_si256 ((const __m256i*)(P)), kv), mv), z)
+        if (lim - t >= 8) {                                   // 1er bloc de 4 paires : sortie rapide fréquente
+            UINT m = (UINT)_mm256_movemask_ps (_mm256_castsi256_ps (CMF_CMP8(t)));
+            if (m)  return t + ((__builtin_ctz(m) >> 1) << 1);
+            t += 8;
+            while (lim - t >= 32) {                           // 16 paires / itération
+                __m256i a = CMF_CMP8(t), b = CMF_CMP8(t+8), c = CMF_CMP8(t+16), d = CMF_CMP8(t+24);
+                __m256i o = _mm256_or_si256 (_mm256_or_si256 (a, b), _mm256_or_si256 (c, d));
+                if (!_mm256_testz_si256 (o, o)) {
+                    UINT m = (UINT)_mm256_movemask_ps (_mm256_castsi256_ps (a))
+                           | ((UINT)_mm256_movemask_ps (_mm256_castsi256_ps (b)) << 8)
+                           | ((UINT)_mm256_movemask_ps (_mm256_castsi256_ps (c)) << 16)
+                           | ((UINT)_mm256_movemask_ps (_mm256_castsi256_ps (d)) << 24);
+                    return t + ((__builtin_ctz(m) >> 1) << 1);
+                }
+                t += 32;
+            }
+            while (lim - t >= 8) {
+                UINT m = (UINT)_mm256_movemask_ps (_mm256_castsi256_ps (CMF_CMP8(t)));
+                if (m)  return t + ((__builtin_ctz(m) >> 1) << 1);
+                t += 8;
+            }
+        }
+#undef CMF_CMP8
+        for (; t < lim; t += 2)
+            if (t[0]==0 || ((t[1]^K)&mask)==0)  return t;
+        return t;
+    }
+    __attribute__((target("avx2")))
+    static inline PtrVal* cyc (PtrVal *table, PtrVal *tabend, PtrVal *rowstart, PtrVal *rowend, UINT K, UINT mask)
+    {
+        if (table == tabend)  return table;
+        if (tabend < table) {
+            PtrVal *r = skip (table, rowend, K, mask);
+            if (r != rowend)  return r;
+            table = rowstart;
+        }
+        return skip (table, tabend, K, mask);
+    }
+};
+static const bool cmf_use_avx2 = __builtin_cpu_supports ("avx2");
+#endif
+
 template <uint N>  // N is minimum match length (4..7)
 struct CycledCachingMatchFinder : BaseMatchFinder
 {
@@ -573,7 +637,19 @@ struct CycledCachingMatchFinder : BaseMatchFinder
     {
         return value32(p+N-1);
     }
+#ifdef CMF_HAVE_AVX2
+    __attribute__((target("avx2"), flatten, noinline))
+    uint find_matchlen_avx2 (byte *p, void *bufend, UINT prevlen)   {return find_matchlen_t<CmfSkipAVX2> (p, bufend, prevlen);}
     uint find_matchlen (byte *p, void *bufend, UINT prevlen)
+    {
+        if (cmf_use_avx2)  return find_matchlen_avx2 (p, bufend, prevlen);
+        return find_matchlen_t<CmfSkipBase> (p, bufend, prevlen);
+    }
+#else
+    uint find_matchlen (byte *p, void *bufend, UINT prevlen)   {return find_matchlen_t<CmfSkipBase> (p, bufend, prevlen);}
+#endif
+    template <class Skip>
+    uint find_matchlen_t (byte *p, void *bufend, UINT prevlen)
     {
         UINT len;                         // Length of largest string already found
         UINT h = hashx(N,p,HashShift);    // Hash key of string for which we perform match search
@@ -601,7 +677,7 @@ struct CycledCachingMatchFinder : BaseMatchFinder
 
 //len0:
         while (table!=tabend) {
-            table = cmf_skip_cyc (table, tabend, rowstart, rowend, K, 0xffu);  if (table==tabend) break;
+            table = Skip::cyc (table, tabend, rowstart, rowend, K, 0xffu);  if (table==tabend) break;
             next_pair();
             if ((t&0xff) == 0) {
                      if (t==0)        goto len7;
@@ -614,7 +690,7 @@ struct CycledCachingMatchFinder : BaseMatchFinder
 
 len4:   q = toPtr(x1);
         while (table!=tabend) {
-            table = cmf_skip_cyc (table, tabend, rowstart, rowend, K, 0xffffu);  if (table==tabend) break;
+            table = Skip::cyc (table, tabend, rowstart, rowend, K, 0xffffu);  if (table==tabend) break;
             next_pair();
             if ((t&0xffff) == 0) {
                      if (t==0)        goto len7;
@@ -626,7 +702,7 @@ len4:   q = toPtr(x1);
 
 len5:   q = toPtr(x1);
         while (table!=tabend) {
-            table = cmf_skip_cyc (table, tabend, rowstart, rowend, K, 0xffffffu);  if (table==tabend) break;
+            table = Skip::cyc (table, tabend, rowstart, rowend, K, 0xffffffu);  if (table==tabend) break;
             next_pair();
             if ((t&0xffffff) == 0) {
                      if (t==0)        goto len7;
@@ -637,7 +713,7 @@ len5:   q = toPtr(x1);
 
 len6:   q = toPtr(x1);
         while (table!=tabend) {
-            table = cmf_skip_cyc (table, tabend, rowstart, rowend, K, 0xffffffffu);  if (table==tabend) break;
+            table = Skip::cyc (table, tabend, rowstart, rowend, K, 0xffffffffu);  if (table==tabend) break;
             next_pair();
             if (t==0) {
                 BYTE *q1 = toPtr(x1);
@@ -655,7 +731,7 @@ len7:   len = MINLEN-1;
         }
 
         while (table!=tabend) {
-            table = cmf_skip_cyc (table, tabend, rowstart, rowend, K, 0xffffffffu);  if (table==tabend) break;
+            table = Skip::cyc (table, tabend, rowstart, rowend, K, 0xffffffffu);  if (table==tabend) break;
             next_pair();
             BYTE *q1 = toPtr(x1);
             if (t == 0 && p[len] == q1[len] && val32equ(p, q1)) {
