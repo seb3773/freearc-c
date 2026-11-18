@@ -47,8 +47,7 @@ static int FindMatchFinder(const char *s)
 }
 
 // ������� � ���� .o ���� ��� ����������� ������������
-#include "C/LzmaDec.c"
-#undef kNumFullDistances
+#include "C/Types.h"
 #ifndef FREEARC_DECOMPRESS_ONLY
 namespace LzmaEncoder {
 #include "C/LzFind.c"
@@ -83,25 +82,6 @@ int SRes_to_FreeArc (SRes res)
   return FREEARC_OK;
 }
 
-SRes LzmaDec_AllocateUsingProperties(CLzmaDec *p, const CLzmaProps propNew, ISzAlloc *alloc)
-{
-  SizeT dicBufSize;
-  RINOK(LzmaDec_AllocateProbs2(p, &propNew, alloc));
-  dicBufSize = propNew.dicSize;
-  if (p->dic == 0 || dicBufSize != p->dicBufSize)
-  {
-    LzmaDec_FreeDict(p, alloc);
-    p->dic = (Byte *)alloc->Alloc(alloc, dicBufSize);
-    if (p->dic == 0)
-    {
-      LzmaDec_FreeProbs(p, alloc);
-      return SZ_ERROR_MEM;
-    }
-  }
-  p->dicBufSize = dicBufSize;
-  p->prop = propNew;
-  return SZ_OK;
-}
 
 // Input buffer size for decompressor
 uint RangeDecoderBufferSize (uint dict)
@@ -290,6 +270,8 @@ int lzma_compress2  (int dictionarySize,
 #endif  // !defined (FREEARC_DECOMPRESS_ONLY)
 
 
+#include "sdk25/lzma_fastdec.h"
+
 int lzma_decompress( int dictionarySize,
                      int hashSize,
                      int algorithm,
@@ -304,58 +286,40 @@ int lzma_decompress( int dictionarySize,
 {
   int errcode = FREEARC_OK;
   bool first_read = TRUE;
-
   UInt32 _inPos = 0, _inSize = 0, _inBufferSize = RangeDecoderBufferSize(dictionarySize);
   Byte  *_inBuf = (Byte*) MyAlloc(_inBufferSize);
   if (_inBuf == NULL)  return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
-
-  CLzmaProps LzmaProps;
-  LzmaProps.pb = posStateBits;
-  LzmaProps.lc = litContextBits;
-  LzmaProps.lp = litPosBits;
-  LzmaProps.dicSize = dictionarySize;
-
-  CLzmaDec _state;
-  LzmaDec_Construct(&_state);
-  SRes res = LzmaDec_AllocateUsingProperties(&_state, LzmaProps, &g_Alloc);
-  if (res != SZ_OK)  {errcode = SRes_to_FreeArc(res); goto freeInBuf;}
-  LzmaDec_Init(&_state);
+  lzfd *d = lzfd_create (litContextBits, litPosBits, posStateBits, dictionarySize);
+  if (!d)  {MyFree(_inBuf); return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;}
 
   for (;;)
   {
     if (_inPos == _inSize)
     {
-      // Read whole buffer in the first call if compress_all_at_once==TRUE
       _inSize = errcode = first_read || !compress_all_at_once? callback ("read", _inBuf, _inBufferSize, auxdata) : 0;
       if (errcode < 0)  break;
-      _inPos = 0;              // current position inside input data
+      _inPos = 0;
       first_read = FALSE;
     }
-
-    SizeT oldDicPos = _state.dicPos;
-    SizeT curSize = mymin(_state.dicBufSize - oldDicPos, LARGE_BUFFER_SIZE);     // Write outdata in 256kb chunks
-
-    ELzmaFinishMode finishMode = LZMA_FINISH_ANY;
-    SizeT inSizeProcessed = _inSize - _inPos;
-    ELzmaStatus status;
-    SRes res = LzmaDec_DecodeToDic(&_state, oldDicPos + curSize, _inBuf + _inPos, &inSizeProcessed, finishMode, &status);
-
+    size_t oldDicPos = lzfd_dicPos (d);
+    size_t curSize   = mymin (lzfd_dicBufSize (d) - oldDicPos, (size_t)LARGE_BUFFER_SIZE);
+    size_t inSizeProcessed = _inSize - _inPos;
+    int mark = 0;
+    int bad = lzfd_decode (d, oldDicPos + curSize, _inBuf + _inPos, &inSizeProcessed, &mark);
     _inPos += (UInt32)inSizeProcessed;
-    SizeT outSizeProcessed = _state.dicPos - oldDicPos;
+    size_t outSizeProcessed = lzfd_dicPos (d) - oldDicPos;
 
-    errcode = callback ("write", _state.dic+oldDicPos, _state.dicPos-oldDicPos, auxdata);
-    if (res != 0)    {errcode = SRes_to_FreeArc(res); break;}
+    errcode = callback ("write", lzfd_dic (d) + oldDicPos, (int)outSizeProcessed, auxdata);
+    if (bad)          {errcode = FREEARC_ERRCODE_BAD_COMPRESSED_DATA; break;}
     if (errcode < 0)  break;
 
-    bool finished = (inSizeProcessed == 0 && outSizeProcessed == 0);
-    if (finished)  {errcode = SRes_to_FreeArc(status == LZMA_STATUS_FINISHED_WITH_MARK ? SZ_OK : SZ_ERROR_DATA); break;}
+    if (inSizeProcessed == 0 && outSizeProcessed == 0)
+      {errcode = mark ? FREEARC_OK : FREEARC_ERRCODE_BAD_COMPRESSED_DATA; break;}
 
-    if (_state.dicPos == _state.dicBufSize)
-      _state.dicPos = 0;
+    if (lzfd_dicPos (d) == lzfd_dicBufSize (d))
+      lzfd_resetDicPos (d);
   }
-
-  LzmaDec_Free(&_state, &g_Alloc);
-freeInBuf:
+  lzfd_destroy (d);
   MyFree(_inBuf);
   return errcode;
 }

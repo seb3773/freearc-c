@@ -584,26 +584,46 @@ inline void PPM_CONTEXT::encodeSymbol2(int symbol)
 }
 inline void PPM_CONTEXT::decodeSymbol2()
 {
+    // PERF (bit-exact): branchless masked scans instead of the original pointer-array build.
+    //  - Pass 1: total frequency of NON-masked states (mask = CharMask[s] == EscCount).
+    //  - Found case: pass 2 accumulates the same masked sum until it exceeds `count`;
+    //    a masked state adds 0, so the crossing state is always an unmasked one, and
+    //    LowCount/HighCount are identical to the original computation.
+    //  - Escape case: CharMask[s]=EscCount for every state. Already-masked states already
+    //    hold EscCount, so the result equals the original "mask unmasked states" loop.
     SEE2_CONTEXT* psee2c=makeEscFreq2();
-    UINT Sym, count, HiCnt=0, i=NumStats-NumMasked;
-    STATE* ps[256], ** pps=ps, * p=Stats-1;
-    do {
-        do { Sym=p[1].Symbol;   p++; } while (CharMask[Sym] == EscCount);
-        HiCnt += p->Freq;                   *pps++ = p;
-    } while ( --i );
-    SubRange.scale += HiCnt;                count=ariGetCurrentCount();
-    p=*(pps=ps);
-    if (count < HiCnt) {
-        HiCnt=0;
-        while ((HiCnt += p->Freq) <= count) p=*++pps;
+    STATE* p=Stats, * pe=p+NumStats;
+    const BYTE Esc=EscCount;
+    // Unrolled with independent accumulators to break the add dependency chain
+    // (contexts with many states, e.g. order-0/1 on binary data, dominate this loop).
+    UINT Tot=0, Tot1=0, Tot2=0, Tot3=0;
+    #define PPMD_MASKED_FREQ(q) ((q)->Freq & (UINT)-(UINT)(CharMask[(q)->Symbol] != Esc))
+    for (; p+3 <= pe; p += 4) {
+        Tot  += PPMD_MASKED_FREQ(p);        Tot1 += PPMD_MASKED_FREQ(p+1);
+        Tot2 += PPMD_MASKED_FREQ(p+2);      Tot3 += PPMD_MASKED_FREQ(p+3);
+    }
+    for (; p <= pe; p++)  Tot += PPMD_MASKED_FREQ(p);
+    Tot += Tot1 + Tot2 + Tot3;
+    SubRange.scale += Tot;
+    UINT count=ariGetCurrentCount();
+    if (count < Tot) {
+        UINT HiCnt=0;
+        p=Stats;
+        for (;;) {
+            HiCnt += PPMD_MASKED_FREQ(p);
+            if (HiCnt > count) break;
+            p++;
+        }
         SubRange.LowCount = (SubRange.HighCount=HiCnt)-p->Freq;
         psee2c->update();                   update2(p);
     } else {
-        SubRange.LowCount=HiCnt;            SubRange.HighCount=SubRange.scale;
-        i=NumStats-NumMasked;               NumMasked = NumStats;
-        do { CharMask[(*pps)->Symbol]=EscCount; pps++; } while ( --i );
+        SubRange.LowCount=Tot;              SubRange.HighCount=SubRange.scale;
+        NumMasked = NumStats;
+        p=Stats;
+        do { CharMask[p->Symbol]=Esc; } while (++p <= pe);
         psee2c->Summ += SubRange.scale;
     }
+    #undef PPMD_MASKED_FREQ
 }
 inline void ClearMask(_PPMD_FILE* EncodedFile,_PPMD_FILE* DecodedFile)
 {

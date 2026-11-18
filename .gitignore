@@ -1,0 +1,10 @@
+build/
+src/dec/
+src/enc/
+src/dec_win64/
+src/enc_win64/
+src/arc
+src/arc.sfx
+src/unarc
+bench/work/
+bench/bin/

@@ -1,5 +1,18 @@
 CXX ?= g++
 CXX_WIN64 ?= x86_64-w64-mingw32-g++
+CC ?= gcc
+CC_WIN64 ?= x86_64-w64-mingw32-gcc
+# C flags for the vendored LZMA SDK 25.01 decoder (separate translation unit)
+FASTDEC_SRC = Compression/LZMA2/sdk25/lzma_fastdec.c
+# x86-64 assembly LZMA decoder loop (LzmaDecOpt from LZMA SDK 25.01, GNU as syntax).
+# Enabled by default on x86-64 hosts; LZMA_ASM=0 forces the portable C loop.
+LZMA_ASM ?= $(if $(filter x86_64 amd64,$(shell uname -m)),1,0)
+ifeq ($(LZMA_ASM),1)
+  FASTDEC_DEFS = -DZ7_LZMA_DEC_OPT
+  LZMA_ASM_DEC = $(DEC_OBJDIR)/LzmaDecOpt.o
+  LZMA_ASM_ENC = $(ENC_OBJDIR)/LzmaDecOpt.o
+endif
+FASTDEC_DEPS = $(FASTDEC_SRC) Compression/LZMA2/sdk25/LzmaDec.c Compression/LZMA2/sdk25/LzmaDec.h Compression/LZMA2/sdk25/lzma_fastdec.h
 
 # Build mode configuration:
 #   make (or make DEBUG=0) -> Production build: aggressive optimization (-O3, LTO, gc-sections, sstrip)
@@ -31,6 +44,10 @@ else
     STRIP_CMD    = (command -v sstrip >/dev/null 2>&1 && sstrip $@) || strip --strip-all $@
 endif
 
+# Optional extra flags (used by the PGO build: PGO_FLAGS=-fprofile-generate / -fprofile-use ...)
+MODE_CFLAGS  += $(PGO_FLAGS)
+MODE_LDFLAGS += $(PGO_FLAGS)
+
 UNIX_LINK_FLAGS = -lstdc++ -lrt -lpthread $(MODE_LDFLAGS)
 
 CFLAGS           = $(CODE_FLAGS) $(MODE_CFLAGS) $(DEFINES) $(Extractor_DEFINES)
@@ -55,35 +72,35 @@ HEADERS       = Compression/Compression.h Compression/Common.h
 UNARC_HEADERS = ArcStructure.h ArcCommand.h ArcProcess.h CUI.h WinCompat.h $(HEADERS)
 
 DEC_LINKOBJ = $(DEC_OBJDIR)/unarc.o $(DEC_OBJDIR)/Environment.o $(DEC_OBJDIR)/Common.o \
-              $(DEC_OBJDIR)/CompressionLibrary.o $(DEC_OBJDIR)/C_LZMA.o $(DEC_OBJDIR)/C_BCJ.o \
+              $(DEC_OBJDIR)/CompressionLibrary.o $(DEC_OBJDIR)/C_LZMA.o $(DEC_OBJDIR)/lzma_fastdec.o $(LZMA_ASM_DEC) $(DEC_OBJDIR)/C_BCJ.o \
               $(DEC_OBJDIR)/C_Dict.o $(DEC_OBJDIR)/C_Delta.o $(DEC_OBJDIR)/C_REP.o \
               $(DEC_OBJDIR)/C_LZP.o $(DEC_OBJDIR)/C_PPMD.o $(DEC_OBJDIR)/C_External.o \
               $(DEC_OBJDIR)/C_MM.o $(DEC_OBJDIR)/C_TTA.o $(DEC_OBJDIR)/C_Tornado.o \
               $(DEC_OBJDIR)/C_GRZip.o $(DEC_OBJDIR)/C_4x4.o $(DEC_OBJDIR)/C_Encryption.o
 
 SFX_LINKOBJ = $(DEC_OBJDIR)/unarc_sfx.o $(DEC_OBJDIR)/Environment.o $(DEC_OBJDIR)/Common.o \
-              $(DEC_OBJDIR)/CompressionLibrary.o $(DEC_OBJDIR)/C_LZMA.o $(DEC_OBJDIR)/C_BCJ.o \
+              $(DEC_OBJDIR)/CompressionLibrary.o $(DEC_OBJDIR)/C_LZMA.o $(DEC_OBJDIR)/lzma_fastdec.o $(LZMA_ASM_DEC) $(DEC_OBJDIR)/C_BCJ.o \
               $(DEC_OBJDIR)/C_Dict.o $(DEC_OBJDIR)/C_Delta.o $(DEC_OBJDIR)/C_REP.o \
               $(DEC_OBJDIR)/C_LZP.o $(DEC_OBJDIR)/C_PPMD.o $(DEC_OBJDIR)/C_External.o \
               $(DEC_OBJDIR)/C_MM.o $(DEC_OBJDIR)/C_TTA.o $(DEC_OBJDIR)/C_Tornado.o \
               $(DEC_OBJDIR)/C_GRZip.o $(DEC_OBJDIR)/C_4x4.o $(DEC_OBJDIR)/C_Encryption.o
 
 ENC_LINKOBJ = $(ENC_OBJDIR)/arc.o $(ENC_OBJDIR)/Environment.o $(ENC_OBJDIR)/Common.o \
-              $(ENC_OBJDIR)/CompressionLibrary.o $(ENC_OBJDIR)/C_LZMA.o $(ENC_OBJDIR)/C_BCJ.o \
+              $(ENC_OBJDIR)/CompressionLibrary.o $(ENC_OBJDIR)/C_LZMA.o $(ENC_OBJDIR)/lzma_fastdec.o $(LZMA_ASM_ENC) $(ENC_OBJDIR)/C_BCJ.o \
               $(ENC_OBJDIR)/C_Dict.o $(ENC_OBJDIR)/C_Delta.o $(ENC_OBJDIR)/C_REP.o \
               $(ENC_OBJDIR)/C_LZP.o $(ENC_OBJDIR)/C_PPMD.o $(ENC_OBJDIR)/C_External.o \
               $(ENC_OBJDIR)/C_MM.o $(ENC_OBJDIR)/C_TTA.o $(ENC_OBJDIR)/C_Tornado.o \
               $(ENC_OBJDIR)/C_GRZip.o $(ENC_OBJDIR)/C_4x4.o $(ENC_OBJDIR)/C_Encryption.o
 
 DEC_WIN64_LINKOBJ = $(DEC_WIN64_OBJDIR)/unarc.o $(DEC_WIN64_OBJDIR)/Environment.o $(DEC_WIN64_OBJDIR)/Common.o \
-                    $(DEC_WIN64_OBJDIR)/CompressionLibrary.o $(DEC_WIN64_OBJDIR)/C_LZMA.o $(DEC_WIN64_OBJDIR)/C_BCJ.o \
+                    $(DEC_WIN64_OBJDIR)/CompressionLibrary.o $(DEC_WIN64_OBJDIR)/C_LZMA.o $(DEC_WIN64_OBJDIR)/lzma_fastdec.o $(DEC_WIN64_OBJDIR)/LzmaDecOpt.o $(DEC_WIN64_OBJDIR)/C_BCJ.o \
                     $(DEC_WIN64_OBJDIR)/C_Dict.o $(DEC_WIN64_OBJDIR)/C_Delta.o $(DEC_WIN64_OBJDIR)/C_REP.o \
                     $(DEC_WIN64_OBJDIR)/C_LZP.o $(DEC_WIN64_OBJDIR)/C_PPMD.o $(DEC_WIN64_OBJDIR)/C_External.o \
                     $(DEC_WIN64_OBJDIR)/C_MM.o $(DEC_WIN64_OBJDIR)/C_TTA.o $(DEC_WIN64_OBJDIR)/C_Tornado.o \
                     $(DEC_WIN64_OBJDIR)/C_GRZip.o $(DEC_WIN64_OBJDIR)/C_4x4.o $(DEC_WIN64_OBJDIR)/C_Encryption.o
 
 ENC_WIN64_LINKOBJ = $(ENC_WIN64_OBJDIR)/arc.o $(ENC_WIN64_OBJDIR)/Environment.o $(ENC_WIN64_OBJDIR)/Common.o \
-                    $(ENC_WIN64_OBJDIR)/CompressionLibrary.o $(ENC_WIN64_OBJDIR)/C_LZMA.o $(ENC_WIN64_OBJDIR)/C_BCJ.o \
+                    $(ENC_WIN64_OBJDIR)/CompressionLibrary.o $(ENC_WIN64_OBJDIR)/C_LZMA.o $(ENC_WIN64_OBJDIR)/lzma_fastdec.o $(ENC_WIN64_OBJDIR)/LzmaDecOpt.o $(ENC_WIN64_OBJDIR)/C_BCJ.o \
                     $(ENC_WIN64_OBJDIR)/C_Dict.o $(ENC_WIN64_OBJDIR)/C_Delta.o $(ENC_WIN64_OBJDIR)/C_REP.o \
                     $(ENC_WIN64_OBJDIR)/C_LZP.o $(ENC_WIN64_OBJDIR)/C_PPMD.o $(ENC_WIN64_OBJDIR)/C_External.o \
                     $(ENC_WIN64_OBJDIR)/C_MM.o $(ENC_WIN64_OBJDIR)/C_TTA.o $(ENC_WIN64_OBJDIR)/C_Tornado.o \
@@ -401,3 +418,21 @@ $(ENC_WIN64_OBJDIR)/C_4x4.o: Compression/4x4/C_4x4.cpp Compression/4x4/C_4x4.h $
 
 $(ENC_WIN64_OBJDIR)/C_Encryption.o: Compression/_Encryption/C_Encryption.cpp Compression/_Encryption/C_Encryption.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -ICompression/_Encryption -ICompression/_Encryption/headers -o $@ $<
+
+# --- Vendored LZMA SDK 25.01 decoder (compiled as C; LzmaDec.c is #included by the unity wrapper) ---
+$(DEC_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(DEC_OBJDIR)
+	$(CC) -c -w $(MODE_CFLAGS) $(FASTDEC_DEFS) -o $@ $(FASTDEC_SRC)
+$(ENC_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(ENC_OBJDIR)
+	$(CC) -c -w $(MODE_CFLAGS) $(FASTDEC_DEFS) -o $@ $(FASTDEC_SRC)
+$(DEC_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(DEC_OBJDIR)
+	$(CC) -c -o $@ $<
+$(ENC_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(ENC_OBJDIR)
+	$(CC) -c -o $@ $<
+$(DEC_WIN64_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(DEC_WIN64_OBJDIR)
+	$(CC_WIN64) -c -w -O3 -DZ7_LZMA_DEC_OPT -o $@ $(FASTDEC_SRC)
+$(ENC_WIN64_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(ENC_WIN64_OBJDIR)
+	$(CC_WIN64) -c -w -O3 -DZ7_LZMA_DEC_OPT -o $@ $(FASTDEC_SRC)
+$(DEC_WIN64_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(DEC_WIN64_OBJDIR)
+	$(CC_WIN64) -c -o $@ $<
+$(ENC_WIN64_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(ENC_WIN64_OBJDIR)
+	$(CC_WIN64) -c -o $@ $<

@@ -434,6 +434,31 @@ finished:
 #endif  // !defined (FREEARC_DECOMPRESS_ONLY)
 
 
+// Read exactly `size` bytes unless EOF/error is hit. The upstream stage of a
+// method chain (e.g. tta in "mm+tta") delivers data through a pipe and may
+// return short reads; the MM decoder needs whole headers and whole samples.
+static int mm_read_full (CALLBACK_FUNC *callback, void *auxdata, void *buf, int size)
+{
+    int total = 0;
+    while (total < size) {
+        int r = callback ("read", (char*)buf + total, size - total, auxdata);
+        if (r < 0)  return r;
+        if (r == 0) break;
+        total += r;
+    }
+    return total;
+}
+
+// Exact-size read used for MM headers (shadows the generic READ semantics).
+#define MM_READ(b, sz)                                                      \
+{                                                                          \
+    int localSize = (sz);                                                  \
+    if (localSize && (errcode = mm_read_full (callback, auxdata, (b), localSize)) != localSize) { \
+        if (errcode >= 0) errcode = FREEARC_ERRCODE_READ;                  \
+        goto finished;                                                     \
+    }                                                                      \
+}
+
 int mm_decompress (CALLBACK_FUNC *callback, void *auxdata)
 {
     byte header[3];
@@ -443,7 +468,7 @@ int mm_decompress (CALLBACK_FUNC *callback, void *auxdata)
     int errcode,                                  // êîä, âîçâðàù¸ííûé ïîñëåäíåé îïåðàöèåé ÷òåíèÿ/çàïèñè
         bytes;                                    // how many bytes was read to buf
 
-    READ (header,1);
+    MM_READ (header,1);
     if (header[0] == 0) {
         // Copy data in chunks
         while ( (errcode = bytes = callback ("read", buf, BUFFER_SIZE, auxdata)) > 0 )
@@ -455,13 +480,13 @@ int mm_decompress (CALLBACK_FUNC *callback, void *auxdata)
         // Well, just now we don't support even bits1&2 enabled (i.e. we don't support restoring proper byte order)
         if (header[0] & ~1)  {errcode=FREEARC_ERRCODE_BAD_COMPRESSED_DATA; goto finished;}
         // Read the remaining two header bytes
-        READ (header+1, 2);
+        MM_READ (header+1, 2);
 
         // Copy original file header
         int offset;
-        READ4 (offset);
+        { unsigned char h4[4]; MM_READ (h4, 4); offset = value32 (h4); }
         buf1 = malloc(offset);
-        READ (buf1, offset);
+        MM_READ (buf1, offset);
         WRITE (buf1, offset);
         FreeAndNil (buf1);
 
@@ -472,10 +497,10 @@ int mm_decompress (CALLBACK_FUNC *callback, void *auxdata)
         int N         = num_chan*byte_size;           // bytes per sample
         int chunk     = roundDown (BUFFER_SIZE, N);   // size of data processing chunks
         base = calloc (num_chan, byte_size==3? 4:byte_size);  // room for previous values for all channels what will be substracted from next ones
-        READ (base, roundUp(3+4+offset,N) - (3+4+offset));  // skip alignment bytes
+        MM_READ (base, roundUp(3+4+offset,N) - (3+4+offset));  // skip alignment bytes
 
         // Process data in chunks
-        while ( (errcode = bytes = callback ("read", buf, chunk, auxdata)) > 0 )
+        while ( (errcode = bytes = mm_read_full (callback, auxdata, buf, chunk)) > 0 )
         {
             switch (byte_size) {
             case 1 : undiff1 (buf, bytes, num_chan, base);  break;

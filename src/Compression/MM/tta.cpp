@@ -455,8 +455,9 @@ int tta_decompress (CALLBACK_FUNC *callback, void *auxdata)
     rest = malloc1d (num_chan, byte_size);
 
     while (1) {
-        // read block header which stores uncompressed size of block
-        READ4 (bytes_read);
+        // read block header which stores uncompressed size of block;
+        // a clean end of stream here is the normal termination (errcode=0)
+        READ4_OR_EOF (bytes_read);
         if (bytes_read > (1 << 30))
             tta_error (FILE_ERROR, NULL);
         frame_len = bytes_read/(num_chan*byte_size);
