@@ -77,6 +77,12 @@ CASES = [
     ("rep",     "-mt1 -m5 -rep", ".", False),
     ("mm",      "-mt1 -m5 -mm", "media", False),
     ("store",   "-mt1 -m0", ".", False),
+    # --- Filter-only chains: isolate the cost of the preprocessors themselves ---
+    ("f_dict",    "-mt1 -mdict:p:64m:80%", "text", False),
+    ("f_lzp",     "-mt1 -mlzp:80m:105:d1m:s32:h22:92%", "text", False),
+    ("f_dictlzp", "-mt1 -mdict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%", "text", False),
+    ("f_lzpbin",  "-mt1 -mlzp:64m:24:h20:92%", "bin game", False),
+    ("f_exe",     "-mt1 -mexe", "bin game", False),
     # --- Multithreaded variants (4x4 / default thread count) ---
     ("mt_m1",   "-m1", ".", True),
     ("mt_m2",   "-m2", ".", True),

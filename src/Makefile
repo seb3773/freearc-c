@@ -193,13 +193,13 @@ $(DEC_OBJDIR)/Common.o: Compression/Common.cpp $(HEADERS) | $(DEC_OBJDIR)
 $(DEC_OBJDIR)/C_External.o: Compression/External/C_External.cpp Compression/External/C_External.h $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
-$(DEC_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h $(HEADERS) | $(DEC_OBJDIR)
+$(DEC_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h Compression/LZMA2/C/Bra86.c Compression/LZMA2/C/Bra.h $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
 $(DEC_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
-$(DEC_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h $(HEADERS) | $(DEC_OBJDIR)
+$(DEC_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h Compression/Dict/dict.cpp $(HEADERS) | $(DEC_OBJDIR)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
 $(DEC_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h Compression/Delta/Delta.cpp $(HEADERS) | $(DEC_OBJDIR)
@@ -252,13 +252,13 @@ $(ENC_OBJDIR)/Common.o: Compression/Common.cpp $(HEADERS) | $(ENC_OBJDIR)
 $(ENC_OBJDIR)/C_External.o: Compression/External/C_External.cpp Compression/External/C_External.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
-$(ENC_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h $(HEADERS) | $(ENC_OBJDIR)
+$(ENC_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h Compression/LZMA2/C/Bra86.c Compression/LZMA2/C/Bra.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
 $(ENC_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
-$(ENC_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h $(HEADERS) | $(ENC_OBJDIR)
+$(ENC_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h Compression/Dict/dict.cpp $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
 $(ENC_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h Compression/Delta/Delta.cpp $(HEADERS) | $(ENC_OBJDIR)
@@ -321,13 +321,13 @@ $(DEC_WIN64_OBJDIR)/Common.o: Compression/Common.cpp $(HEADERS) | $(DEC_WIN64_OB
 $(DEC_WIN64_OBJDIR)/C_External.o: Compression/External/C_External.cpp Compression/External/C_External.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
-$(DEC_WIN64_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
+$(DEC_WIN64_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h Compression/LZMA2/C/Bra86.c Compression/LZMA2/C/Bra.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
 $(DEC_WIN64_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
-$(DEC_WIN64_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h $(HEADERS) | $(DEC_WIN64_OBJDIR)
+$(DEC_WIN64_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h Compression/Dict/dict.cpp $(HEADERS) | $(DEC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_CFLAGS) -o $@ $<
 
 $(DEC_WIN64_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h Compression/Delta/Delta.cpp $(HEADERS) | $(DEC_WIN64_OBJDIR)
@@ -380,13 +380,13 @@ $(ENC_WIN64_OBJDIR)/Common.o: Compression/Common.cpp $(HEADERS) | $(ENC_WIN64_OB
 $(ENC_WIN64_OBJDIR)/C_External.o: Compression/External/C_External.cpp Compression/External/C_External.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
-$(ENC_WIN64_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
+$(ENC_WIN64_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h Compression/LZMA2/C/Bra86.c Compression/LZMA2/C/Bra.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -DFREEARC_NO_MF_MT -o $@ $<
 
-$(ENC_WIN64_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
+$(ENC_WIN64_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h Compression/Dict/dict.cpp $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h Compression/Delta/Delta.cpp $(HEADERS) | $(ENC_WIN64_OBJDIR)

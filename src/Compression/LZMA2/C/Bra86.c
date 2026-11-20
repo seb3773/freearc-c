@@ -3,6 +3,39 @@
 
 #include "Bra.h"
 
+/* Opcode scan acceleration (freearc-c): the search for the next E8/E9 byte is done 32 bytes
+   at a time with SSE2 (part of the x86-64 baseline, so no run-time dispatch is needed).
+   The conversion itself is unchanged, so the output is identical to the scalar code.
+   An AVX2 variant was measured and gave no additional gain, so it is not included.
+   Define BRA86_NO_SIMD to build the original byte-by-byte scan only. */
+#if !defined(BRA86_NO_SIMD) && (defined(__x86_64__) || defined(__SSE2__)) && (defined(__GNUC__) || defined(__clang__))
+#define BRA86_SIMD 1
+#include <emmintrin.h>
+
+/* First position in [p,limit) holding E8/E9, scanning whole 16-byte blocks only (never reads
+   at or beyond limit). If no block contains one, returns the first unscanned position and the
+   scalar loop finishes the tail. */
+static const Byte *Bra86_ScanSSE2(const Byte *p, const Byte *limit)
+{
+  const __m128i fe = _mm_set1_epi8((char)0xFE), e8 = _mm_set1_epi8((char)0xE8);
+  for (; p + 32 <= limit; p += 32)
+  {
+    __m128i a = _mm_cmpeq_epi8(_mm_and_si128(_mm_loadu_si128((const __m128i *)p), fe), e8);
+    __m128i b = _mm_cmpeq_epi8(_mm_and_si128(_mm_loadu_si128((const __m128i *)(p + 16)), fe), e8);
+    unsigned m = (unsigned)_mm_movemask_epi8(a) | ((unsigned)_mm_movemask_epi8(b) << 16);
+    if (m)
+      return p + __builtin_ctz(m);
+  }
+  for (; p + 16 <= limit; p += 16)
+  {
+    unsigned m = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(_mm_and_si128(_mm_loadu_si128((const __m128i *)p), fe), e8));
+    if (m)
+      return p + __builtin_ctz(m);
+  }
+  return p;
+}
+#endif
+
 #define Test86MSByte(b) ((b) == 0 || (b) == 0xFF)
 
 const Byte kMaskToAllowedStatus[8] = {1, 1, 1, 0, 1, 0, 0, 0};
@@ -21,6 +54,9 @@ SizeT x86_Convert(Byte *data, SizeT size, UInt32 ip, UInt32 *state, int encoding
   {
     Byte *p = data + bufferPos;
     Byte *limit = data + size - 4;
+#ifdef BRA86_SIMD
+    p = (Byte *)Bra86_ScanSSE2(p, limit);   /* stops on E8/E9 or before the last partial block */
+#endif
     for (; p < limit; p++)
       if ((*p & 0xFE) == 0xE8)
         break;

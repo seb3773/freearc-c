@@ -63,7 +63,116 @@ static inline UINT  lzpH(UINT c,BYTE* p,int HashMask) {
     i=lzpC(Out += 12)=lzpC(In += 12);       k=lzpH(i,Out,HashMask);
 
 #ifndef FREEARC_DECOMPRESS_ONLY
+
+/*
+ * Optimized LZP encoder (bit-exact with the original Shkarin/Grebnov code kept in
+ * LZPEncodeLegacy below and selectable with -DFREEARC_LZP_LEGACY_ENCODER).
+ *
+ * - Hash table stores 32-bit offsets from the start of the input block instead of raw
+ *   64-bit pointers (Size is an UINT, so every position fits). The table shrinks by half,
+ *   which lowers cache/TLB misses on the per-byte random lookup.
+ * - Match length is computed 8 bytes at a time with XOR + count-trailing-zeros
+ *   (little-endian targets), instead of 4-byte steps followed by a byte loop.
+ *   Both compute the exact common prefix length capped at the end of input.
+ * - The rotate used by the hash is written in portable C so the compiler emits a
+ *   plain ROR and can schedule it (the inline asm version was opaque to the optimizer).
+ * - Two-stage software prefetch: the hash bucket of the position LZP_PF bytes ahead,
+ *   then the input bytes referenced by the bucket of the position LZP_PF2 bytes ahead.
+ *   Prefetches are hints only; table contents and output are unaffected.
+ *
+ * The memory estimates of LZP_METHOD (GetCompressionMem/SetCompressionMem) intentionally still
+ * count 8 bytes per hash bucket: they drive the automatic HashSizeLog/BlockSize selection, which
+ * must stay identical to legacy FreeArc for archive parity.
+ */
+// Prefetch distances (bytes ahead): LZP_PF prefetches the hash bucket, LZP_PF2 (shorter, so
+// the bucket is already cached) prefetches the input bytes the bucket currently points to.
+// Tuned on the bench corpus; 0 disables a stage. Results do not depend on these values.
+#ifndef LZP_PF
+#define LZP_PF 64
+#endif
+#ifndef LZP_PF2
+#define LZP_PF2 16
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#define LZP_PREFETCH(addr)  __builtin_prefetch (addr)
+#else
+#define LZP_PREFETCH(addr)  ((void)0)
+#endif
+
+static inline UINT lzpLoad32 (const BYTE *p)            { UINT x; memcpy (&x, p, 4); return x; }
+static inline UINT lzpRor17  (UINT c)                   { return (c >> 17) | (c << 15); }
+// Hash of the context ending just before position p, given c = 4 bytes p[-4..-1]
+static inline UINT lzpHash   (UINT c, const BYTE *p, UINT HashMask)
+{
+    return (c + 5*lzpRor17(c) + 3*lzpLoad32(p-5)) & HashMask;
+}
+
+// Length of the common prefix of a[] and b[], at most avail bytes. b < a, both readable up to a+avail.
+static inline UINT lzpMatchLen (const BYTE *a, const BYTE *b, size_t avail)
+{
+    size_t j = 0;
+#if defined(FREEARC_INTEL_BYTE_ORDER) && defined(__GNUC__)
+    while (j + 8 <= avail) {
+        unsigned long long x, y;
+        memcpy (&x, a+j, 8);  memcpy (&y, b+j, 8);
+        if (x != y)  return (UINT)(j + (__builtin_ctzll (x ^ y) >> 3));
+        j += 8;
+    }
+#endif
+    while (j < avail && a[j] == b[j])  j++;
+    return (UINT)j;
+}
+
 int LZPEncode(BYTE* In,UINT Size,BYTE* Out,int MinLen,int HashSize,int Barrier,int SmallestLen)
+{
+    BYTE* OutEnd=Out+Size;   if (Size<32)  return 0;
+    UINT i, k, n1=1, n=1, HashMask=HashSize-1;
+    BYTE *InEnd=In+Size, *OutStart=Out, *Base=In;
+    UINT *HTable = (UINT*) BigAlloc (HashSize * sizeof(UINT));
+    if (HTable==NULL)  return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+    for (i=0;i < (UINT)HashSize;i++)        HTable[i]=5;          // == Pattern+5 of the original code
+    memcpy (Out, In, 12);   Out += 12;   In += 12;
+    i=lzpLoad32(In-4);                      k=lzpHash(i,In,HashMask);
+    do {
+        BYTE *p = Base + HTable[k];         int ml;
+#if LZP_PF > 0
+        if (In+LZP_PF <= InEnd)
+            LZP_PREFETCH (&HTable[lzpHash(lzpLoad32(In+LZP_PF-4), In+LZP_PF, HashMask)]);
+#endif
+#if LZP_PF2 > 0
+        if (In+LZP_PF2 <= InEnd)
+            LZP_PREFETCH (Base + HTable[lzpHash(lzpLoad32(In+LZP_PF2-4), In+LZP_PF2, HashMask)] - 4);
+#endif
+        if ( !--n )  { HTable[k]=(UINT)(In-Base);  n=n1; }
+        if (i != lzpLoad32(p-4))            *Out++ = *In++;
+        else if ((ml = In-p>Barrier? SmallestLen:MinLen), (In+ml <= InEnd && lzpLoad32(p+ml-4) == lzpLoad32(In+ml-4))) {
+            i = lzpMatchLen (In, p, InEnd-In);
+            if (i < (UINT)ml)               goto MATCH_NOT_FOUND;
+            HTable[k]=(UINT)(In-Base);      n1 += (In-p > (n1+1)*HashSize && n1 < 7);
+            *Out++ = LZP_MATCH_FLAG;        In += (k=i);
+            for (i -= ml;i>=254 && Out<OutEnd;i -= 254)
+                    *--OutEnd = 0;
+            *--OutEnd = i+1;
+            while(int(k -= 2*n1+1) > 0)     HTable[lzpHash(lzpLoad32(In-k-4),In-k,HashMask)]=(UINT)(In-k-Base);
+        } else {
+MATCH_NOT_FOUND:
+            if ((*Out++ = *In++) == LZP_MATCH_FLAG)
+                    *--OutEnd = 255;
+        }
+        k=lzpHash(i=lzpLoad32(In-4),In,HashMask);
+    } while (In<InEnd && Out<OutEnd);
+    BigFree(HTable);
+    if (Out >= OutEnd)       return 0;
+    memmove(Out,OutEnd,OutStart+Size-OutEnd);
+    return Size-(OutEnd-Out);
+}
+
+#ifdef FREEARC_LZP_LEGACY_ENCODER
+#define LZPEncode LZPEncodeLegacy
+#endif
+// Original encoder, kept as the reference implementation (enable with -DFREEARC_LZP_LEGACY_ENCODER)
+int LZPEncodeLegacy(BYTE* In,UINT Size,BYTE* Out,int MinLen,int HashSize,int Barrier,int SmallestLen)
 {
     BYTE* OutEnd=Out+Size;   if (Size<32)  return 0;
     LZP_INIT(HashSize,In);

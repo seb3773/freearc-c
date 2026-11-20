@@ -425,6 +425,20 @@ struct stats {
     }                                                                                                              \
 }
 
+// char_counts[c] += number of bytes c in [p,end). Four sub-histograms break the
+// store-to-load dependency between consecutive equal bytes.
+static void add_byte_histogram (const byte *p, const byte *end)
+{
+    unsigned h[4][UCHAR_MAX+1];
+    memset (h, 0, sizeof(h));
+    for (; p+4 <= end; p += 4) {
+        h[0][p[0]]++;  h[1][p[1]]++;  h[2][p[2]]++;  h[3][p[3]]++;
+    }
+    for (; p < end; p++)  h[0][*p]++;
+    for (int c=0; c<=UCHAR_MAX; c++)
+        char_counts[c] += (count_t)(h[0][c] + h[1][c] + h[2][c] + h[3][c]);
+}
+
 #define WORD_STEP 4
 
 // врем€ работы различных вариантов phase1
@@ -568,11 +582,14 @@ int phase1 (byte *buf, unsigned bufsize)
             break;
         } while (p < endbuf);
 
-    end:while (p0<p)  char_counts[*p0++]++;  // подсчЄт частот байтов во входных данных
+    end:;   // the byte histogram of the scanned words is computed in one pass after the loop
 
     } while (p < endbuf);
 
-    while (p<buf+bufsize)  char_counts[*p++]++;
+    // The original code counted the bytes of every scanned word [p0,p) inside the loop and
+    // then the tail [p,buf+bufsize). Words are consecutive and cover [buf,p), so the result
+    // is exactly the histogram of [buf, max(p,buf+bufsize)), computed here in one fast pass.
+    add_byte_histogram (buf, mymax(p, buf+bufsize));
 
     LastWord = NextWord;  // теперь это - конец словар€
 
@@ -921,6 +938,13 @@ union {
 
 unsigned  hashsize;
 unsigned  hashmask;
+// Bit (a<<8|b) is set if some dictionary word starts with the bytes a,b (or is 1 byte long and
+// starts with a). FindWord() can only return a word that equals the input at p0, so when the
+// bit of p0[0],p0[1] is clear FindWord() returns NULL and the lookup can be skipped.
+// (A second, hashed 3-byte filter was measured: it removes ~40% of the remaining FindWord
+// calls on text but gave no measurable speed-up, so it is not used.)
+byte      first2_filter[(UCHAR_MAX+1)*(UCHAR_MAX+1)/8];
+#define FIRST2_TEST(p)  (first2_filter[((p)[0]<<5) | ((p)[1]>>3)] & (1 << ((p)[1]&7)))
 CodeWord *codewords_hash;
 ushort   *hashbits;
 byte     *words_text;
@@ -967,6 +991,14 @@ int phase6 ()
     // (текст коротких слов заноситс€ непосредственно в запись CodeWord)
     words_text = (byte*) malloc (words_len);
     byte *wordsptr = words_text;
+
+    // Build the 2-byte prefix filter used by phase7
+    memset (first2_filter, 0, sizeof(first2_filter));
+    for (Word *p = FirstWord; p<LastWord; p++) {
+        if (p->len >= 2)  first2_filter[(p->ptr[0]<<5) | (p->ptr[1]>>3)] |= 1 << (p->ptr[1]&7);
+        else if (p->len == 1)  memset (first2_filter + (p->ptr[0]<<5), 0xFF, 32);
+        else  memset (first2_filter, 0xFF, sizeof(first2_filter));
+    }
 
     // «аполн€ем хеш-таблицу codewords_hash словами
     // и создаЄм хеш-цепочки в hashbits дл€ побуквенного поиска этих слов
@@ -1070,7 +1102,7 @@ int phase7 (byte *buf, unsigned bufsize, byte *outbuf, unsigned *outsize)
          *outptr = outbuf;        // текущий указатель в выходном буфере
     do {
         // Ќайти в словаре слово максимальной длины, начинающеес€ с текущей позиции
-        CodeWord *word = FindWord (p,endbuf);
+        CodeWord *word = (p+1 < endbuf && !FIRST2_TEST(p))?  NULL : FindWord (p,endbuf);
         // » уж если верное слово найдено..
         if (word) {
             put_Word (word);   // ¬ывести 1 или 2 байта - код найденного слова

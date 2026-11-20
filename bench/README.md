@@ -64,3 +64,19 @@ bench/ab_build.sh src /tmp/cand.so            # build candidate shared library
 g++ -O3 bench/abbench.cpp -o bench/abbench -ldl
 bench/abbench /tmp/base.so /tmp/cand.so "tor:6" 8 bench/work/corpus/text/sources.txt
 ```
+
+## Encoder differential fuzzing and cold-start A/B
+
+```sh
+g++ -O2 bench/abfuzz.cpp  -o bench/abfuzz  -ldl
+g++ -O2 bench/abfirst.cpp -o bench/abfirst -ldl
+# byte-identical output on thousands of generated inputs (tiny/odd sizes, many data shapes)
+bench/abfuzz  /tmp/base.so /tmp/cand.so 3000 exe lzp "lzp:80m:105:d1m:s32:h22:92%" "dict:64m:0%"
+# timing of the first call in a fresh process (cold globals, as in a real arc run)
+bench/abfirst /tmp/base.so /tmp/cand.so "dict:p:64m:80%" 30 bench/work/corpus/text/*.txt
+```
+
+Note: shared-library builds (`ab_build.sh`, `-fPIC`) can distort codecs that use many global
+variables in hot loops (DICT). Confirm such results with the production objects:
+`bench/kbench_build.sh` on two built trees, run alternately in fresh processes.
+The `f_*` cases of `enc_bench.py` time the preprocessors alone (no back-end compressor).
