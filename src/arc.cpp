@@ -19,6 +19,9 @@ extern "C" {
 #include "Compression/MM/mmdet.h"
 }
 #include "WinCompat.h"
+#include "ArcIni.h"
+
+static ArcIni g_ini;
 #ifndef _WIN32
 #include <pthread.h>
 #endif
@@ -103,6 +106,9 @@ static const char *g_usage =
   "  --logfile=<file>   write operation log to specified file (-lo)\n"
   "  -q                 quiet\n"
   "  --noarcext         do not append .arc to the archive name\n"
+  "  -cfg<file>, --config=<file> use configuration file (default: arc.ini)\n"
+  "  -cfg-, --no-config disable configuration file\n"
+  "  --print-config     display definitions of compression methods\n"
   "  @LIST              read file names from LIST (one path per line)\n";
 
 static int g_quiet = 0;
@@ -1248,6 +1254,35 @@ static std::string apply_extra_filters(const std::string &base, const std::vecto
   return r;
 }
 
+static std::vector<std::pair<std::string, std::string> > parse_slash_auto_groups(const char *m) {
+  std::vector<std::pair<std::string, std::string> > groups;
+  if (!m || !*m) return groups;
+  const char *p = m;
+  while (*p) {
+    const char *slash = strchr(p, '/');
+    std::string part = slash ? std::string(p, slash - p) : std::string(p);
+    size_t start = 0;
+    while (start < part.size() && (part[start] == ' ' || part[start] == '\t')) start++;
+    size_t end = part.size();
+    while (end > start && (part[end - 1] == ' ' || part[end - 1] == '\t')) end--;
+    part = part.substr(start, end - start);
+    if (!part.empty()) {
+      size_t eq = part.find('=');
+      if (eq != std::string::npos && part[0] == '$') {
+        std::string typ = part.substr(0, eq);
+        std::string mth = map_method(part.substr(eq + 1).c_str());
+        groups.push_back(std::make_pair(typ, mth));
+      } else {
+        std::string mth = map_method(part.c_str());
+        groups.push_back(std::make_pair(std::string(""), mth));
+      }
+    }
+    if (!slash) break;
+    p = slash + 1;
+  }
+  return groups;
+}
+
 static std::vector<std::pair<std::string, std::string> > expand_auto_groups(const char *name, int cpus) {
   std::vector<std::pair<std::string, std::string> > out;
   if (!name || !*name) return out;
@@ -1674,36 +1709,17 @@ static void add_pattern_arg(const char *arg, std::vector<std::string> &list, con
 }
 
 static std::string find_unarc_binary(const char *argv0) {
+  std::string exe_dir = ArcIni::get_executable_dir(argv0);
 #ifdef _WIN32
-  char self_exe[MAX_PATH];
-  DWORD len = GetModuleFileNameA(NULL, self_exe, sizeof(self_exe) - 1);
-  if (len > 0) {
-    self_exe[len] = '\0';
-    std::string s = self_exe;
-    size_t slash = s.find_last_of("\\/");
-    if (slash != std::string::npos) {
-      std::string path = s.substr(0, slash + 1) + "unarc.exe";
-      if (access(path.c_str(), 0) == 0) return path;
-    }
-  }
-#endif
-  if (argv0) {
-    std::string s = argv0;
-    size_t slash = s.find_last_of("/\\");
-    if (slash != std::string::npos) {
-      std::string path = s.substr(0, slash + 1) + "unarc";
-#ifdef _WIN32
-      if (access((path + ".exe").c_str(), 0) == 0) return path + ".exe";
-#endif
-      if (access(path.c_str(), X_OK) == 0) return path;
-    }
-  }
-#ifdef _WIN32
+  std::string p = exe_dir + "unarc.exe";
+  if (access(p.c_str(), 0) == 0) return p;
   if (access("build/win64/unarc.exe", 0) == 0) return "build/win64/unarc.exe";
   if (access("../build/win64/unarc.exe", 0) == 0) return "../build/win64/unarc.exe";
   if (access("./unarc.exe", 0) == 0) return "./unarc.exe";
   return "unarc.exe";
 #else
+  std::string p = exe_dir + "unarc";
+  if (access(p.c_str(), X_OK) == 0) return p;
   if (access("build/linux/unarc", X_OK) == 0) return "build/linux/unarc";
   if (access("../build/linux/unarc", X_OK) == 0) return "../build/linux/unarc";
   if (access("./unarc", X_OK) == 0) return "./unarc";
@@ -2434,9 +2450,12 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
 
   std::vector<std::pair<std::string, std::string> > auto_groups;
   std::string default_method = method ? method : aNO_COMPRESSION;
-  bool use_auto = is_auto_method_name(method);
+  bool use_auto = method && (is_auto_method_name(method) || strchr(method, '/'));
   if (use_auto) {
-    auto_groups = expand_auto_groups(method, GetCompressionThreads());
+    if (strchr(method, '/'))
+      auto_groups = parse_slash_auto_groups(method);
+    else
+      auto_groups = expand_auto_groups(method, GetCompressionThreads());
     if (!extra_filters.empty()) {
       for (size_t gi = 0; gi < auto_groups.size(); gi++)
         auto_groups[gi].second = apply_extra_filters(auto_groups[gi].second, extra_filters);
@@ -3048,6 +3067,21 @@ int main(int argc, char **argv) {
     return argc == 1 ? 0 : FREEARC_EXIT_ERROR;
   }
 
+  ArcIni::ConfigScanResult cfg_scan = ArcIni::scan_config_options(argc, argv);
+  if (cfg_scan.print_config) {
+    ArcIni ini;
+    std::string ini_path = ArcIni::find_arc_ini(argv[0], cfg_scan.custom_cfg, cfg_scan.cfg_disabled);
+    if (!ini_path.empty()) ini.load(ini_path);
+    ini.print_config(stdout);
+    return 0;
+  }
+
+  std::string ini_path = ArcIni::find_arc_ini(argv[0], cfg_scan.custom_cfg, cfg_scan.cfg_disabled);
+  if (!ini_path.empty()) {
+    g_ini.load(ini_path);
+    g_ini.register_external_compressors();
+  }
+
   // Check if this is an unpacker command (l, v, t, e, x, p, list, test, extract) or pipe flag (-so)
   for (int i = 1; i < argc; i++) {
     if (strequ(argv[i], "--")) break;
@@ -3084,6 +3118,39 @@ int main(int argc, char **argv) {
       }
       break;
     }
+  }
+
+  char detected_cmd = 'a';
+  std::string detected_cmd_word = "a";
+  for (int i = 1; i < argc; i++) {
+    if (strequ(argv[i], "--")) break;
+    if (argv[i][0] != '-') {
+      char parsed = parse_arc_cmd(argv[i]);
+      if (parsed) {
+        detected_cmd = parsed;
+        detected_cmd_word = argv[i];
+      }
+      break;
+    }
+  }
+
+  std::vector<std::string> def_opts = g_ini.get_default_options(detected_cmd, detected_cmd_word);
+  std::vector<std::string> expanded_args;
+  std::vector<char*> expanded_argv_ptrs;
+  if (!def_opts.empty()) {
+    expanded_args.push_back(argv[0]);
+    for (size_t di = 0; di < def_opts.size(); di++)
+      expanded_args.push_back(def_opts[di]);
+    for (int ai = 1; ai < argc; ai++)
+      expanded_args.push_back(argv[ai]);
+
+    expanded_argv_ptrs.resize(expanded_args.size() + 1);
+    for (size_t ai = 0; ai < expanded_args.size(); ai++)
+      expanded_argv_ptrs[ai] = (char*)expanded_args[ai].c_str();
+    expanded_argv_ptrs[expanded_args.size()] = NULL;
+
+    argc = (int)expanded_args.size();
+    argv = &expanded_argv_ptrs[0];
   }
   bool stop_opts = false;
   while (argi < argc) {
@@ -3179,6 +3246,11 @@ int main(int argc, char **argv) {
                strcasecmp(a, "-n") == 0 || strcasecmp(a, "--nodir") == 0 ||
                strcasecmp(a, "--no-pause") == 0 || strcasecmp(a, "-kb") == 0 ||
                strcasecmp(a, "-ka") == 0 || strcasecmp(a, "-kc") == 0) {}
+      else if (strequ(a, "-cfg") || strequ(a, "--config")) {
+        if (argi + 1 < argc && argv[argi + 1][0] != '-') argi++;
+      }
+      else if (start_with(a, "-cfg") || start_with(a, "--config") || strequ(a, "--no-config") ||
+               start_with(a, "--display") || start_with(a, "--language")) {}
       else if (strequ(a, "-v") && argi + 1 < argc) vol_size = parse_vol_size(argv[++argi]);
       else if (start_with(a, "-v")) vol_size = parse_vol_size(a + 2);
       else if (strequ(a, "-m") && argi + 1 < argc) method = argv[++argi];
@@ -3246,7 +3318,16 @@ int main(int argc, char **argv) {
   if (hp_password && !*hp_password) hp_password = NULL;
   if (hp_password && !password) password = hp_password;
 
-  bool auto_m = method && is_auto_method_name(method);
+  std::string resolved_method_storage;
+  if (method) {
+    std::string resolved = g_ini.resolve_method(method);
+    if (!resolved.empty()) {
+      resolved_method_storage = resolved;
+      method = resolved_method_storage.c_str();
+    }
+  }
+
+  bool auto_m = method && (is_auto_method_name(method) || strchr(method, '/'));
   std::vector<std::string> extra_filters;
   std::string base_method;
   if (auto_m) {

@@ -69,7 +69,7 @@ DEC_WIN64_OBJDIR = dec_win64
 ENC_WIN64_OBJDIR = enc_win64
 
 HEADERS       = Compression/Compression.h Compression/Common.h
-UNARC_HEADERS = ArcStructure.h ArcCommand.h ArcProcess.h CUI.h WinCompat.h $(HEADERS)
+UNARC_HEADERS = ArcStructure.h ArcCommand.h ArcProcess.h CUI.h WinCompat.h ArcIni.h $(HEADERS)
 
 DEC_LINKOBJ = $(DEC_OBJDIR)/unarc.o $(DEC_OBJDIR)/Environment.o $(DEC_OBJDIR)/Common.o \
               $(DEC_OBJDIR)/CompressionLibrary.o $(DEC_OBJDIR)/C_LZMA.o $(DEC_OBJDIR)/lzma_fastdec.o $(LZMA_ASM_DEC) $(DEC_OBJDIR)/C_BCJ.o \
@@ -237,7 +237,7 @@ $(DEC_OBJDIR)/C_Encryption.o: Compression/_Encryption/C_Encryption.cpp Compressi
 $(ENC_OBJDIR):
 	mkdir -p $(ENC_OBJDIR)
 
-$(ENC_OBJDIR)/arc.o: arc.cpp Environment.h $(HEADERS) | $(ENC_OBJDIR)
+$(ENC_OBJDIR)/arc.o: arc.cpp Environment.h ArcIni.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
 $(ENC_OBJDIR)/Environment.o: Environment.cpp Environment.h $(HEADERS) | $(ENC_OBJDIR)
@@ -365,7 +365,7 @@ $(DEC_WIN64_OBJDIR)/C_Encryption.o: Compression/_Encryption/C_Encryption.cpp Com
 $(ENC_WIN64_OBJDIR):
 	mkdir -p $(ENC_WIN64_OBJDIR)
 
-$(ENC_WIN64_OBJDIR)/arc.o: arc.cpp Environment.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
+$(ENC_WIN64_OBJDIR)/arc.o: arc.cpp Environment.h ArcIni.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/Environment.o: Environment.cpp Environment.h $(HEADERS) | $(ENC_WIN64_OBJDIR)

@@ -367,6 +367,19 @@ test_legacy_cli() {
 check "Legacy CLI drop-in compatibility (create, nested dirs, -dp with braces, --logfile logging, -ld memory limit enforcement)" test_legacy_cli
 
 # ------------------------------------------------------------------
+# Test Group 11: Configuration File (arc.ini) Parity
+# ------------------------------------------------------------------
+echo ""
+echo "=== Test Group 11: Configuration File (arc.ini) Parity ==="
+
+test_arc_ini_group() {
+    "$SCRIPT_DIR/test_arc_ini.sh" || return 1
+    return 0
+}
+
+check "arc.ini configuration support (-cfg, --config, -cfg-, --print-config, aliases, auto-discovery)" test_arc_ini_group
+
+# ------------------------------------------------------------------
 # Summary
 # ------------------------------------------------------------------
 echo ""

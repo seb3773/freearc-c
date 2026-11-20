@@ -303,43 +303,19 @@ public:
 extern "C" {
 #include "Compression/External/C_External.h"
 }
+#include "ArcIni.h"
 
 // Register external compressors declared in arc.ini
 void RegisterExternalCompressors (char *progname)
 {
 #ifndef FREEARC_TINY
-  // Open config file arc.ini found in the same dir as sfx/unarc
-  char *cfgfile = "arc.ini";
-  char *name = (char*) malloc (strlen(progname) + strlen(cfgfile) + 2);
-                                                 if (!name)  return;
-  strcpy(name, progname);
-  strcpy(drop_dirname(name), cfgfile);
-  MYFILE f(name);
-  if (!f.tryOpen(READ_MODE))                     return;
-
-  // Read config file into memory
-  FILESIZE size = f.size();                      if (!size)  return;
-  char *contents = (char*) malloc(size+2);       if (!contents)  return;
-  *contents = '\n';
-  FILESIZE bytes_read = f.tryRead(contents+1, size); if (bytes_read<0)  return;
-  contents[bytes_read+1] = '\0';
-
-  // Register each external compressor found in config file
-  char *ANY_HEADING = "\n[", *EXT_HEADING = "[External compressor:";
-  ClearExternalCompressorsTable();
-  for (char *p, *section = strstr(contents, ANY_HEADING);  section != NULL;  section = p)
-  {
-    section++;
-    p = strstr(section, ANY_HEADING);
-    if (p)  *p = '\0';
-    if (start_with(section,EXT_HEADING)  &&  AddExternalCompressor(section) != 1)
-    {
-      //printf("Error in config file %s section:\n%s\n", cfgfile, section);
+  std::string ini_path = ArcIni::find_arc_ini(progname, "", false);
+  if (!ini_path.empty()) {
+    ArcIni ini;
+    if (ini.load(ini_path)) {
+      ini.register_external_compressors();
     }
   }
-
-  free(contents);
-  f.close();
 #endif
 }
 
@@ -390,7 +366,59 @@ COMMAND::COMMAND (int argc, char *argv[])
   argv[argc] = NULL;
 #endif
 // Register external compressors using arc.ini in the same dir as argv[0]
-  RegisterExternalCompressors(argv[0]);
+  // Scan for config options
+  ArcIni::ConfigScanResult cfg_scan = ArcIni::scan_config_options(argc, argv);
+  if (cfg_scan.print_config) {
+    ArcIni ini;
+    std::string ini_path = ArcIni::find_arc_ini(argv[0], cfg_scan.custom_cfg, cfg_scan.cfg_disabled);
+    if (!ini_path.empty()) ini.load(ini_path);
+    ini.print_config(stdout);
+    exit(0);
+  }
+
+  // Load arc.ini and register external compressors
+  ArcIni g_unarc_ini;
+  std::string ini_path = ArcIni::find_arc_ini(argv[0], cfg_scan.custom_cfg, cfg_scan.cfg_disabled);
+  if (!ini_path.empty()) {
+    g_unarc_ini.load(ini_path);
+    g_unarc_ini.register_external_compressors();
+  }
+
+  // Detect command to retrieve matching default options
+  char detected_cmd = ' ';
+  std::string detected_cmd_word;
+#ifdef FREEARC_SFX
+  detected_cmd = 'x';
+  detected_cmd_word = "x";
+#else
+  for (int i = 1; i < argc; i++) {
+    if (strequ(argv[i], "--")) break;
+    if (argv[i][0] != '-') {
+      if (strcasecmp(argv[i], "x") == 0 || strcasecmp(argv[i], "extract") == 0) { detected_cmd = 'x'; detected_cmd_word = argv[i]; break; }
+      else if (strcasecmp(argv[i], "e") == 0) { detected_cmd = 'e'; detected_cmd_word = argv[i]; break; }
+      else if (strcasecmp(argv[i], "t") == 0 || strcasecmp(argv[i], "test") == 0) { detected_cmd = 't'; detected_cmd_word = argv[i]; break; }
+      else if (strcasecmp(argv[i], "l") == 0 || strcasecmp(argv[i], "list") == 0) { detected_cmd = 'l'; detected_cmd_word = argv[i]; break; }
+      else if (strcasecmp(argv[i], "v") == 0 || strcasecmp(argv[i], "view") == 0) { detected_cmd = 'v'; detected_cmd_word = argv[i]; break; }
+      else if (strcasecmp(argv[i], "p") == 0) { detected_cmd = 'p'; detected_cmd_word = argv[i]; break; }
+    }
+  }
+#endif
+  std::vector<std::string> def_opts = g_unarc_ini.get_default_options(detected_cmd, detected_cmd_word);
+  if (!def_opts.empty()) {
+    std::vector<char*> expanded_argv;
+    expanded_argv.push_back(argv[0]);
+    for (size_t di = 0; di < def_opts.size(); di++) {
+      expanded_argv.push_back(strdup(def_opts[di].c_str()));
+    }
+    for (int ai = 1; ai < argc; ai++) {
+      expanded_argv.push_back(argv[ai]);
+    }
+    expanded_argv.push_back(NULL);
+    argc = (int)expanded_argv.size() - 1;
+    argv = (char**) malloc((argc + 1) * sizeof(char*));
+    for (int ai = 0; ai <= argc; ai++)
+      argv[ai] = expanded_argv[ai];
+  }
 
   // Default options
   noarcext  = FALSE;
@@ -462,8 +490,8 @@ COMMAND::COMMAND (int argc, char *argv[])
       else if (strequ(argv[0],"-t"))       cmd = 't', silent = silent || 2;
       else if (strequ(argv[0],"-p"))       cmd = 'p', silent = silent || 2, to_stdout = TRUE;
       else if (strequ(argv[0],"-so"))      to_stdout = TRUE;
-      else if (strequ(argv[0],"-y") || strequ(argv[0],"-o+")) yes = TRUE;
-      else if (strequ(argv[0],"-n") || strequ(argv[0],"-o-")) no  = TRUE;
+      else if (strequ(argv[0],"-y") || strequ(argv[0],"-o+")) yes = TRUE, no = FALSE;
+      else if (strequ(argv[0],"-n") || strequ(argv[0],"-o-")) no  = TRUE, yes = FALSE;
       else if (strequ(argv[0],"-p") && argv[1]) password = *++argv;
       else if (start_with(argv[0],"-p") && argv[0][2]) password = argv[0]+2;
       else if (strequ(argv[0],"-d") && argv[1]) {
@@ -514,6 +542,11 @@ COMMAND::COMMAND (int argc, char *argv[])
                strncasecmp(argv[0],"-ed", 3) == 0 || strcasecmp(argv[0],"--nodir") == 0 ||
                strcasecmp(argv[0],"--no-pause") == 0 || strcasecmp(argv[0],"-kb") == 0 ||
                strcasecmp(argv[0],"-ka") == 0 || strcasecmp(argv[0],"-kc") == 0) {}
+      else if (strequ(argv[0], "-cfg") || strequ(argv[0], "--config")) {
+        if (argv[1] && argv[1][0] != '-') argv++;
+      }
+      else if (start_with(argv[0], "-cfg") || start_with(argv[0], "--config") || strequ(argv[0], "--no-config") ||
+               start_with(argv[0], "--display") || start_with(argv[0], "--language")) {}
       else {
         // Do not abort on unknown legacy options
       }
@@ -561,6 +594,8 @@ COMMAND::COMMAND (int argc, char *argv[])
          "  -s       - silent mode\n"
          "  -x{Pat}  - exclude pattern (@listfile supported)\n"
          "  -i{Pat}  - include pattern (@listfile supported)\n"
+         "  -cfg{File} - use configuration file\n"
+         "  --no-config- disable reading configuration file\n"
          "  --       - no more options\n"
          , drop_dirname(arcname));
 #ifdef FREEARC_GUI
@@ -582,8 +617,8 @@ COMMAND::COMMAND (int argc, char *argv[])
       std::string opt_val;
       bool opt_next = false;
       if (strequ(argv[0],"--noarcext"))    noarcext =TRUE;
-      else if (strequ(argv[0],"-o+"))      yes      =TRUE;
-      else if (strequ(argv[0],"-o-"))      no       =TRUE;
+      else if (strequ(argv[0],"-o+"))      yes      =TRUE, no = FALSE;
+      else if (strequ(argv[0],"-o-"))      no       =TRUE, yes = FALSE;
       else if (strequ(argv[0],"-so"))      to_stdout=TRUE;
       else if (strequ(argv[0],"-p") && argv[1]) password = *++argv;
       else if (start_with(argv[0],"-p") && argv[0][2]) password = argv[0]+2;
@@ -635,6 +670,11 @@ COMMAND::COMMAND (int argc, char *argv[])
                strncasecmp(argv[0],"-ed", 3) == 0 || strcasecmp(argv[0],"--nodir") == 0 ||
                strcasecmp(argv[0],"--no-pause") == 0 || strcasecmp(argv[0],"-kb") == 0 ||
                strcasecmp(argv[0],"-ka") == 0 || strcasecmp(argv[0],"-kc") == 0) {}
+      else if (strequ(argv[0], "-cfg") || strequ(argv[0], "--config")) {
+        if (argv[1] && argv[1][0] != '-') argv++;
+      }
+      else if (start_with(argv[0], "-cfg") || start_with(argv[0], "--config") || strequ(argv[0], "--no-config") ||
+               start_with(argv[0], "--display") || start_with(argv[0], "--language")) {}
       else {
         // Do not abort on unknown legacy options
       }
@@ -690,6 +730,9 @@ COMMAND::COMMAND (int argc, char *argv[])
          "  -s[0..2]    - silent mode\n"
          "  --noarcext  - don't add default extension to archive name\n"
          "  -p{Password}- password for encrypted archive\n"
+         "  -cfg{File}  - use configuration file\n"
+         "  --no-config - disable reading configuration file\n"
+         "  --print-config - display definitions of compression methods\n"
          "  --          - no more options\n");
 #endif
 }

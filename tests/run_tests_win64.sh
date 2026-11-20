@@ -358,6 +358,19 @@ test_legacy_cli_win64() {
 check "Win64 Legacy CLI drop-in compatibility (create, nested dirs, -dp with braces, --logfile logging, -ld memory limit enforcement)" test_legacy_cli_win64
 
 # ------------------------------------------------------------------
+# Test Group 9: Win64 Configuration File (arc.ini) Parity
+# ------------------------------------------------------------------
+echo ""
+echo "=== Test Group 9: Win64 Configuration File (arc.ini) Parity ==="
+
+test_arc_ini_win64_group() {
+    "$SCRIPT_DIR/test_arc_ini.sh" || return 1
+    return 0
+}
+
+check "Win64 arc.ini configuration support (arc.exe & unarc.exe under Wine)" test_arc_ini_win64_group
+
+# ------------------------------------------------------------------
 # Summary
 # ------------------------------------------------------------------
 echo ""
