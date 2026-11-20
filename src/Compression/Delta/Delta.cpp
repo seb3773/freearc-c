@@ -221,6 +221,11 @@ Old list:
 // C HEADERS **************************************************************************************
 #include "../Compression.h"
 
+#if !defined(FREEARC_DELTA_NO_SIMD) && (defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64))
+#include <emmintrin.h>
+#define DELTA_SSE2 1
+#endif
+
 struct Buffer
 {
     byte*  buf;
@@ -326,7 +331,7 @@ static void decode_type (uint32 type, int &N, bool doDiff[], bool immutable[])
 // (bytewise with carries starting from lower address, i.e. in LSB aka Intel byte order).
 // bool doDiff[0..N-1] marks columns what should be diffed,
 // other columns are left untouched. Carry saved only over adjancent diffed columns
-inline static void diff_table (int N, BYTE *table_start, int table_len, bool doDiff[])
+inline static void diff_table_legacy (int N, BYTE *table_start, int table_len, bool doDiff[])
 {
     for (BYTE *r = table_start + N*table_len; (r-=N) > table_start; )
         for (int i=0,carry=0; i<N; i++)
@@ -336,6 +341,174 @@ inline static void diff_table (int N, BYTE *table_start, int table_len, bool doD
                 carry        = newcarry; }
             else carry = 0;
 }
+
+#ifndef FREEARC_DECOMPRESS_ONLY
+// Fast encoder-side equivalents of diff_table_legacy() (bit-exact, see OPTIMIZATIONS.md).
+// Rows are processed from the last one down to row 1, so every row is diffed against the
+// still unmodified previous row, exactly as in the legacy loop.
+
+static inline uint64 delta_load64  (const BYTE *p)          { uint64 x; memcpy (&x, p, 8); return x; }
+static inline void   delta_store64 (BYTE *p, uint64 x)      { memcpy (p, &x, 8); }
+
+// Fully diffed table with N = 1/2/4/8: the operation is a plain subtraction of
+// N-byte little-endian integers, i.e. lane-wise SIMD subtraction (8/16/32/64-bit lanes).
+template <int N> static void diff_table_lanes (BYTE *t, int rows)
+{
+    size_t j = (size_t)N * rows;          // element bytes [N, j) remain to be processed
+#ifdef DELTA_SSE2
+    while (j >= (size_t)N + 16) {         // 16-byte block [j-16, j); reads [j-16-N, j) are not modified yet
+        j -= 16;
+        __m128i v = _mm_loadu_si128 ((const __m128i*)(t + j));
+        __m128i w = _mm_loadu_si128 ((const __m128i*)(t + j - N));
+        __m128i r = N==1? _mm_sub_epi8 (v, w) : N==2? _mm_sub_epi16 (v, w) : N==4? _mm_sub_epi32 (v, w) : _mm_sub_epi64 (v, w);
+        _mm_storeu_si128 ((__m128i*)(t + j), r);
+    }
+#endif
+    // Remaining head elements, highest first
+    while (j > (size_t)N) {
+        j -= N;
+        if (N==1) t[j] = t[j] - t[j-1];
+        else if (N==2) { uint16 a, b;  memcpy (&a, t+j, 2);  memcpy (&b, t+j-2, 2);  a = a - b;  memcpy (t+j, &a, 2); }
+        else if (N==4) { uint32 a, b;  memcpy (&a, t+j, 4);  memcpy (&b, t+j-4, 4);  a = a - b;  memcpy (t+j, &a, 4); }
+        else           { uint64 a = delta_load64 (t+j), b = delta_load64 (t+j-8);  delta_store64 (t+j, a - b); }
+    }
+}
+
+// Legacy byte loop restricted to the element bytes [N, X) of the table (X may fall inside
+// a row: the bytes of a row only depend on the lower bytes of the same row).
+static void diff_table_bytes (int N, BYTE *t, size_t X, bool doDiff[])
+{
+    if (X <= (size_t)N)  return;
+    for (size_t s = (X-1)/N*N; s >= (size_t)N; s -= N) {
+        BYTE *r = t + s;
+        for (int i=0,carry=0; i<N && s+i<X; i++)
+            if (doDiff[i]) {
+                int newcarry = r[i] < r[i-N]+carry;
+                r[i]        -= r[i-N]+carry;
+                carry        = newcarry; }
+            else carry = 0;
+    }
+}
+
+#ifdef DELTA_SSE2
+// Generic case (any N <= MAX_ELEMENT_SIZE, any doDiff[] pattern), SSE2.
+// Byte j of the table (j >= N) becomes  t[j] - t[j-N] - c[j]  where the borrow c[j] comes
+// from byte j-1 when both bytes belong to the same run of adjacent diffed columns.
+// Borrows are resolved for 64 byte positions at once with the carry-lookahead identity of
+// binary addition, one bit per byte:
+//   generate  G = t[j] <  t[j-N]   (borrow out whatever the borrow in is)
+//   propagate P = t[j] == t[j-N]   (borrow out == borrow in)
+//   c[j+1] = G[j] | (P[j] & c[j])  ==  carries of the integer sum (G|P) + G
+//   c      = ((G|P) + G) ^ (G|P) ^ G
+// G and P are cleared at every position whose borrow must not propagate (last byte of a
+// run, non-diffed byte), so runs are independent. A run is at most N <= 30 bytes long,
+// hence the borrows of the 32 output bytes [j0, j0+32) are exact when computed over the
+// 64-byte window [j0-32, j0+32) with no borrow entering the window.
+// Blocks are processed from the end of the table downwards (in place: every read is below
+// the bytes already written), and the G/P bits of the lower half of a window are reused as
+// the upper half of the next one. The bytes below the last full block use the byte loop.
+static inline uint32 delta_movemask32 (__m128i lo, __m128i hi)
+{
+    return (uint32)_mm_movemask_epi8 (lo) | ((uint32)_mm_movemask_epi8 (hi) << 16);
+}
+
+// 16 mask bits -> 16 bytes 0xFF/0x00
+static inline __m128i delta_expand16 (uint32 m)
+{
+    const __m128i sel = _mm_setr_epi8 (1,2,4,8,16,32,64,-128, 1,2,4,8,16,32,64,-128);
+    __m128i v = _mm_unpacklo_epi64 (_mm_set1_epi8 ((char)(m & 0xFF)), _mm_set1_epi8 ((char)((m >> 8) & 0xFF)));
+    return _mm_cmpeq_epi8 (_mm_and_si128 (v, sel), sel);
+}
+
+// For 32 bytes at p: generate bits (p[k] < p[k-N]) and propagate bits (p[k] == p[k-N])
+static inline void delta_gp32 (const BYTE *p, int N, uint32 &G, uint32 &P)
+{
+    __m128i a0 = _mm_loadu_si128 ((const __m128i*)(p)),      b0 = _mm_loadu_si128 ((const __m128i*)(p - N));
+    __m128i a1 = _mm_loadu_si128 ((const __m128i*)(p + 16)), b1 = _mm_loadu_si128 ((const __m128i*)(p + 16 - N));
+    __m128i z  = _mm_setzero_si128();
+    // a < b  <=>  saturating (b - a) != 0
+    G = ~delta_movemask32 (_mm_cmpeq_epi8 (_mm_subs_epu8 (b0, a0), z), _mm_cmpeq_epi8 (_mm_subs_epu8 (b1, a1), z));
+    P =  delta_movemask32 (_mm_cmpeq_epi8 (a0, b0), _mm_cmpeq_epi8 (a1, b1));
+}
+
+static void diff_table_simd (int N, BYTE *t, int rows, bool doDiff[])
+{
+    const size_t L = (size_t)N * rows;
+    size_t X = L;                                   // bytes [X, L) are done
+    if (L >= (size_t)N + 64) {
+        // Per column phase: cut mask of a 64-position window, diffed-byte masks of a 32-byte block
+        uint64  cut[MAX_ELEMENT_SIZE];
+        uint32  dif[MAX_ELEMENT_SIZE];
+        for (int ph=0; ph<N; ph++) {
+            uint64 c = 0;  uint32 d = 0;
+            for (int k=0; k<64; k++) {
+                int col = (ph + k) % N;
+                bool run_continues = doDiff[col] && col+1 < N && doDiff[col+1];
+                if (!run_continues)       c |= uint64(1) << k;
+                if (k < 32 && doDiff[col]) d |= uint32(1) << k;
+            }
+            cut[ph] = c;  dif[ph] = d;
+        }
+        size_t j0 = L - 32;
+        uint32 Gup, Pup;
+        delta_gp32 (t + j0, N, Gup, Pup);
+        int ph = (int)(j0 % N);                      // column of byte j0
+        const int back = 32 % N;                     // phase step when j0 decreases by 32
+        for (;;) {
+            if (j0 < (size_t)N + 32)  break;
+            uint32 Glo, Plo;
+            delta_gp32 (t + j0 - 32, N, Glo, Plo);
+            int phw = ph - back;  if (phw < 0) phw += N;   // column of byte j0-32
+            uint64 G = (uint64(Glo) | (uint64(Gup) << 32)) & ~cut[phw];
+            uint64 P = (uint64(Plo) | (uint64(Pup) << 32)) & ~cut[phw];
+            uint64 A = G | P;
+            uint32 C = (uint32)((((A + G) ^ A ^ G)) >> 32);  // borrows into bytes j0..j0+31
+            uint32 D = dif[ph];
+
+            BYTE *q = t + j0;
+            __m128i a0 = _mm_loadu_si128 ((const __m128i*)(q)),      b0 = _mm_loadu_si128 ((const __m128i*)(q - N));
+            __m128i a1 = _mm_loadu_si128 ((const __m128i*)(q + 16)), b1 = _mm_loadu_si128 ((const __m128i*)(q + 16 - N));
+            __m128i c0 = delta_expand16 (C & 0xFFFF), c1 = delta_expand16 (C >> 16);   // 0xFF == -1
+            __m128i d0 = delta_expand16 (D & 0xFFFF), d1 = delta_expand16 (D >> 16);
+            __m128i r0 = _mm_add_epi8 (_mm_sub_epi8 (a0, b0), c0);
+            __m128i r1 = _mm_add_epi8 (_mm_sub_epi8 (a1, b1), c1);
+            r0 = _mm_or_si128 (_mm_and_si128 (d0, r0), _mm_andnot_si128 (d0, a0));
+            r1 = _mm_or_si128 (_mm_and_si128 (d1, r1), _mm_andnot_si128 (d1, a1));
+            _mm_storeu_si128 ((__m128i*)(q),      r0);
+            _mm_storeu_si128 ((__m128i*)(q + 16), r1);
+
+            X = j0;
+            Gup = Glo;  Pup = Plo;  ph = phw;
+            if (j0 < 32)  break;
+            j0 -= 32;
+        }
+    }
+    diff_table_bytes (N, t, X, doDiff);
+}
+#endif
+
+inline static void diff_table (int N, BYTE *table_start, int table_len, bool doDiff[])
+{
+#if defined(FREEARC_DELTA_LEGACY) || !defined(FREEARC_INTEL_BYTE_ORDER)
+    diff_table_legacy (N, table_start, table_len, doDiff);
+#else
+    if (table_len < 2)  return;
+    int ndiff = 0;  for (int i=0; i<N; i++)  ndiff += doDiff[i];
+    if (ndiff == 0)  return;
+    if (ndiff == N) switch (N) {
+        case 1: diff_table_lanes<1> (table_start, table_len);  return;
+        case 2: diff_table_lanes<2> (table_start, table_len);  return;
+        case 4: diff_table_lanes<4> (table_start, table_len);  return;
+        case 8: diff_table_lanes<8> (table_start, table_len);  return;
+    }
+#ifdef DELTA_SSE2
+    diff_table_simd  (N, table_start, table_len, doDiff);
+#else
+    diff_table_bytes (N, table_start, (size_t)N*table_len, doDiff);
+#endif
+#endif
+}
+#endif  // !FREEARC_DECOMPRESS_ONLY
 
 // Process data table adding to each element contents of previous one
 static void undiff_table (int N, BYTE *table_start, int table_len, bool doDiff[])
@@ -352,7 +525,7 @@ static void undiff_table (int N, BYTE *table_start, int table_len, bool doDiff[]
 
 // Reorder table so that all immutable columns are placed before all mutable ones.
 // bool immutable[0..N-1] marks immutable columns
-static inline void reorder_table (int N, BYTE *table_start, int table_len, bool immutable[], Buffer &tempbuf)
+static inline void reorder_table_legacy (int N, BYTE *table_start, int table_len, bool immutable[], Buffer &tempbuf)
 {
     // First, copy all the data into temporary area
     tempbuf.reserve (N*table_len);
@@ -371,6 +544,75 @@ static inline void reorder_table (int N, BYTE *table_start, int table_len, bool 
         for (int k=0; k<N; k++, q++)
             if (!immutable[k])
                 *p++ = *q;
+}
+
+#if defined(DELTA_SSE2) && (defined(__GNUC__) || defined(__clang__)) && !defined(FREEARC_DECOMPRESS_ONLY)
+#include <tmmintrin.h>
+#define DELTA_SSSE3_DISPATCH 1
+// Run-time CPU check (SSSE3 is not part of the x86-64 baseline)
+static int delta_cpu_ssse3 = -1;
+static inline bool delta_has_ssse3()
+{
+    if (delta_cpu_ssse3 < 0)  { __builtin_cpu_init();  delta_cpu_ssse3 = __builtin_cpu_supports ("ssse3")? 1:0; }
+    return delta_cpu_ssse3 > 0;
+}
+
+// reorder_table() for N <= 16 with SSSE3: each row (loaded as 16 bytes from the copy) is
+// compacted with two PSHUFB into its immutable and mutable bytes, which are stored as full
+// 16-byte vectors at the current end of each output section; the extra bytes are garbage that
+// the next row overwrites. Rows whose 16-byte store would reach past the end of their
+// section are copied byte by byte. The copy `q` must have 16 readable bytes of slack.
+__attribute__((target("ssse3")))
+static void reorder_table_ssse3 (int N, BYTE *t, int rows, const int *imm, int ni, const int *mut, int nm, const BYTE *q)
+{
+    char si[16], sm[16];
+    for (int k=0; k<16; k++)  si[k] = k<ni? (char)imm[k] : (char)0x80,  sm[k] = k<nm? (char)mut[k] : (char)0x80;
+    const __m128i SI = _mm_loadu_si128 ((const __m128i*)si), SM = _mm_loadu_si128 ((const __m128i*)sm);
+    BYTE *pi = t,  *pm = t + (size_t)ni*rows;
+    BYTE *imm_end = pm,  *mut_end = t + (size_t)N*rows;
+    int i = 0;
+    for (; i < rows  &&  pi+16 <= imm_end  &&  pm+16 <= mut_end; i++, q+=N, pi+=ni, pm+=nm) {
+        __m128i row = _mm_loadu_si128 ((const __m128i*)q);
+        _mm_storeu_si128 ((__m128i*)pi, _mm_shuffle_epi8 (row, SI));
+        _mm_storeu_si128 ((__m128i*)pm, _mm_shuffle_epi8 (row, SM));
+    }
+    for (; i < rows; i++, q+=N) {
+        for (int k=0; k<ni; k++)  *pi++ = q[imm[k]];
+        for (int k=0; k<nm; k++)  *pm++ = q[mut[k]];
+    }
+}
+#endif
+
+// Same result as reorder_table_legacy(). When all columns are mutable (always the case for
+// N = 2/4/8) or all are immutable, the legacy code rewrites the table with an identity
+// permutation, so nothing has to be done. Otherwise the columns are gathered with
+// precomputed column index lists (SSSE3 byte shuffles for N <= 16 when available)
+// instead of testing immutable[] for every byte.
+static inline void reorder_table (int N, BYTE *table_start, int table_len, bool immutable[], Buffer &tempbuf)
+{
+#ifdef FREEARC_DELTA_LEGACY
+    reorder_table_legacy (N, table_start, table_len, immutable, tempbuf);
+#else
+    int imm[MAX_ELEMENT_SIZE], mut[MAX_ELEMENT_SIZE], ni=0, nm=0;
+    for (int k=0; k<N; k++)  if (immutable[k]) imm[ni++]=k;  else mut[nm++]=k;
+    if (ni==0 || nm==0)  return;
+
+    tempbuf.reserve (N*table_len + 16);
+    memcpy (tempbuf.buf, table_start, N*table_len);
+#ifdef DELTA_SSSE3_DISPATCH
+    if (N <= 16  &&  delta_has_ssse3()) {
+        reorder_table_ssse3 (N, table_start, table_len, imm, ni, mut, nm, tempbuf.buf);
+        return;
+    }
+#endif
+    BYTE *p = table_start;
+    const BYTE *q = tempbuf.buf;
+    for (int i=0; i<table_len; i++, q+=N)
+        for (int k=0; k<ni; k++)  *p++ = q[imm[k]];
+    q = tempbuf.buf;
+    for (int i=0; i<table_len; i++, q+=N)
+        for (int k=0; k<nm; k++)  *p++ = q[mut[k]];
+#endif
 }
 
 // Undo effect of reorder_table()
@@ -396,35 +638,93 @@ static void unreorder_table (int N, BYTE *table_start, int table_len, bool immut
 // TABLE COLUMNS ANALYSIS *********************************************************************
 
 // Analyze which table colums need to be diffed and which ones are (almost) immutable
-static void analyze_table (int N, BYTE *table_start, int table_len, bool doDiff[], bool immutable[])
+static void analyze_table_legacy (int N, BYTE *table_start, int table_len, bool doDiff[], bool immutable[])
 {
-    // �������� ������ ������� ��������
     for (int k=0; k<N; k++) {
-        // ��� ������� �� ����� �� 4 ���������:
-        //   (�����) �����������
-        //   (�����) ����������� ����� ���������
-        //   ���������� (�������� ����������� ����� ���������)
-        //   ���������� "���������" ������
-        // (����� ��� �������� ��� xor-���������)
-        // ���� ��� �������� �� ���������� ������ ����������� �������,
-        //   � ��� ��������� ������� �����������
-
+        // Count the number of changes between successive values of column k
         BYTE *p = table_start+k; int neq=0;
         for (int i=1; i<table_len; i++, p+=N) {
             neq  +=  p[N]!=p[0];
         }
 
-        // �������� ������������ �������: ����������(p[i]!=p[i+1]) < 1/4 �� ����� ���������
+        // Column is immutable if it changes in less than 1/4 of the rows
         immutable[k] = neq*4 < table_len  && N!=2 && N!=4 && N!=8;
         if (immutable[k]) {
             stat_only (verbose>0 && printf (" %d", k));
         }
-        // � ��������� ������ ���� ������� ������ �������� �� ���������
+        // Otherwise the column is diffed
         doDiff[k] = !immutable[k];
         if (doDiff[k]) {
             stat_only (table_diffed += table_len);
         }
     }
+}
+
+// neq[k] = number of rows i in [1, rows) with t[i*N+k] != t[(i-1)*N+k].
+// Equivalently: for every position j in [0, (rows-1)*N), compare t[j] with t[j+N] and
+// credit column j%N. SSE2 version: the range is walked in periods of 16*N bytes; position
+// j of a period always maps to the same column, so 16*N byte counters (N vectors) collect
+// the equal pairs, flushed into 32-bit totals before they can overflow.
+static void count_column_changes (int N, const BYTE *t, int rows, uint32 neq[])
+{
+    for (int k=0; k<N; k++)  neq[k] = 0;
+    size_t M = (size_t)(rows-1) * N, j = 0;
+#ifdef DELTA_SSE2
+    const size_t P = 16*(size_t)N;
+    if (M >= P) {
+        uint32 eqpos[16*MAX_ELEMENT_SIZE];  memset (eqpos, 0, sizeof(uint32)*P);
+        __m128i acc[MAX_ELEMENT_SIZE];
+        size_t periods = 0;
+        while (j + P <= M) {
+            size_t chunk = mymin ((M - j) / P, (size_t)255);   // byte counters hold up to 255
+            for (int v=0; v<N; v++)  acc[v] = _mm_setzero_si128();
+            for (size_t c=0; c<chunk; c++, j+=P)
+                for (int v=0; v<N; v++) {
+                    __m128i a = _mm_loadu_si128 ((const __m128i*)(t + j + 16*v));
+                    __m128i b = _mm_loadu_si128 ((const __m128i*)(t + j + 16*v + N));
+                    acc[v] = _mm_sub_epi8 (acc[v], _mm_cmpeq_epi8 (a, b));
+                }
+            for (int v=0; v<N; v++) {
+                BYTE tmp[16];  _mm_storeu_si128 ((__m128i*)tmp, acc[v]);
+                for (int l=0; l<16; l++)  eqpos[16*v+l] += tmp[l];
+            }
+            periods += chunk;
+        }
+        // Every period holds 16 positions of each column
+        for (size_t q=0; q<P; q++)  neq[q % N] -= eqpos[q];
+        for (int k=0; k<N; k++)     neq[k] += 16*periods;
+    }
+#endif
+    for (; j < M; j++)
+        neq[j % N] += t[j] != t[j+N];
+}
+
+static void analyze_table (int N, BYTE *table_start, int table_len, bool doDiff[], bool immutable[])
+{
+#ifdef FREEARC_DELTA_LEGACY
+    analyze_table_legacy (N, table_start, table_len, doDiff, immutable);
+#else
+    // For N = 2/4/8 every column is diffed whatever the statistics are
+    if (N==2 || N==4 || N==8) {
+        for (int k=0; k<N; k++) {
+            immutable[k] = false;  doDiff[k] = true;
+            stat_only (table_diffed += table_len);
+        }
+        return;
+    }
+    uint32 neq[MAX_ELEMENT_SIZE];
+    count_column_changes (N, table_start, table_len, neq);
+    for (int k=0; k<N; k++) {
+        immutable[k] = int(neq[k])*4 < table_len;
+        if (immutable[k]) {
+            stat_only (verbose>0 && printf (" %d", k));
+        }
+        doDiff[k] = !immutable[k];
+        if (doDiff[k]) {
+            stat_only (table_diffed += table_len);
+        }
+    }
+#endif
 }
 
 
@@ -433,7 +733,7 @@ static void analyze_table (int N, BYTE *table_start, int table_len, bool doDiff[
 // after subtraction of subsequent elements and find it's exact boundaries
 
 // ��������� ������� �������, �������������� � ��� ������, ����� ������� ������������ ���������� ������� ���� (�����<4)
-static BYTE* search_for_table_boundary (int N, BYTE *t, byte *bufstart, byte *bufend, int &_useless)
+static BYTE* search_for_table_boundary_legacy (int N, BYTE *t, byte *bufstart, byte *bufend, int &_useless)
 {
     int dir = (*(int16*)(t+N) - *(int16*)t < 0)? -1:1,  len=0, omit=0, useless=_useless=0, bad=0;
     BYTE* lastpoint=t;  bool first_time=TRUE;
@@ -455,6 +755,39 @@ static BYTE* search_for_table_boundary (int N, BYTE *t, byte *bufstart, byte *bu
         }
     }
     return lastpoint;
+}
+
+// Same result as search_for_table_boundary_legacy(), with cheaper arithmetic:
+//  - the loop bound t+N+sizeof(int16) <= bufend is tested as t+N <= bufend-sizeof(int16);
+//  - abs_diff < abs_item/lim (lim = 3 or 6) is tested as lim*(abs_diff+1) <= abs_item
+//    (for integers k <= floor(y/l)  <=>  k*l <= y), so no multiply-high division is needed;
+//  - the element already loaded is reused when the direction is recomputed.
+static BYTE* search_for_table_boundary (int N, BYTE *t, byte *bufstart, byte *bufend, int &_useless)
+{
+#ifdef FREEARC_DELTA_LEGACY
+    return search_for_table_boundary_legacy (N, t, bufstart, bufend, _useless);
+#else
+    int dir = (*(int16*)(t+N) - *(int16*)t < 0)? -1:1,  len=0, omit=0, useless=_useless=0, bad=0;
+    BYTE* lastpoint=t;  bool first_time=TRUE;
+    BYTE *hi = bufend - sizeof(int16);
+    for (t+=N; bufstart<=t+N && t+N<=hi; t+=N) {
+        int  item     = *(int16*)t;
+        int  diff     = item - *(int16*)(t-N);
+        uint abs_diff = abs(diff);
+        uint abs_item = abs(item);
+        uint lim      = abs_item>4095? 6 : 3;
+        bool small    = lim*(abs_diff+1) <= abs_item;
+             if (diff==0)      useless++;
+        else if (dir*diff>0)   small?  (len++,omit=0)  :  (useless++,omit++);
+        else {
+            if (len>=4 || first_time)  bad=0, lastpoint=t-N*omit, _useless=useless, first_time=FALSE;
+            else if (++bad>=2) break;  // stop after two consecutive monotonic runs shorter than 4
+            dir = (*(int16*)(t+N) - item < 0)? -1:1;  len=omit=0;
+            if (dir*diff>0)  t-=N;     // reprocess this element in the new direction
+        }
+    }
+    return lastpoint;
+#endif
 }
 
 // ���������, ����� �� ������� �������� ����� � ������� p � ������� ��������� N
