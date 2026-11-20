@@ -109,9 +109,14 @@ static const char *g_usage =
   "  -cfg<file>, --config=<file> use configuration file (default: arc.ini)\n"
   "  -cfg-, --no-config disable configuration file\n"
   "  --print-config     display definitions of compression methods\n"
+  "  -nobitexact, --max-ratio   maximize ratio, format-compatible with legacy unarc\n"
+  "  -nobitexact-, --bitexact   enforce strict legacy bit-exact parity (default)\n"
+  "  -nocompat                  next-gen mode (breaks legacy unarc compatibility)\n"
   "  @LIST              read file names from LIST (one path per line)\n";
 
 static int g_quiet = 0;
+bool g_opt_nobitexact = false;
+bool g_opt_nocompat   = false;
 
 static void msg(const char *fmt, ...) {
   va_list ap;
@@ -3251,6 +3256,23 @@ int main(int argc, char **argv) {
       }
       else if (start_with(a, "-cfg") || start_with(a, "--config") || strequ(a, "--no-config") ||
                start_with(a, "--display") || start_with(a, "--language")) {}
+      else if (strequ(a, "-nobitexact") || strequ(a, "--nobitexact") ||
+               strequ(a, "-nobitexact+") || strequ(a, "--max-ratio") ||
+               strequ(a, "-max-ratio")) {
+        g_opt_nobitexact = true;
+      }
+      else if (strequ(a, "-nobitexact-") || strequ(a, "--nobitexact-") ||
+               strequ(a, "--bitexact") || strequ(a, "-bitexact")) {
+        g_opt_nobitexact = false;
+      }
+      else if (strequ(a, "-nocompat") || strequ(a, "--nocompat") ||
+               strequ(a, "-nocompat+")) {
+        g_opt_nocompat = true;
+      }
+      else if (strequ(a, "-nocompat-") || strequ(a, "--nocompat-") ||
+               strequ(a, "--compat") || strequ(a, "-compat")) {
+        g_opt_nocompat = false;
+      }
       else if (strequ(a, "-v") && argi + 1 < argc) vol_size = parse_vol_size(argv[++argi]);
       else if (start_with(a, "-v")) vol_size = parse_vol_size(a + 2);
       else if (strequ(a, "-m") && argi + 1 < argc) method = argv[++argi];
@@ -3347,6 +3369,17 @@ int main(int argc, char **argv) {
   int num_threads = (custom_threads > 0) ? custom_threads : GetProcessorsCount();
   SetCompressionThreads(num_threads);
   method = method_str.c_str();
+
+  if (!g_quiet && (cmd == 'a' || cmd == 'u' || cmd == 'f' || cmd == 'm')) {
+    if (g_opt_nocompat) {
+      msg("!!! WARNING: -nocompat specified: the resulting archive is NOT compatible with\n"
+          "!!! legacy FreeArc (CANNOT be decoded by legacy unarc 0.6x; decodable ONLY by modern FreeArc-c).\n");
+    } else if (g_opt_nobitexact) {
+      msg("*** NOTICE: -nobitexact specified: the resulting archive is fully format-compatible\n"
+          "*** with legacy FreeArc (decodable by legacy unarc 0.6x), but will not be byte-for-byte\n"
+          "*** identical to archives created by the historical FreeArc 0.67 encoder.\n");
+    }
+  }
 
   ExistingArchiveInfo existing_info;
   bool archive_exists = inspect_archive(arcname, password ? password : hp_password, existing_info);

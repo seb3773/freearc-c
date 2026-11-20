@@ -371,6 +371,19 @@ test_arc_ini_win64_group() {
 check "Win64 arc.ini configuration support (arc.exe & unarc.exe under Wine)" test_arc_ini_win64_group
 
 # ------------------------------------------------------------------
+# Test Group 10: Win64 Compatibility Modes & Notice Banners
+# ------------------------------------------------------------------
+echo ""
+echo "=== Test Group 10: Win64 Compatibility Modes & Notice Banners ==="
+
+test_compat_modes_win64_group() {
+    "$SCRIPT_DIR/test_compat_modes.sh" || return 1
+    return 0
+}
+
+check "Win64 compatibility modes & warning banners (-nobitexact under Wine)" test_compat_modes_win64_group
+
+# ------------------------------------------------------------------
 # Summary
 # ------------------------------------------------------------------
 echo ""

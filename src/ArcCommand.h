@@ -546,7 +546,12 @@ COMMAND::COMMAND (int argc, char *argv[])
         if (argv[1] && argv[1][0] != '-') argv++;
       }
       else if (start_with(argv[0], "-cfg") || start_with(argv[0], "--config") || strequ(argv[0], "--no-config") ||
-               start_with(argv[0], "--display") || start_with(argv[0], "--language")) {}
+               start_with(argv[0], "--display") || start_with(argv[0], "--language") ||
+               start_with(argv[0], "-nobitexact") || start_with(argv[0], "--nobitexact") ||
+               start_with(argv[0], "-nocompat") || start_with(argv[0], "--nocompat") ||
+               strequ(argv[0], "--max-ratio") || strequ(argv[0], "-max-ratio") ||
+               strequ(argv[0], "--bitexact") || strequ(argv[0], "-bitexact") ||
+               strequ(argv[0], "--compat") || strequ(argv[0], "-compat")) {}
       else {
         // Do not abort on unknown legacy options
       }
@@ -674,7 +679,12 @@ COMMAND::COMMAND (int argc, char *argv[])
         if (argv[1] && argv[1][0] != '-') argv++;
       }
       else if (start_with(argv[0], "-cfg") || start_with(argv[0], "--config") || strequ(argv[0], "--no-config") ||
-               start_with(argv[0], "--display") || start_with(argv[0], "--language")) {}
+               start_with(argv[0], "--display") || start_with(argv[0], "--language") ||
+               start_with(argv[0], "-nobitexact") || start_with(argv[0], "--nobitexact") ||
+               start_with(argv[0], "-nocompat") || start_with(argv[0], "--nocompat") ||
+               strequ(argv[0], "--max-ratio") || strequ(argv[0], "-max-ratio") ||
+               strequ(argv[0], "--bitexact") || strequ(argv[0], "-bitexact") ||
+               strequ(argv[0], "--compat") || strequ(argv[0], "-compat")) {}
       else {
         // Do not abort on unknown legacy options
       }
