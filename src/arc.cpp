@@ -1598,6 +1598,95 @@ static std::string file_ext_lc(const std::string &name) {
   return e;
 }
 
+static std::string file_stem_lc(const std::string &name) {
+  const char *dot = strrchr(name.c_str(), '.');
+  std::string stem = dot ? name.substr(0, dot - name.c_str()) : name;
+  for (size_t i = 0; i < stem.size(); i++)
+    stem[i] = (char)tolower((unsigned char)stem[i]);
+  return stem;
+}
+
+static bool ext_match(const std::string &e, const char *const *exts) {
+  for (int i = 0; exts[i]; i++)
+    if (e == exts[i]) return true;
+  return false;
+}
+
+static int get_extension_cluster(const std::string &e) {
+  if (e.empty()) return 50;
+
+  static const char *const c_cpp[] = {
+    "h", "hpp", "hxx", "hh", "inl", "inc", "c", "cpp", "cc", "cxx", "m", "mm", "idl", "ipp", NULL
+  };
+  static const char *const scripts[] = {
+    "js", "mjs", "cjs", "ts", "jsx", "tsx", "html", "htm", "shtml", "xhtml", "css", "scss", "sass", "less",
+    "php", "py", "pyw", "rb", "rbw", "pl", "pm", "prl", "lua", "sh", "bash", "zsh", "ksh", "csh", "bat", "cmd", "ps1", NULL
+  };
+  static const char *const compiled_src[] = {
+    "rs", "go", "java", "kt", "kts", "cs", "fs", "swift", "scala", "pas", "pp", "d", "nim", "zig",
+    "v", "erl", "hrl", "ex", "exs", "hs", "lhs", "asm", "s", "asi", "for", "f", "f90", NULL
+  };
+  static const char *const data_cfg[] = {
+    "json", "xml", "yaml", "yml", "toml", "csv", "tsv", "sql", "ini", "cfg", "conf", "properties",
+    "reg", "env", "inf", "xsd", "xsl", "dtd", NULL
+  };
+  static const char *const docs[] = {
+    "txt", "md", "markdown", "rst", "tex", "log", "asc", "man", "po", "pot", "nfo", "diz",
+    "doc", "docx", "rtf", "odt", "pdf", "ps", "eps", "texi", "info", NULL
+  };
+  static const char *const binaries[] = {
+    "exe", "dll", "so", "dylib", "sys", "drv", "ocx", "com", "scr", "elf", "bin", "o", "obj",
+    "a", "lib", "class", "dex", "386", "vxd", "dcu", NULL
+  };
+  static const char *const multimedia[] = {
+    "bmp", "dib", "raw", "pbm", "pgm", "ppm", "tga", "pcx", "wav", "wave", "aif", "aiff", "au", "pcm", NULL
+  };
+  static const char *const scientific[] = {
+    "fa", "fasta", "fna", "fastq", "sam", "bam", "vcf", "gff", "bed", "pdb", NULL
+  };
+  static const char *const archives[] = {
+    "zip", "gz", "bz2", "xz", "zst", "7z", "rar", "arc", "tar", "tgz", "tbz2", "zpaq", "cab",
+    "iso", "jar", "apk", "deb", "rpm", "dmg", NULL
+  };
+  static const char *const compressed_media[] = {
+    "jpg", "jpeg", "png", "gif", "webp", "avif", "mp3", "ogg", "flac", "aac", "m4a", "mp4",
+    "mkv", "avi", "mov", "wmv", NULL
+  };
+
+  if (ext_match(e, c_cpp)) return 10;
+  if (ext_match(e, scripts)) return 20;
+  if (ext_match(e, compiled_src)) return 30;
+  if (ext_match(e, data_cfg)) return 40;
+  if (ext_match(e, docs)) return 50;
+  if (ext_match(e, binaries)) return 60;
+  if (ext_match(e, multimedia)) return 70;
+  if (ext_match(e, scientific)) return 80;
+  if (ext_match(e, archives)) return 90;
+  if (ext_match(e, compressed_media)) return 95;
+  return 100;
+}
+
+static bool file_sort_smart(const FileRec &a, const FileRec &b) {
+  if (a.isdir != b.isdir) return a.isdir > b.isdir;
+  if (a.is_symlink != b.is_symlink) return a.is_symlink > b.is_symlink;
+
+  std::string ea = file_ext_lc(a.name);
+  std::string eb = file_ext_lc(b.name);
+  int ca = get_extension_cluster(ea);
+  int cb = get_extension_cluster(eb);
+  if (ca != cb) return ca < cb;
+
+  if (a.dir != b.dir) return a.dir < b.dir;
+
+  std::string sa = file_stem_lc(a.name);
+  std::string sb = file_stem_lc(b.name);
+  if (sa != sb) return sa < sb;
+
+  if (ea != eb) return ea < eb;
+  if (a.name != b.name) return a.name < b.name;
+  return a.size < b.size;
+}
+
 static bool file_sort_epn(const FileRec &a, const FileRec &b) {
   std::string ea = file_ext_lc(a.name);
   std::string eb = file_ext_lc(b.name);
@@ -2435,7 +2524,7 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
   }
 
   if (sort_files) {
-    std::sort(files.begin(), files.end(), file_sort_epn);
+    std::sort(files.begin(), files.end(), g_opt_nobitexact ? file_sort_smart : file_sort_epn);
   }
 
   ByteWriter header;
@@ -2471,7 +2560,7 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
     }
     default_method = auto_default_method(auto_groups);
     if (sort_files)
-      std::sort(files.begin(), files.end(), file_sort_epn);
+      std::sort(files.begin(), files.end(), g_opt_nobitexact ? file_sort_smart : file_sort_epn);
     if (auto_has_detectable_types(auto_groups))
       detect_file_types(files, auto_method_level(method));
     std::map<std::string, std::vector<FileRec> > by_method;

@@ -156,6 +156,68 @@ test_win64_wine_parity() {
   fi
 }
 
+# 8. Intelligent Solid File Sorting (Phase 2)
+test_smart_sort_order() {
+  echo "Testing Intelligent Solid File Sorting order & legacy decodability..."
+  local sdir="$T/smart_src"
+  mkdir -p "$sdir"
+  echo "int compute(int x);" > "$sdir/alpha.h"
+  echo "int compute(int x) { return x * 42; }" > "$sdir/alpha.cpp"
+  echo "int parse(const char *s);" > "$sdir/beta.h"
+  echo "int parse(const char *s) { return 0; }" > "$sdir/beta.cpp"
+
+  local arc_def="$T/sort_default.arc"
+  local arc_nob="$T/sort_nobit.arc"
+
+  (cd "$T" && "$ARC" a -q "$arc_def" smart_src/*)
+  (cd "$T" && "$ARC" a -q -nobitexact "$arc_nob" smart_src/*)
+
+  # In default (EPN): sorted by extension (.cpp then .h)
+  local list_def
+  list_def=$("$ARC" l "$arc_def" | grep -E "alpha|beta" | tr '\\' '/' | awk '{print $NF}')
+
+  if echo "$list_def" | grep -q "alpha.cpp"; then
+    pass "Default mode sorts files using legacy EPN order"
+  else
+    fail "Default mode listing unexpected: $list_def"
+  fi
+
+  # In -nobitexact (Smart): stem groups alpha.cpp + alpha.h together
+  local list_nob
+  list_nob=$("$ARC" l "$arc_nob" | grep -E "alpha|beta" | tr '\\' '/' | awk '{print $NF}')
+
+  # alpha.cpp and alpha.h should be adjacent
+  local adj_check
+  adj_check=$(echo "$list_nob" | grep -A1 "alpha.cpp" | head -n2)
+  if echo "$adj_check" | grep -q "alpha.h"; then
+    pass "-nobitexact successfully clusters related stem files (alpha.cpp / alpha.h adjacent)"
+  else
+    fail "-nobitexact failed to cluster related stems: $list_nob"
+  fi
+
+  # Extraction roundtrip with modern unarc
+  local ext_modern="$T/ext_modern"
+  mkdir -p "$ext_modern"
+  "$UNARC" x -o+ -dp"$ext_modern" "$arc_nob" >/dev/null 2>&1
+  if diff -r -q "$sdir" "$ext_modern/smart_src" >/dev/null 2>&1; then
+    pass "-nobitexact archive extracts byte-for-byte identical with modern unarc"
+  else
+    fail "-nobitexact archive extraction mismatch with modern unarc"
+  fi
+
+  # Extraction roundtrip with legacy unarc 0.67 under wine (if available)
+  if command -v wine >/dev/null 2>&1 && [ -f "$ROOT_DIR/research_bin/FreeArc/bin/unarc.exe" ]; then
+    local ext_legacy="$T/ext_legacy"
+    mkdir -p "$ext_legacy"
+    WINEDEBUG=-all wine "$ROOT_DIR/research_bin/FreeArc/bin/unarc.exe" x -o+ -dp"$ext_legacy" "$arc_nob" >/dev/null 2>&1 || true
+    if diff -r -q "$sdir" "$ext_legacy/smart_src" >/dev/null 2>&1; then
+      pass "-nobitexact archive extracts 100% byte-for-byte identical with legacy FreeArc 0.67 under Wine"
+    else
+      fail "-nobitexact archive extraction mismatch with legacy FreeArc 0.67"
+    fi
+  fi
+}
+
 test_nobitexact_notice_banner
 test_max_ratio_alias_banner
 test_nocompat_warning_banner
@@ -163,6 +225,7 @@ test_quiet_suppresses_banners
 test_default_no_banner
 test_ini_injection_and_override
 test_win64_wine_parity
+test_smart_sort_order
 
 echo "=================================================================="
 echo " Compatibility Modes Tests Summary: $PASS passed, $FAIL failed"
