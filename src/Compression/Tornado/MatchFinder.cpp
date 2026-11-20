@@ -32,6 +32,10 @@ void print_match (int pos, int len, int dist)
 #endif
 
 
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
+
 // Settings for 4-byte hashing
 #define value(p)     value32(p)
 // Just for readability
@@ -365,7 +369,8 @@ struct ExactMatchFinder : BaseMatchFinder
 // I have not yet decided which strategy to use :)
 // ****************************************************************************
 
-template <uint N>  // N is minimum match length (4..7)
+// W (optional): compile-time row width (number of {ptr,key} pairs). W=0 means run-time row width (original code); W=8 selects vectorized fast path.
+template <uint N, int W=0>  // N is minimum match length (4..7)
 struct CachingMatchFinder : BaseMatchFinder
 {
     CachingMatchFinder (BYTE *buf, int hashsize, int _hash_row_width, uint auxhash_size, int auxhash_row_width)
@@ -384,7 +389,97 @@ struct CachingMatchFinder : BaseMatchFinder
     {
         return value32(p+N-1);
     }
+
+#if defined(__SSE2__)
+    // PERF: rows of 8 {ptr,key} pairs (tor:6 / -m2) use a vectorized,
+    // branch-reduced version of the search below (see find_matchlen_v).
+    // The row width must be a compile-time constant (template parameter W) so that
+    // everything is inlined into the compression loop.
     uint find_matchlen (byte *p, void *bufend, UINT prevlen)
+    {
+        if (W==8)  return find_matchlen_v<4> (p, bufend);
+        return find_matchlen_scalar (p, bufend, prevlen);
+    }
+
+    void update_hash1 (BYTE *p)
+    {
+        if (W==8)  update_hash1_v<2> (p);
+        else       update_hash1_scalar (p);
+    }
+
+    template <int V>
+    static inline void shift_row (PtrVal *row, const __m128i *r, __m128i head)
+    {
+        _mm_storeu_si128 ((__m128i*)row, _mm_unpacklo_epi64 (head, r[0]));
+        for (int k=1; k<V; k++)
+            _mm_storeu_si128 ((__m128i*)(row+4*k), _mm_castpd_si128 (_mm_shuffle_pd (
+                _mm_castsi128_pd (r[k-1]), _mm_castsi128_pd (r[k]), 1)));
+    }
+
+    // Shift the first 2*V pairs of the row (= half row of 4*V pairs)
+    template <int V>
+    void update_hash1_v (BYTE *p)
+    {
+        PtrVal *row = HTable + hash(value(p));
+        __m128i r[V];
+        for (int k=0; k<V; k++)  r[k] = _mm_loadu_si128 ((const __m128i*)(row+4*k));
+        shift_row<V> (row, r, _mm_unpacklo_epi32 (_mm_cvtsi32_si128 (fromPtr(p)), _mm_cvtsi32_si128 (key(p))));
+    }
+
+    // Vectorized equivalent of find_matchlen_scalar() for rows of 2*V pairs.
+    template <int V>
+    uint find_matchlen_v (byte *p, void *bufend)
+    {
+        PtrVal *row = HTable + hash(value(p));
+        const UINT K = key(p);
+        const __m128i kv = _mm_set_epi32 (K, 0, K, 0), z = _mm_setzero_si128();
+        __m128i r[V];
+        uint64 Z = 0;
+        for (int k=0; k<V; k++) {
+            r[k] = _mm_loadu_si128 ((const __m128i*)(row+4*k));
+            Z |= uint64 ((UINT) _mm_movemask_epi8 (_mm_cmpeq_epi8 (_mm_xor_si128 (r[k], kv), z))) << (16*k);
+        }
+        // Pointers of the pairs (read before the row is overwritten)
+        PtrVal x[2*V];
+        for (int j=0; j<2*V; j++)  x[j] = row[2*j];
+        shift_row<V> (row, r, _mm_unpacklo_epi32 (_mm_cvtsi32_si128 (fromPtr(p)), _mm_cvtsi32_si128 (K)));
+
+        const uint64 M = 0x1010101010101010ull & ((uint64(1) << (16*V-1) << 1) - 1);   // bit 4 of every pair
+        uint64 c1 = Z & M, c2 = c1 & (Z>>1), c3 = c2 & (Z>>2), c4 = c3 & (Z>>3);
+        if (c4) {
+            // len7: first pair with full key match, then remaining full-key pairs in row order
+            q = toPtr (x[__builtin_ctzll(c4) >> 3]);
+            c4 &= c4-1;
+            UINT len = MINLEN-1;
+            if (val32equ(p, q)) {
+                len = mymin(MINLEN-1, 4);
+                for (; p+len<bufend && val32equ(p+len, q+len); len+=4);
+                for (; p+len<bufend && p[len] == q[len];       len++);
+            }
+            while (c4) {
+                BYTE *q1 = toPtr (x[__builtin_ctzll(c4) >> 3]);
+                c4 &= c4-1;
+                if (p[len] == q1[len] && val32equ(p, q1)) {
+                    UINT len1 = mymin(MINLEN-1, 4);
+                    for (; p+len1<bufend && val32equ(p+len1, q1+len1); len1+=4);
+                    for (; p+len1<bufend && p[len1] == q1[len1];       len1++);
+                    if (len1>len)  len=len1, q=q1;
+                }
+            }
+            return len;
+        }
+        if (c3)  {q = toPtr (x[__builtin_ctzll(c3) >> 3]);  return accept_match(N+2, p, q, bufend);}
+        if (c2)  {q = toPtr (x[__builtin_ctzll(c2) >> 3]);  return accept_match(N+1, p, q, bufend);}
+        if (c1)  {q = toPtr (x[__builtin_ctzll(c1) >> 3]);  return accept_match(N,   p, q, bufend);}
+        return MINLEN-1;
+    }
+#else
+    uint find_matchlen (byte *p, void *bufend, UINT prevlen)   {return find_matchlen_scalar (p, bufend, prevlen);}
+    void update_hash1 (BYTE *p)                                 {update_hash1_scalar (p);}
+#endif
+
+    // Original (legacy) search, used for other row widths
+    uint find_matchlen_scalar (byte *p, void *bufend, UINT prevlen)
     {
         UINT len;                  // Length of largest string already found
         UINT h = hash(value(p));   // Hash key of string for which we perform match search
@@ -468,7 +563,7 @@ len7:   q = toPtr(x1);
 
     // Update half of hash row corresponding to string pointed by p
     // (hash updated via this procedure only when skipping match contents)
-    void update_hash1 (BYTE *p)
+    void update_hash1_scalar (BYTE *p)
     {
         UINT h = hash(value(p));
         for (int j=hash_row_width; j-=2; )
@@ -487,8 +582,8 @@ len7:   q = toPtr(x1);
     }
 };
 
-template <uint N>
-void CachingMatchFinder<N>::clear_hash (BYTE *buf)
+template <uint N, int W>
+void CachingMatchFinder<N,W>::clear_hash (BYTE *buf)
 {
     if (HTable)
     {
@@ -500,8 +595,8 @@ void CachingMatchFinder<N>::clear_hash (BYTE *buf)
     }
 }
 
-template <uint N>
-void CachingMatchFinder<N>::shift (BYTE *buf, int shift)
+template <uint N, int W>
+void CachingMatchFinder<N,W>::shift (BYTE *buf, int shift)
 {
     for (int i=0; i<HashSize; i+=2)
         HTable[i]  =  HTable[i] > fromPtr(buf+shift)?  HTable[i]-shift  :  fromPtr(buf+1);

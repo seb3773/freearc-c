@@ -48,3 +48,19 @@ anything else is reported as `noise` (or `LOSS`).
 ## PGO (optional)
 
 `bench/pgo_build.sh` produces `build/linux/unarc.pgo` (profile-guided build).
+
+## Encoder benchmark & A/B harness
+
+For testing and benchmarking encoder changes:
+
+```sh
+# 1. Whole-archive bit-exact verification & benchmarks
+bench/enc_bench.py refs build/linux/arc       # store reference hashes
+bench/enc_bench.py verify build/linux/arc     # verify candidate bit-exactness
+
+# 2. In-process A/B benchmark (eliminates CPU frequency & machine noise)
+bench/ab_build.sh src /tmp/base.so            # build baseline shared library
+bench/ab_build.sh src /tmp/cand.so            # build candidate shared library
+g++ -O3 bench/abbench.cpp -o bench/abbench -ldl
+bench/abbench /tmp/base.so /tmp/cand.so "tor:6" 8 bench/work/corpus/text/sources.txt
+```

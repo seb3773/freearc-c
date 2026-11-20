@@ -303,6 +303,19 @@ int tor_compress2d (PackMethod m, CALLBACK_FUNC *callback, void *auxdata)
     return tor_compress3 <MatchFinder, LZ77_DynamicCoder> (m, callback, auxdata);
 }
 
+// PERF: the caching match finder is instantiated with a compile-time row width for W=8
+// used by -6 / -m2; other widths use the original run-time row width code. Output is identical in all cases.
+template <class CMF> struct PlainCMF      {typedef CMF type;};
+template <class CMF> struct LazyHash3CMF  {typedef LazyMatching<Hash3<CMF,14,10,FALSE> > type;};
+template <template <class> class Wrap, class Coder>
+int tor_compress_cmf (PackMethod m, CALLBACK_FUNC *callback, void *auxdata)
+{
+    switch (m.hash_row_width) {
+    case 8:  return tor_compress0 <typename Wrap<CachingMatchFinder<4,8> >::type, Coder> (m, callback, auxdata);
+    default: return tor_compress0 <typename Wrap<CachingMatchFinder<4>   >::type, Coder> (m, callback, auxdata);
+    }
+}
+
 // Compress data using compression method m and callback for i/o
 int tor_compress (PackMethod m, CALLBACK_FUNC *callback, void *auxdata)
 {
@@ -336,12 +349,12 @@ int tor_compress (PackMethod m, CALLBACK_FUNC *callback, void *auxdata)
     } else if (m.encoding_method==HUFCODER && m.hash_row_width==2 && m.hash3==0 && !m.caching_finder && m.match_parser==GREEDY ) {
         return tor_compress0 <MatchFinder2, LZ77_Coder<HuffmanEncoder<EOB_CODE> > > (m, callback, auxdata);
     } else if (m.encoding_method==HUFCODER && m.hash_row_width>=2 && m.hash3==0 && m.caching_finder && m.match_parser==GREEDY ) {
-        return tor_compress0 <CachingMatchFinder<4>, LZ77_Coder<HuffmanEncoder<EOB_CODE> > > (m, callback, auxdata);
+        return tor_compress_cmf <PlainCMF, LZ77_Coder<HuffmanEncoder<EOB_CODE> > > (m, callback, auxdata);
     } else if (m.encoding_method==ARICODER && m.hash_row_width>=2 && m.hash3==1 && m.caching_finder==1 && m.match_parser==LAZY ) {
-        return tor_compress0 <LazyMatching<Hash3<CachingMatchFinder<4>,14,10,FALSE> >, LZ77_Coder<ArithCoder<EOB_CODE> > > (m, callback, auxdata);
+        return tor_compress_cmf <LazyHash3CMF, LZ77_Coder<ArithCoder<EOB_CODE> > > (m, callback, auxdata);
     // -5 -c3 - used for FreeArc -m4$compressed
     } else if (m.encoding_method==HUFCODER && m.hash_row_width>=2 && m.hash3==1 && m.caching_finder==1 && m.match_parser==LAZY ) {
-        return tor_compress0 <LazyMatching<Hash3<CachingMatchFinder<4>,14,10,FALSE> >, LZ77_Coder<HuffmanEncoder<EOB_CODE> > > (m, callback, auxdata);
+        return tor_compress_cmf <LazyHash3CMF, LZ77_Coder<HuffmanEncoder<EOB_CODE> > > (m, callback, auxdata);
 
     // -7..-9
     } else if (m.hash_row_width>=2 && m.hash3==2 && m.caching_finder==5 && m.match_parser==LAZY ) {
