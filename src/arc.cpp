@@ -112,11 +112,15 @@ static const char *g_usage =
   "  -nobitexact, --max-ratio   maximize ratio, format-compatible with legacy unarc\n"
   "  -nobitexact-, --bitexact   enforce strict legacy bit-exact parity (default)\n"
   "  -nocompat                  next-gen mode (breaks legacy unarc compatibility)\n"
+  "  -mc=N                      set LZMA match finder search cycles (16..1000)\n"
+  "  -fb=N                      set LZMA fast bytes / nice match length (32..273)\n"
   "  @LIST              read file names from LIST (one path per line)\n";
 
 static int g_quiet = 0;
 bool g_opt_nobitexact = false;
 bool g_opt_nocompat   = false;
+int  g_opt_mc         = 0;
+int  g_opt_fb         = 0;
 
 static void msg(const char *fmt, ...) {
   va_list ap;
@@ -1149,9 +1153,17 @@ static std::string map_one_method(const char *m) {
   if (strequ(m, "2"))
     return "tor:6";
   if (strequ(m, "3"))
-    return "lzma:96m:fast:32:mc4";
-  if (strequ(m, "lzma"))
+    return g_opt_nobitexact ? "lzma:96m:normal:32:mc16" : "lzma:96m:fast:32:mc4";
+  if (strequ(m, "lzma")) {
+    if (g_opt_nobitexact) {
+      int fb = (g_opt_fb > 0) ? g_opt_fb : 64;
+      int mc = (g_opt_mc > 0) ? g_opt_mc : 256;
+      char buf[128];
+      snprintf(buf, sizeof(buf), "lzma:96m:max:%d:mc%d", fb, mc);
+      return buf;
+    }
     return "lzma:8m";
+  }
   if (strequ(m, "tor") || strequ(m, "tornado"))
     return "tor:3";
   if (strequ(m, "ppmd"))
@@ -1295,11 +1307,26 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
   bool mt3 = cpus >= 3;
   std::string lzma4 = mt3 ? "4x4:lzma:96m:normal:16:mc8" : "lzma:96m:normal:16:mc8";
   std::string lzma5 = mt3 ? "4x4:lzma:96m:normal:32:mc32" : "lzma:96m:normal:32:mc32";
+  std::string bin3 = mt ? "4x4:lzma:96m:fast:32:mc4" : "lzma:96m:fast:32:mc4";
+  if (g_opt_nobitexact) {
+    int fb4 = (g_opt_fb > 0) ? g_opt_fb : 32;
+    int mc4 = (g_opt_mc > 0) ? g_opt_mc : 32;
+    char buf4[128];
+    snprintf(buf4, sizeof(buf4), "lzma:96m:normal:%d:mc%d", fb4, mc4);
+    lzma4 = mt3 ? (std::string("4x4:") + buf4) : std::string(buf4);
+
+    int fb5 = (g_opt_fb > 0) ? g_opt_fb : 64;
+    int mc5 = (g_opt_mc > 0) ? g_opt_mc : 256;
+    char buf5[128];
+    snprintf(buf5, sizeof(buf5), "lzma:96m:max:%d:mc%d", fb5, mc5);
+    lzma5 = mt3 ? (std::string("4x4:") + buf5) : std::string(buf5);
+
+    bin3 = mt ? "4x4:lzma:96m:normal:32:mc16" : "lzma:96m:normal:32:mc16";
+  }
   std::string etor_c3 = mt ? "4x4:tor:c3" : "tor:c3";
   std::string bmp = "mm+grzip:m1:l2048:a";
   std::string bin1 = mt ? "4x4:tor:3:8mb" : "tor:4";
   std::string bin2 = mt ? "4x4:tor:5" : "tor:6";
-  std::string bin3 = mt ? "4x4:lzma:96m:fast:32:mc4" : "lzma:96m:fast:32:mc4";
   std::string bmpfastest = std::string("mm:d1+") + bin1 + ":t0";
   if (strequ(name, "1") || strequ(name, "1x")) {
     out.push_back(std::make_pair(std::string(""), std::string("rep:96m:256:c256+") + bin1));
@@ -3361,6 +3388,24 @@ int main(int argc, char **argv) {
       else if (strequ(a, "-nocompat-") || strequ(a, "--nocompat-") ||
                strequ(a, "--compat") || strequ(a, "-compat")) {
         g_opt_nocompat = false;
+      }
+      else if (start_with(a, "-mc=") || start_with(a, "--mc=") || start_with(a, "-mc") || start_with(a, "--mc")) {
+        const char *val = NULL;
+        if (strncasecmp(a, "--mc=", 5) == 0) val = a + 5;
+        else if (strncasecmp(a, "-mc=", 4) == 0) val = a + 4;
+        else if (strncasecmp(a, "--mc", 4) == 0 && a[4] != '\0') val = a + 4;
+        else if (strncasecmp(a, "-mc", 3) == 0 && a[3] != '\0') val = a + 3;
+        else if ((strequ(a, "-mc") || strequ(a, "--mc")) && argi + 1 < argc && argv[argi + 1][0] != '-') val = argv[++argi];
+        if (val) g_opt_mc = atoi(val);
+      }
+      else if (start_with(a, "-fb=") || start_with(a, "--fb=") || start_with(a, "-fb") || start_with(a, "--fb")) {
+        const char *val = NULL;
+        if (strncasecmp(a, "--fb=", 5) == 0) val = a + 5;
+        else if (strncasecmp(a, "-fb=", 4) == 0) val = a + 4;
+        else if (strncasecmp(a, "--fb", 4) == 0 && a[4] != '\0') val = a + 4;
+        else if (strncasecmp(a, "-fb", 3) == 0 && a[3] != '\0') val = a + 3;
+        else if ((strequ(a, "-fb") || strequ(a, "--fb")) && argi + 1 < argc && argv[argi + 1][0] != '-') val = argv[++argi];
+        if (val) g_opt_fb = atoi(val);
       }
       else if (strequ(a, "-v") && argi + 1 < argc) vol_size = parse_vol_size(argv[++argi]);
       else if (start_with(a, "-v")) vol_size = parse_vol_size(a + 2);

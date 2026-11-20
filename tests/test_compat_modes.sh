@@ -218,6 +218,60 @@ test_smart_sort_order() {
   fi
 }
 
+# 9. LZMA Deep Parameterization (Phase 3)
+test_lzma_deep_parameterization() {
+  echo "Testing LZMA Deep Parameterization (mc/fb) & legacy decompression..."
+  local test_file="$ROOT_DIR/src/arc.cpp"
+  local arc_def="$T/lzma_def.arc"
+  local arc_deep="$T/lzma_deep.arc"
+  local arc_custom="$T/lzma_custom.arc"
+
+  # Compress with default vs -nobitexact at -mx
+  (cd "$ROOT_DIR" && "$ARC" a -q -mx "$arc_def" src/arc.cpp)
+  (cd "$ROOT_DIR" && "$ARC" a -q -nobitexact -mx "$arc_deep" src/arc.cpp)
+
+  local sz_def
+  sz_def=$(wc -c < "$arc_def")
+  local sz_deep
+  sz_deep=$(wc -c < "$arc_deep")
+
+  if [ "$sz_deep" -lt "$sz_def" ]; then
+    pass "-nobitexact -mx automatically leverages deep LZMA (size: $sz_deep < default: $sz_def)"
+  else
+    fail "-nobitexact -mx did not improve size over default (deep: $sz_deep, def: $sz_def)"
+  fi
+
+  # Test custom -fb and -mc flags
+  (cd "$ROOT_DIR" && "$ARC" a -q -nobitexact -fb=128 -mc=500 "$arc_custom" src/arc.cpp)
+  if [ -f "$arc_custom" ] && [ "$(wc -c < "$arc_custom")" -gt 0 ]; then
+    pass "Custom -fb=128 and -mc=500 CLI options successfully create archive"
+  else
+    fail "Custom -fb and -mc flags failed to create archive"
+  fi
+
+  # Extract deep archive with modern unarc and verify integrity
+  local ext_modern="$T/ext_deep_modern"
+  mkdir -p "$ext_modern"
+  "$UNARC" x -o+ -dp"$ext_modern" "$arc_deep" >/dev/null 2>&1
+  if diff -q "$test_file" "$ext_modern/src/arc.cpp" >/dev/null 2>&1; then
+    pass "Deep LZMA archive decompresses bit-for-bit with modern unarc"
+  else
+    fail "Deep LZMA archive extraction mismatch with modern unarc"
+  fi
+
+  # Extract deep archive with legacy unarc 0.67 under Wine (if available)
+  if command -v wine >/dev/null 2>&1 && [ -f "$ROOT_DIR/research_bin/FreeArc/bin/unarc.exe" ]; then
+    local ext_legacy="$T/ext_deep_legacy"
+    mkdir -p "$ext_legacy"
+    WINEDEBUG=-all wine "$ROOT_DIR/research_bin/FreeArc/bin/unarc.exe" x -o+ -dp"$ext_legacy" "$arc_deep" >/dev/null 2>&1 || true
+    if diff -q "$test_file" "$ext_legacy/src/arc.cpp" >/dev/null 2>&1; then
+      pass "Deep LZMA archive decompresses 100% bit-for-bit with legacy FreeArc 0.67 under Wine"
+    else
+      fail "Deep LZMA archive extraction mismatch with legacy FreeArc 0.67"
+    fi
+  fi
+}
+
 test_nobitexact_notice_banner
 test_max_ratio_alias_banner
 test_nocompat_warning_banner
@@ -226,6 +280,7 @@ test_default_no_banner
 test_ini_injection_and_override
 test_win64_wine_parity
 test_smart_sort_order
+test_lzma_deep_parameterization
 
 echo "=================================================================="
 echo " Compatibility Modes Tests Summary: $PASS passed, $FAIL failed"

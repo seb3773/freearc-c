@@ -549,6 +549,8 @@ COMMAND::COMMAND (int argc, char *argv[])
                start_with(argv[0], "--display") || start_with(argv[0], "--language") ||
                start_with(argv[0], "-nobitexact") || start_with(argv[0], "--nobitexact") ||
                start_with(argv[0], "-nocompat") || start_with(argv[0], "--nocompat") ||
+               start_with(argv[0], "-mc") || start_with(argv[0], "--mc") ||
+               start_with(argv[0], "-fb") || start_with(argv[0], "--fb") ||
                strequ(argv[0], "--max-ratio") || strequ(argv[0], "-max-ratio") ||
                strequ(argv[0], "--bitexact") || strequ(argv[0], "-bitexact") ||
                strequ(argv[0], "--compat") || strequ(argv[0], "-compat")) {}
@@ -682,6 +684,8 @@ COMMAND::COMMAND (int argc, char *argv[])
                start_with(argv[0], "--display") || start_with(argv[0], "--language") ||
                start_with(argv[0], "-nobitexact") || start_with(argv[0], "--nobitexact") ||
                start_with(argv[0], "-nocompat") || start_with(argv[0], "--nocompat") ||
+               start_with(argv[0], "-mc") || start_with(argv[0], "--mc") ||
+               start_with(argv[0], "-fb") || start_with(argv[0], "--fb") ||
                strequ(argv[0], "--max-ratio") || strequ(argv[0], "-max-ratio") ||
                strequ(argv[0], "--bitexact") || strequ(argv[0], "-bitexact") ||
                strequ(argv[0], "--compat") || strequ(argv[0], "-compat")) {}
