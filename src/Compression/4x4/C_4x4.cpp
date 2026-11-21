@@ -207,6 +207,7 @@ int _4x4Job::init()
 
 int _4x4Job::done()
 {
+  compress_all_at_once = 1;
   if (CodecState && compressor && compressor->cmethod)
     compressor->cmethod->DeCompressMem ((COMPRESSION) compressor->direction, NULL, 0, NULL, NULL, NULL, NULL, &CodecState);
   CodecState = NULL;
@@ -217,6 +218,9 @@ int _4x4Job::done()
 
 int _4x4Job::process()
 {
+  // compress_all_at_once is thread-local: job threads run only 4x4 work, so they always see 1,
+  // as they did with the former process-global flag while 4x4 was active.
+  compress_all_at_once = 1;
   if (compressor->direction == 0) {
 #ifndef FREEARC_DECOMPRESS_ONLY
     int rc = FREEARC_ERRCODE_OUTBLOCK_TOO_SMALL;

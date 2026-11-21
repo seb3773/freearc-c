@@ -768,12 +768,43 @@ static UInt32 Hc4_MatchFinder_GetMatches(CMatchFinder *p, UInt32 *distances)
   MOVE_POS_RET
 }
 
+/* PERF: software prefetch of the HT4 hash row used by the NEXT position (cur+1).
+ * The encoder visits positions sequentially (GetMatches or Skip for every byte), and the
+ * row load is a random access into a table of tens of MB, i.e. a cache miss nearly every
+ * time. Issuing the prefetch one position ahead overlaps that miss with the work done for
+ * the current position. This is a pure memory hint: no data is modified, so the output is
+ * unchanged. cur[4] is only read when at least 5 bytes are available (lenLimit >= 5). */
+#ifndef prefetch
+#  if defined(__GNUC__) || defined(__clang__)
+#    define prefetch(var)   __builtin_prefetch(&(var))
+#  elif defined(_MSC_VER)
+#    include <xmmintrin.h>
+#    define prefetch(var)   (_mm_prefetch((char*)&(var),_MM_HINT_T0))
+#  else
+#    define prefetch(var)   ((void)0)
+#  endif
+#endif
+
+static inline void Ht4_PrefetchNextRow (const CMatchFinder *p, const Byte *cur, UInt32 lenLimit)
+{
+  if (lenLimit >= 5)
+  {
+    UInt32 t = p->crc[cur[1]] ^ cur[2];
+    UInt32 hv = (t ^ ((UInt32)cur[3] << 8) ^ (p->crc[cur[4]] << 5)) & p->hashMask;
+    const UInt32 *r = &p->hash[kFix4HashSize + (size_t)hv * p->cutValue];
+    prefetch (*r);
+    if (p->cutValue > 16)  prefetch (*(r + 16));
+    prefetch (*(r + p->cutValue - 1));
+  }
+}
+
 static UInt32 Ht4_MatchFinder_GetMatches(CMatchFinder *p, UInt32 *distances)
 {
   UInt32 hash2Value, hash3Value, delta2, delta3, maxLen, offset;
   GET_MATCHES_HEADER(4)
 
   HASH4_CALC;
+  Ht4_PrefetchNextRow (p, cur, lenLimit);
 
   delta2 = p->pos - p->hash[                hash2Value];
   delta3 = p->pos - p->hash[kFix3HashSize + hash3Value];
@@ -907,6 +938,7 @@ static void Ht4_MatchFinder_Skip(CMatchFinder *p, UInt32 num)
     UInt32 hash2Value, hash3Value;
     SKIP_HEADER(4)   (void)curMatch;
     HASH4_CALC;
+    Ht4_PrefetchNextRow (p, cur, lenLimit);
     p->hash[                hash2Value] =
     p->hash[kFix3HashSize + hash3Value] = p->pos;
     {

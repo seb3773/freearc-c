@@ -6,7 +6,7 @@
 #include "Compression.h"
 
 // Used in 4x4 only: read entire input buffer before compression begins, allocate output buffer large enough to hold entire compressed output
-int compress_all_at_once = 0;
+FREEARC_THREAD_LOCAL int compress_all_at_once = 0;
 
 // Для обработки ошибок во вложенных процедурах - longjmp сигнализирует процедуре верхнего уровня о произошедшей ошибке
 int jmpready = FALSE;

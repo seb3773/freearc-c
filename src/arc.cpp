@@ -2528,6 +2528,174 @@ static ARC_THREAD_CALL block_worker_func(void *arg) {
   return ARC_THREAD_RET_VAL;
 }
 
+/* PERF: parallel scheduler for the independent method groups of auto profiles (-m1..-m5[x]).
+ *
+ * Each auto-profile group (text, binaries, media, ...) is compressed as its own solid block with
+ * its own method chain, so the groups are independent and can run concurrently. The archive
+ * stays bit-identical to sequential compression because:
+ *   - every group is compressed by exactly the same compress_range() call (same method string,
+ *     same thread count, same I/O pipeline) as in the sequential path;
+ *   - blocks are written to the archive in the original task order; block 0 streams directly into
+ *     the archive, later blocks are buffered (memory, then temp file) and appended in order;
+ *   - codecs with process-global encoder state that carries across streams (DICT keeps character
+ *     statistics between calls) are never run concurrently and keep their original relative
+ *     order (ordered gate);
+ *   - the 4x4 "compress_all_at_once" switch is thread-local (see Compression.h).
+ * Concurrency is bounded by the -mt thread budget (number of concurrent groups <= threads) and
+ * by a memory budget (-lc if given, else 3/4 of physical RAM): a group is only started while the
+ * estimated memory of the running groups plus its own fits, or when nothing else is running.
+ * Groups are admitted strictly in task order, which makes the gate deadlock-free. */
+struct GroupCompressJob {
+  int             start;
+  int             count;
+  std::string     method;
+  IArchiveWriter *direct_out;    // non-NULL only for the first job: streams into the archive
+  TempBlockWriter writer;
+  BlockInfo       info;
+  int             ordered_seq;   // >= 0 for jobs that must not overlap and keep their order
+  uint64          mem;           // estimated compression memory
+  bool            done;
+  GroupCompressJob() : start(0), count(0), direct_out(NULL), ordered_seq(-1), mem(0), done(false) {}
+};
+
+struct GroupPoolContext {
+  std::vector<GroupCompressJob*> *jobs;
+  size_t      next_job;
+  int         next_ordered_seq;
+  int         running;
+  uint64      mem_in_use;
+  uint64      mem_budget;
+  ArcMutex    mutex;
+  ArcCond     cond;
+  const char *password;
+  const char *algorithm;
+  FileRec    *files;
+};
+
+static bool method_has_global_stream_state(const std::string &mth) {
+  return mth.find("dict") != std::string::npos;
+}
+
+static uint64 estimate_chain_compression_mem(const std::string &mth, uint64 orig) {
+  std::string prepared = canonize_method_chain(mth, haskell_dict_limit((FILESIZE)orig));
+  uint64 total = 0;
+  size_t pos = 0;
+  while (pos <= prepared.size()) {
+    size_t plus = prepared.find('+', pos);
+    std::string stage = prepared.substr(pos, plus == std::string::npos ? std::string::npos : plus - pos);
+    if (!stage.empty()) {
+      char buf[MAX_METHOD_STRLEN];
+      strncopy(buf, (char *)stage.c_str(), MAX_METHOD_STRLEN);
+      MemSize m = GetCompressionMem(buf);
+      if (m > 0) total += (uint64)m;
+    }
+    if (plus == std::string::npos) break;
+    pos = plus + 1;
+  }
+  return total;
+}
+
+static bool group_job_admissible(GroupPoolContext *ctx, GroupCompressJob *job) {
+  if (job->ordered_seq >= 0 && job->ordered_seq != ctx->next_ordered_seq)
+    return false;
+  if (ctx->running > 0 && ctx->mem_in_use + job->mem > ctx->mem_budget)
+    return false;
+  return true;
+}
+
+static ARC_THREAD_CALL group_worker_func(void *arg) {
+  GroupPoolContext *ctx = (GroupPoolContext*)arg;
+  std::vector<GroupCompressJob*> &jobs = *ctx->jobs;
+  ctx->mutex.lock();
+  for (;;) {
+    while (ctx->next_job < jobs.size() && !group_job_admissible(ctx, jobs[ctx->next_job]))
+      ctx->cond.wait(ctx->mutex);
+    if (ctx->next_job >= jobs.size())
+      break;
+    GroupCompressJob *job = jobs[ctx->next_job++];
+    ctx->running++;
+    ctx->mem_in_use += job->mem;
+    ctx->mutex.unlock();
+
+    IArchiveWriter *dst = job->direct_out ? job->direct_out : &job->writer;
+    job->info = compress_range(dst, job->method.c_str(), ctx->password, ctx->algorithm,
+                               ctx->files, job->start, job->count, true);
+
+    ctx->mutex.lock();
+    ctx->running--;
+    ctx->mem_in_use -= job->mem;
+    if (job->ordered_seq >= 0)
+      ctx->next_ordered_seq++;
+    job->done = true;
+    ctx->cond.broadcast();
+  }
+  ctx->mutex.unlock();
+  return ARC_THREAD_RET_VAL;
+}
+
+static void compress_groups_parallel(VolumeWriter &out, std::vector<BlockTask> &tasks,
+                                     const std::string &default_method, const char *password,
+                                     const char *algorithm, FileRec *files, int threads,
+                                     uint64 limit_comp_mem, std::vector<DataBlockRec> &data_blocks) {
+  std::vector<GroupCompressJob*> jobs;
+  int ordered = 0;
+  for (size_t i = 0; i < tasks.size(); i++) {
+    GroupCompressJob *job = new GroupCompressJob();
+    job->start = tasks[i].start;
+    job->count = tasks[i].count;
+    job->method = tasks[i].method.empty() ? default_method : tasks[i].method;
+    job->direct_out = (i == 0) ? (IArchiveWriter *)&out : NULL;
+    if (method_has_global_stream_state(job->method))
+      job->ordered_seq = ordered++;
+    uint64 orig = 0;
+    for (int k = 0; k < job->count; k++)
+      orig += files[job->start + k].size;
+    job->mem = estimate_chain_compression_mem(job->method, orig);
+    jobs.push_back(job);
+  }
+
+  GroupPoolContext ctx;
+  ctx.jobs = &jobs;
+  ctx.next_job = 0;
+  ctx.next_ordered_seq = 0;
+  ctx.running = 0;
+  ctx.mem_in_use = 0;
+  uint64 phys = GetPhysicalMemory();
+  ctx.mem_budget = limit_comp_mem > 0 ? limit_comp_mem : (phys > 0 ? phys / 4 * 3 : (uint64)1 << 31);
+  ctx.password = password;
+  ctx.algorithm = algorithm;
+  ctx.files = files;
+
+  int num_workers = (int)std::min((size_t)threads, jobs.size());
+  std::vector<ArcThread> workers;
+  for (int w = 0; w < num_workers; w++)
+    workers.push_back(arc_spawn_thread((ArcThreadFunc)group_worker_func, &ctx));
+
+  // Append finished blocks in task order as soon as each one (and all before it) is done,
+  // which releases buffered output early while later groups are still running.
+  for (size_t i = 0; i < jobs.size(); i++) {
+    GroupCompressJob *job = jobs[i];
+    ctx.mutex.lock();
+    while (!job->done)
+      ctx.cond.wait(ctx.mutex);
+    ctx.mutex.unlock();
+    DataBlockRec rec;
+    rec.start = job->start;
+    rec.count = job->count;
+    rec.info = job->info;
+    if (!job->direct_out) {
+      FILESIZE block_start_pos = out.tell();
+      CHECK(job->writer.copy_to(&out), (s, "ERROR: writing block %d to archive failed", (int)i));
+      rec.info.pos = block_start_pos;
+    }
+    data_blocks.push_back(rec);
+    delete job;
+    jobs[i] = NULL;
+  }
+  for (int w = 0; w < num_workers; w++)
+    arc_wait_thread(workers[w]);
+}
+
 static bool write_archive(const std::string &arcname, uint64 vol_size,
                           std::vector<FileRec> &files, int solid,
                           const char *method, const char *password,
@@ -2718,7 +2886,10 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
     }
   }
 
-  if (threads <= 1 || tasks.size() <= 1 || has_4x4 || use_auto) {
+  if (use_auto && threads > 1 && tasks.size() > 1) {
+    compress_groups_parallel(out, tasks, default_method, password, algorithm, files_ptr, threads,
+                             limit_comp_mem, data_blocks);
+  } else if (threads <= 1 || tasks.size() <= 1 || has_4x4 || use_auto) {
     for (size_t i = 0; i < tasks.size(); i++) {
       DataBlockRec rec;
       rec.start = tasks[i].start;

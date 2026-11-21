@@ -216,7 +216,16 @@ void __cdecl SetCompressionThreads (int threads);
 FARPROC LoadFromDLL (char *funcname);
 
 // Used in 4x4 only: read entire input buffer before compression begins, allocate output buffer large enough to hold entire compressed output
-extern int compress_all_at_once;
+// PERF/THREAD-SAFETY: the flag is thread-local so that independent blocks compressed
+// concurrently (one 4x4 block and e.g. a plain Tornado/LZMA block) never observe each other's
+// setting. 4x4 sets it in its own thread and in each of its job threads, which reproduces
+// exactly what the previous process-global flag provided to the code running inside 4x4.
+#if defined(_MSC_VER)
+#  define FREEARC_THREAD_LOCAL __declspec(thread)
+#else
+#  define FREEARC_THREAD_LOCAL __thread
+#endif
+extern FREEARC_THREAD_LOCAL int compress_all_at_once;
 
 // This function should cleanup Compression Library
 void compressionLib_cleanup (void);
