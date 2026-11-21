@@ -1167,7 +1167,7 @@ static std::string map_one_method(const char *m) {
   if (strequ(m, "tor") || strequ(m, "tornado"))
     return "tor:3";
   if (strequ(m, "ppmd"))
-    return "ppmd:8:1m";
+    return g_opt_nobitexact ? "ppmd:16:256m" : "ppmd:8:1m";
   if (strequ(m, "bcj") || strequ(m, "exe"))
     return "exe";
   if (strequ(m, "rep"))
@@ -1380,13 +1380,19 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
   } else if (strequ(name, "5")) {
     out.push_back(std::make_pair(std::string(""), std::string("rep:96m+exe+delta+") + lzma5));
     out.push_back(std::make_pair(std::string("$obj"), std::string("rep:96m+delta+") + lzma5));
-    out.push_back(std::make_pair(std::string("$text"), "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:12:192m"));
+    std::string text_m5 = g_opt_nobitexact
+      ? "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m"
+      : "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:12:192m";
+    out.push_back(std::make_pair(std::string("$text"), text_m5));
     out.push_back(std::make_pair(std::string("$wav"), "tta"));
     out.push_back(std::make_pair(std::string("$bmp"), bmp));
   } else if (strequ(name, "5x") || strequ(name, "x") || strequ(name, "mx") || strequ(name, "max") || strequ(name, "ultra")) {
     out.push_back(std::make_pair(std::string(""), std::string("exe+delta+") + lzma5));
     out.push_back(std::make_pair(std::string("$obj"), std::string("delta+") + lzma5));
-    out.push_back(std::make_pair(std::string("$text"), std::string("dict:128m:75%+") + lzma5));
+    std::string text_mx = g_opt_nobitexact
+      ? "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m"
+      : (std::string("dict:128m:75%+") + lzma5);
+    out.push_back(std::make_pair(std::string("$text"), text_mx));
     out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
     out.push_back(std::make_pair(std::string("$bmp"), std::string("mm+") + lzma5));
   }

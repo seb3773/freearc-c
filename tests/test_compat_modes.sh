@@ -272,6 +272,50 @@ test_lzma_deep_parameterization() {
   fi
 }
 
+# 10. Text Routing & PPMd Deep Tuning (Phase 4)
+test_text_ppmd_tuning() {
+  echo "Testing Text Routing & PPMd Deep Tuning in -nobitexact mode..."
+  local test_file="$ROOT_DIR/src/arc.cpp"
+  local arc_def_mx="$T/text_def_mx.arc"
+  local arc_nobit_mx="$T/text_nobit_mx.arc"
+
+  # In default -mx, text uses dict+lzma5; in -nobitexact -mx, text routes to dict+lzp+ppmd:16:256m
+  (cd "$ROOT_DIR" && "$ARC" a -q -mx "$arc_def_mx" src/arc.cpp)
+  (cd "$ROOT_DIR" && "$ARC" a -q -nobitexact -mx "$arc_nobit_mx" src/arc.cpp)
+
+  local sz_def_mx sz_nobit_mx
+  sz_def_mx=$(wc -c < "$arc_def_mx")
+  sz_nobit_mx=$(wc -c < "$arc_nobit_mx")
+
+  if [ "$sz_nobit_mx" -lt "$sz_def_mx" ]; then
+    pass "-nobitexact -mx successfully routes text to deep PPMd chain (size: $sz_nobit_mx < default: $sz_def_mx)"
+  else
+    fail "-nobitexact -mx failed to compress text smaller (nobit: $sz_nobit_mx, def: $sz_def_mx)"
+  fi
+
+  # Extract nobitexact PPMd text archive with modern unarc and verify integrity
+  local ext_modern="$T/ext_text_modern"
+  mkdir -p "$ext_modern"
+  "$UNARC" x -o+ -dp"$ext_modern" "$arc_nobit_mx" >/dev/null 2>&1
+  if diff -q "$test_file" "$ext_modern/src/arc.cpp" >/dev/null 2>&1; then
+    pass "Deep PPMd text archive decompresses bit-for-bit with modern unarc"
+  else
+    fail "Deep PPMd text archive extraction mismatch with modern unarc"
+  fi
+
+  # Extract deep PPMd text archive with legacy unarc 0.67 under Wine (if available)
+  if command -v wine >/dev/null 2>&1 && [ -f "$ROOT_DIR/research_bin/FreeArc/bin/unarc.exe" ]; then
+    local ext_legacy="$T/ext_text_legacy"
+    mkdir -p "$ext_legacy"
+    WINEDEBUG=-all wine "$ROOT_DIR/research_bin/FreeArc/bin/unarc.exe" x -o+ -dp"$ext_legacy" "$arc_nobit_mx" >/dev/null 2>&1 || true
+    if diff -q "$test_file" "$ext_legacy/src/arc.cpp" >/dev/null 2>&1; then
+      pass "Deep PPMd text archive decompresses 100% bit-for-bit with legacy FreeArc 0.67 under Wine"
+    else
+      fail "Deep PPMd text archive extraction mismatch with legacy FreeArc 0.67"
+    fi
+  fi
+}
+
 test_nobitexact_notice_banner
 test_max_ratio_alias_banner
 test_nocompat_warning_banner
@@ -281,6 +325,7 @@ test_ini_injection_and_override
 test_win64_wine_parity
 test_smart_sort_order
 test_lzma_deep_parameterization
+test_text_ppmd_tuning
 
 echo "=================================================================="
 echo " Compatibility Modes Tests Summary: $PASS passed, $FAIL failed"
