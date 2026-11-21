@@ -2573,7 +2573,9 @@ struct GroupPoolContext {
 };
 
 static bool method_has_global_stream_state(const std::string &mth) {
-  return mth.find("dict") != std::string::npos;
+  return mth.find("dict") != std::string::npos ||
+         mth.find("tta")  != std::string::npos ||
+         mth.find("mm")   != std::string::npos;
 }
 
 static uint64 estimate_chain_compression_mem(const std::string &mth, uint64 orig) {
