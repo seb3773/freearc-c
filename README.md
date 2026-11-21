@@ -231,6 +231,29 @@ Both `arc` / `unarc` on Linux and `arc.exe` / `unarc.exe` on Windows 64-bit serv
 * **Compression Memory Limiting (`-lc<mem>` / `--LimitCompMem=<mem>`)**: Constrains compressor RAM usage during archive creation.
 * **Multithreading Control (`-mt<num>` / `--MultiThreaded=<num>`)**: Configures worker thread concurrency for compression algorithms.
 
+### Configuration File (`arc.ini`) Support
+
+`freearc-c` fully supports the historical FreeArc `arc.ini` configuration format across Linux and Windows:
+
+* **Automatic Discovery Hierarchy**:
+  1. Explicit CLI specification: `-cfg<path>` or `--config <path>`
+  2. Executable directory: `arc.ini` located alongside `arc` / `unarc`
+  3. Current working directory: `./arc.ini`
+  4. System-wide configuration: `/etc/arc.ini` (Linux) or `%APPDATA%\FreeArc\arc.ini` (Windows)
+* **Disabling Config Loading**: `-cfg-` or `--no-config` skips searching and loading any `arc.ini`.
+* **Inspection**: `--print-config` displays the parsed active configuration, default options, and compression method aliases.
+* **Supported INI Sections**:
+  * `[Default options]`: Global or per-command default switches automatically injected (e.g. `arc = -mx -nobitexact`, `unarc = -o+`). All default options can be overridden or cancelled via the command line (e.g. `-nobitexact-` or `--bitexact`).
+  * `[Compression methods]`: Custom compression method aliases, multi-group pipelines with `/` (e.g. `$text:ppmd / $wav:tta / lzma`), and numeric wildcard `#` (e.g. `lzma# = lzma:#m`).
+  * `[External compressor:NAME]`: Registration and piping rules for external archivers and preprocessors.
+
+### Compatibility Modes: `-nobitexact` & `-nocompat`
+
+* **Default Mode (Untouched)**: Strict 100% bit-exact parity with FreeArc 0.67 (`Arc.exe` 2010). Byte-for-byte identical archives for legacy verification and regression testing.
+* **`-nobitexact` / `--max-ratio`**: Maximizes compression ratio while maintaining **100% backward format compatibility** with legacy FreeArc 0.67 decompressors (`unarc.exe`). Enables intelligent solid file sorting (directory locality + stem clustering), deep LZMA optimal parser (`max:64:mc256`), and advanced PPMd text routing.
+* **`-nobitexact-` / `--bitexact`**: Disables ratio-maximizing heuristics and enforces strict bit-exact parity (useful to override `[Default options]` in `arc.ini`).
+* **`-nocompat`**: Next-generation mode reserved for FreeArc 2.0 modernization (breaks backward compatibility with legacy 32-bit `unarc.exe`).
+
 ---
 
 ## Performance & Multithreading Architecture
