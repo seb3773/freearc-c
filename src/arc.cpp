@@ -1324,6 +1324,10 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     bin3 = mt ? "4x4:lzma:96m:normal:32:mc16" : "lzma:96m:normal:32:mc16";
   }
   std::string etor_c3 = mt ? "4x4:tor:c3" : "tor:c3";
+  // -nobitexact text back-end: PPMd restarts its model whenever its 256 MB are exhausted, so
+  // cutting the (dict+lzp preprocessed) text stream into independent 32 MB 4x4 jobs costs no
+  // ratio while letting the PPMd encoders (thread-local state, no global lock) run in parallel.
+  std::string text_ppmd_nbx = mt ? "4x4:b32m:ppmd:16:256m" : "ppmd:16:256m";
   std::string bmp = "mm+grzip:m1:l2048:a";
   std::string bin1 = mt ? "4x4:tor:3:8mb" : "tor:4";
   std::string bin2 = mt ? "4x4:tor:5" : "tor:6";
@@ -1381,7 +1385,7 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string(""), std::string("rep:96m+exe+delta+") + lzma5));
     out.push_back(std::make_pair(std::string("$obj"), std::string("rep:96m+delta+") + lzma5));
     std::string text_m5 = g_opt_nobitexact
-      ? "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m"
+      ? std::string("dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+") + text_ppmd_nbx
       : "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:12:192m";
     out.push_back(std::make_pair(std::string("$text"), text_m5));
     out.push_back(std::make_pair(std::string("$wav"), "tta"));
@@ -1390,7 +1394,7 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string(""), std::string("exe+delta+") + lzma5));
     out.push_back(std::make_pair(std::string("$obj"), std::string("delta+") + lzma5));
     std::string text_mx = g_opt_nobitexact
-      ? "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m"
+      ? std::string("dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+") + text_ppmd_nbx
       : (std::string("dict:128m:75%+") + lzma5);
     out.push_back(std::make_pair(std::string("$text"), text_mx));
     out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
@@ -1615,7 +1619,49 @@ static std::string detect_file_datatype(const FileRec &f, int detect_level) {
   return choose_detected_type(dataTypes, defaultType);
 }
 
+struct DetectTypesCtx {
+  std::vector<FileRec> *files;
+  int                   detect_level;
+  size_t                next;
+  ArcMutex              mutex;
+};
+
+static ARC_THREAD_CALL detect_types_worker(void *arg) {
+  DetectTypesCtx *ctx = (DetectTypesCtx *)arg;
+  std::vector<FileRec> &files = *ctx->files;
+  for (;;) {
+    ctx->mutex.lock();
+    size_t i = ctx->next;
+    ctx->next += 16;   // small batches keep the lock traffic negligible
+    ctx->mutex.unlock();
+    if (i >= files.size()) break;
+    size_t end = std::min(files.size(), i + 16);
+    for (; i < end; i++) {
+      if (files[i].datatype.empty())
+        files[i].datatype = detect_file_datatype(files[i], ctx->detect_level);
+    }
+  }
+  return ARC_THREAD_RET_VAL;
+}
+
 static void detect_file_types(std::vector<FileRec> &files, int detect_level) {
+  // -nobitexact: content analysis of every file (it reads up to several 64 KB samples per file)
+  // is a serial pre-pass on the critical path; spread it over the compression threads.
+  // The result for each file is independent of the order of evaluation.
+  int threads = GetCompressionThreads();
+  if (g_opt_nobitexact && threads > 1 && files.size() >= 64 && detect_level > 1) {
+    DetectTypesCtx ctx;
+    ctx.files = &files;
+    ctx.detect_level = detect_level;
+    ctx.next = 0;
+    int n = std::min(threads, 16);
+    std::vector<ArcThread> workers;
+    for (int w = 0; w < n; w++)
+      workers.push_back(arc_spawn_thread((ArcThreadFunc)detect_types_worker, &ctx));
+    for (int w = 0; w < n; w++)
+      arc_wait_thread(workers[w]);
+    return;
+  }
   for (size_t i = 0; i < files.size(); i++) {
     if (files[i].datatype.empty())
       files[i].datatype = detect_file_datatype(files[i], detect_level);
@@ -2528,6 +2574,190 @@ static ARC_THREAD_CALL block_worker_func(void *arg) {
   return ARC_THREAD_RET_VAL;
 }
 
+/* --- -nobitexact: concurrent compression of independent solid blocks ---
+ *
+ * In the default (bit-exact) mode, auto profiles (-m1..-m5, -mx) compress their solid blocks
+ * (one per data-type group: default, $text, $obj, $wav, $bmp, ...) strictly one after another.
+ * The groups use very different codecs: e.g. with -m5 the $text group runs a single-threaded
+ * dict+lzp+ppmd chain while the binary group runs 4x4:lzma. Running them back to back leaves
+ * most cores idle for a large part of the run.
+ *
+ * Here all blocks are compressed concurrently. Each compressed stream is byte-identical to the
+ * one produced sequentially, only the wall time changes. The first block streams straight into
+ * the archive; the other blocks are buffered (TempBlockWriter) and appended in archive order.
+ *
+ * Safety rules:
+ *  - a memory budget (3/4 of physical RAM) caps the sum of the estimated compression memory of
+ *    the running blocks (a block that alone exceeds the budget still runs, but alone);
+ *  - codecs that keep process-global state (DICT, MM/TTA) never run in two blocks at once.
+ */
+enum {
+  CB_TAG_DICT = 1,   // DICT keeps its dictionary in globals
+  CB_TAG_MM   = 2    // MM / TTA keep per-stream state in globals
+};
+
+static unsigned concurrent_block_tags(const std::string &chain) {
+  unsigned tags = 0;
+  std::string tok;
+  for (size_t i = 0; i <= chain.size(); i++) {
+    char c = i < chain.size() ? chain[i] : '+';
+    if (c == '+' || c == ':') {
+      if (tok == "dict") tags |= CB_TAG_DICT;
+      else if (tok == "mm" || tok == "tta") tags |= CB_TAG_MM;
+      tok.clear();
+    } else {
+      tok += c;
+    }
+  }
+  return tags;
+}
+
+static uint64 concurrent_block_mem(const std::string &chain) {
+  // Sum of the compression memory of every stage (stages of a chain run concurrently)
+  uint64 total = 0;
+  size_t p = 0;
+  while (p <= chain.size()) {
+    size_t plus = chain.find('+', p);
+    std::string part = chain.substr(p, plus == std::string::npos ? std::string::npos : plus - p);
+    if (!part.empty()) {
+      char buf[MAX_METHOD_STRLEN];
+      strncopy(buf, (char *)part.c_str(), MAX_METHOD_STRLEN);
+      MemSize m = GetCompressionMem(buf);
+      if (m > 0) total += (uint64)m;
+    }
+    if (plus == std::string::npos) break;
+    p = plus + 1;
+  }
+  return total;
+}
+
+struct ConcurrentBlockJob {
+  int             start;
+  int             count;
+  std::string     method;
+  uint64          weight;     // input bytes, used to start the biggest blocks first
+  uint64          mem;
+  unsigned        tags;
+  IArchiveWriter *writer;
+  TempBlockWriter temp;
+  BlockInfo       info;
+  bool            started;
+};
+
+struct ConcurrentBlockCtx {
+  std::vector<ConcurrentBlockJob*> order;   // jobs sorted by decreasing weight
+  ArcMutex    mutex;
+  ArcCond     cond;
+  uint64      mem_budget;
+  uint64      mem_in_use;
+  unsigned    tags_in_use;
+  int         running;
+  size_t      remaining;
+  const char *password;
+  const char *algorithm;
+  FileRec    *files;
+};
+
+static ARC_THREAD_CALL concurrent_block_worker(void *arg) {
+  ConcurrentBlockCtx *ctx = (ConcurrentBlockCtx *)arg;
+  ctx->mutex.lock();
+  for (;;) {
+    if (ctx->remaining == 0) break;
+    ConcurrentBlockJob *job = NULL;
+    for (size_t i = 0; i < ctx->order.size(); i++) {
+      ConcurrentBlockJob *j = ctx->order[i];
+      if (j->started) continue;
+      if (j->tags & ctx->tags_in_use) continue;
+      if (ctx->running > 0 && ctx->mem_in_use + j->mem > ctx->mem_budget) continue;
+      job = j;
+      break;
+    }
+    if (!job) {
+      ctx->cond.wait(ctx->mutex);
+      continue;
+    }
+    job->started = true;
+    ctx->remaining--;
+    ctx->running++;
+    ctx->mem_in_use += job->mem;
+    ctx->tags_in_use |= job->tags;
+    ctx->mutex.unlock();
+
+    job->info = compress_range(job->writer, job->method.c_str(), ctx->password, ctx->algorithm,
+                               ctx->files, job->start, job->count, true);
+
+    ctx->mutex.lock();
+    ctx->running--;
+    ctx->mem_in_use -= job->mem;
+    ctx->tags_in_use &= ~job->tags;
+    ctx->cond.broadcast();
+  }
+  ctx->mutex.unlock();
+  return ARC_THREAD_RET_VAL;
+}
+
+static bool concurrent_job_heavier(const ConcurrentBlockJob *a, const ConcurrentBlockJob *b) {
+  return a->weight > b->weight;
+}
+
+static void compress_blocks_concurrently(VolumeWriter *out, const std::vector<BlockTask> &tasks,
+                                         const std::string &default_method, const char *password,
+                                         const char *algorithm, FileRec *files, int threads,
+                                         std::vector<DataBlockRec> &data_blocks) {
+  std::vector<ConcurrentBlockJob*> jobs;
+  for (size_t i = 0; i < tasks.size(); i++) {
+    ConcurrentBlockJob *job = new ConcurrentBlockJob();
+    job->start   = tasks[i].start;
+    job->count   = tasks[i].count;
+    job->method  = tasks[i].method.empty() ? default_method : tasks[i].method;
+    job->weight  = 0;
+    for (int k = 0; k < job->count; k++) job->weight += files[job->start + k].size;
+    job->mem     = concurrent_block_mem(job->method);
+    job->tags    = concurrent_block_tags(job->method);
+    job->writer  = (i == 0) ? (IArchiveWriter *)out : (IArchiveWriter *)&job->temp;
+    job->started = false;
+    memset(&job->info, 0, sizeof(job->info));
+    jobs.push_back(job);
+  }
+
+  ConcurrentBlockCtx ctx;
+  ctx.order = jobs;
+  std::stable_sort(ctx.order.begin(), ctx.order.end(), concurrent_job_heavier);
+  uint64 phys = GetPhysicalMemory();
+  ctx.mem_budget  = phys ? phys / 4 * 3 : (uint64)-1;
+  ctx.mem_in_use  = 0;
+  ctx.tags_in_use = 0;
+  ctx.running     = 0;
+  ctx.remaining   = jobs.size();
+  ctx.password    = password;
+  ctx.algorithm   = algorithm;
+  ctx.files       = files;
+
+  // Each block may be multithreaded itself (4x4, grzip, MT match finder...), so the number of
+  // blocks in flight is bounded by the thread count, not by the number of groups.
+  int num_workers = (int)std::min((size_t)std::max(threads, 1), jobs.size());
+  std::vector<ArcThread> workers;
+  for (int w = 0; w < num_workers; w++)
+    workers.push_back(arc_spawn_thread((ArcThreadFunc)concurrent_block_worker, &ctx));
+  for (int w = 0; w < num_workers; w++)
+    arc_wait_thread(workers[w]);
+
+  for (size_t i = 0; i < jobs.size(); i++) {
+    ConcurrentBlockJob *job = jobs[i];
+    DataBlockRec rec;
+    rec.start = job->start;
+    rec.count = job->count;
+    rec.info  = job->info;
+    if (i > 0) {
+      FILESIZE block_start_pos = out->tell();
+      CHECK(job->temp.copy_to(out), (s, "ERROR: writing block %d to archive failed", (int)i));
+      rec.info.pos = block_start_pos;
+    }
+    data_blocks.push_back(rec);
+    delete job;
+  }
+}
+
 static bool write_archive(const std::string &arcname, uint64 vol_size,
                           std::vector<FileRec> &files, int solid,
                           const char *method, const char *password,
@@ -2718,7 +2948,9 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
     }
   }
 
-  if (threads <= 1 || tasks.size() <= 1 || has_4x4 || use_auto) {
+  if (g_opt_nobitexact && threads > 1 && tasks.size() > 1) {
+    compress_blocks_concurrently(&out, tasks, default_method, password, algorithm, files_ptr, threads, data_blocks);
+  } else if (threads <= 1 || tasks.size() <= 1 || has_4x4 || use_auto) {
     for (size_t i = 0; i < tasks.size(); i++) {
       DataBlockRec rec;
       rec.start = tasks[i].start;
@@ -3508,6 +3740,8 @@ int main(int argc, char **argv) {
 
   int num_threads = (custom_threads > 0) ? custom_threads : GetProcessorsCount();
   SetCompressionThreads(num_threads);
+  // Speed-oriented encoder paths in the compression library are enabled only in -nobitexact mode
+  nobitexact_speed_mode = g_opt_nobitexact ? 1 : 0;
   method = method_str.c_str();
 
   if (!g_quiet && (cmd == 'a' || cmd == 'u' || cmd == 'f' || cmd == 'm')) {

@@ -10,7 +10,7 @@
 enum { UNIT_SIZE=12, N1=4, N2=4, N3=4, N4=(128+3-1*N1-2*N2-3*N3)/4,
         N_INDEXES=N1+N2+N3+N4 };
 
-static BYTE* HeapStart;
+static PPMD_TLS BYTE* HeapStart;
 
 #if defined(__linux__) && defined(__x86_64__)
 #include <sys/mman.h>
@@ -47,7 +47,8 @@ struct BLK_NODE {
         Stamp--;                            return p;
     }
     inline void insert(void* pv,int NU);
-} BList[N_INDEXES];
+};
+static PPMD_TLS BLK_NODE BList[N_INDEXES];
 struct MEM_BLK: public BLK_NODE {
     DWORD NU;
 } _PACK_ATTR;
@@ -58,8 +59,8 @@ typedef char ppmd_mem_blk_size_check[sizeof(MEM_BLK)==UNIT_SIZE ? 1 : -1];
 typedef char ppmd_blk_node_size_check[sizeof(BLK_NODE)==8 ? 1 : -1];
 
 static BYTE Indx2Units[N_INDEXES], Units2Indx[128];
-static DWORD GlueCount, SubAllocatorSize=0;
-static BYTE * pText, * UnitsStart, * LoUnit, * HiUnit;
+static PPMD_TLS DWORD GlueCount, SubAllocatorSize=0;
+static PPMD_TLS BYTE * pText, * UnitsStart, * LoUnit, * HiUnit;
 
 inline void PrefetchData(void* Addr)
 {

@@ -55,11 +55,12 @@ public:
 };
 *****************************************************************************/
 
-static struct SUBRANGE {
+struct SUBRANGE {
     DWORD LowCount, HighCount, scale;
-} SubRange;
+};
+static PPMD_TLS SUBRANGE SubRange;
 enum { TOP=1 << 24, BOT=1 << 15 };
-static DWORD low, code, range;
+static PPMD_TLS DWORD low, code, range;
 
 inline void ariInitEncoder()
 {

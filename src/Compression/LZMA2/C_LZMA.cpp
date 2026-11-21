@@ -163,7 +163,7 @@ static void FillLzmaEncProps (CLzmaEncProps *props,
     case kBT4:  props->btMode = MF_BinaryTree;  props->numHashBytes = 4; break;
     case kHT4:  props->btMode = MF_HashTable;   props->numHashBytes = 4; break;
   }
-  props->numThreads = compress_all_at_once ? 1 : GetCompressionThreads();
+  props->numThreads = compress_all_at_once ? ((nobitexact_speed_mode && algorithm) ? 2 : 1) : GetCompressionThreads();
   props->writeEndMark = 1;
   LzmaEncProps_Normalize(props);
 }
@@ -240,7 +240,10 @@ int lzma_compress2  (int dictionarySize,
     FillLzmaEncProps (&props, dictionarySize, hashSize, algorithm, numFastBytes,
                       matchFinder, matchFinderCycles, posStateBits, litContextBits, litPosBits);
     if (input && output && outputSize)
-      props.numThreads = 1;
+      // Memory-to-memory mode is used by 4x4. In -nobitexact mode keep the multithreaded match
+      // finder there too: the match search runs in its own threads, overlapping with the optimal
+      // parser, which roughly halves the wall time of each 4x4 job (the stream is a standard LZMA stream).
+      props.numThreads = (nobitexact_speed_mode && algorithm) ? 2 : 1;
     enc = LzmaEnc_Create(&g_Alloc);
     if (enc == 0)   return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
     res = LzmaEnc_SetProps(enc, &props);

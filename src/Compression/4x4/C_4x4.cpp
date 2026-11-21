@@ -215,8 +215,24 @@ int _4x4Job::done()
   return 0;
 }
 
+static int _4x4_process_job (_4x4Job *job);
+
 int _4x4Job::process()
 {
+  // compress_all_at_once is thread-local: enable it in this worker thread for the duration of the job
+  int save_once = compress_all_at_once;
+  compress_all_at_once = 1;
+  int rc = _4x4_process_job (this);
+  compress_all_at_once = save_once;
+  return rc;
+}
+
+static int _4x4_process_job (_4x4Job *job)
+{
+  _4x4MTCompressor *compressor = job->compressor;
+  char *InBuf = job->InBuf, *OutBuf = job->OutBuf;
+  int InSize = job->InSize;
+  void *&CodecState = job->CodecState;
   if (compressor->direction == 0) {
 #ifndef FREEARC_DECOMPRESS_ONLY
     int rc = FREEARC_ERRCODE_OUTBLOCK_TOO_SMALL;
@@ -245,13 +261,13 @@ int _4x4Job::process()
 #endif
   }
 
-  if ((int32) orig_size == -1) {
+  if ((int32) job->orig_size == -1) {
     memcpy (OutBuf, InBuf, InSize);
     return InSize;
   }
-  int rc = decompress_mem_local (compressor->Method, InBuf, InSize, OutBuf, (int) orig_size);
+  int rc = decompress_mem_local (compressor->Method, InBuf, InSize, OutBuf, (int) job->orig_size);
   if (rc < 0) return rc;
-  if (rc != (int) orig_size) return FREEARC_ERRCODE_BAD_COMPRESSED_DATA;
+  if (rc != (int) job->orig_size) return FREEARC_ERRCODE_BAD_COMPRESSED_DATA;
   return rc;
 }
 

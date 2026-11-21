@@ -215,8 +215,21 @@ void __cdecl SetCompressionThreads (int threads);
 // Load (accelerated) function from facompress.dll
 FARPROC LoadFromDLL (char *funcname);
 
-// Used in 4x4 only: read entire input buffer before compression begins, allocate output buffer large enough to hold entire compressed output
-extern int compress_all_at_once;
+// Thread-local storage qualifier (GCC/Clang/MinGW and MSVC)
+#ifndef FA_THREAD_LOCAL
+#  if defined(_MSC_VER)
+#    define FA_THREAD_LOCAL __declspec(thread)
+#  else
+#    define FA_THREAD_LOCAL __thread
+#  endif
+#endif
+
+// Used in 4x4 only: read entire input buffer before compression begins, allocate output buffer large enough to hold entire compressed output.
+// Thread-local (see Common.cpp).
+extern FA_THREAD_LOCAL int compress_all_at_once;
+
+// Non-zero in -nobitexact mode: speed-oriented encoder paths are allowed (see Common.cpp)
+extern int nobitexact_speed_mode;
 
 // This function should cleanup Compression Library
 void compressionLib_cleanup (void);

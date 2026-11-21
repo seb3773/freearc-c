@@ -445,6 +445,28 @@ loop:
 
 static DWORD WINAPI multi_compress_thread (void *paramPtr);
 
+// -nobitexact: write coalescing between the stages of a compression chain.
+// The stage-to-stage transport is a rendezvous (producer and consumer threads are woken up for
+// every "write" call). Some filters emit many small writes (e.g. REP writes every literal run
+// separately), so the handoffs - two futex wake-ups each - dominate the cost of fast chains.
+// Small writes are therefore gathered into a per-stage buffer and handed over in large pieces.
+// The byte stream seen by the next stage is unchanged.
+const int MULTI_COMPRESS_COALESCE_SIZE = 1*mb;
+struct CoalesceBuffer
+{
+  BYTE *buf;
+  int   fill;
+};
+
+static int multi_compress_flush (Params *param, CoalesceBuffer *cb)
+{
+  if (cb->fill == 0)  return 0;
+  int n = cb->fill;
+  cb->fill = 0;
+  int ret = multi_decompress_callback ("write", cb->buf, n, param);
+  return ret<0? ret : 0;
+}
+
 int MultiCompress (char *_method, CALLBACK_FUNC *callback, void *auxdata)
 {
   if (strchr (_method, COMPRESSION_METHODS_DELIMITER) == NULL)
@@ -485,13 +507,58 @@ int MultiCompress (char *_method, CALLBACK_FUNC *callback, void *auxdata)
   return retcode;
 }
 
+// Per-thread coalescing state of the current compression stage (NULL when coalescing is off)
+static FA_THREAD_LOCAL CoalesceBuffer *multi_compress_coalesce = NULL;
+
+static int multi_compress_callback (const char *what, void *_buf, int size, void *paramPtr)
+{
+  Params *param = (Params*) paramPtr;
+  CoalesceBuffer *cb = multi_compress_coalesce;
+  if (cb  &&  strequ(what,"write")  &&  param->thread_num < param->threads_total-1)
+  {
+    if (size >= MULTI_COMPRESS_COALESCE_SIZE/2)
+    {
+      // Large write: flush pending bytes, then hand the caller's buffer over directly
+      int ret = multi_compress_flush (param, cb);
+      if (ret<0)  return ret;
+      return multi_decompress_callback (what, _buf, size, param);
+    }
+    if (cb->fill + size > MULTI_COMPRESS_COALESCE_SIZE)
+    {
+      int ret = multi_compress_flush (param, cb);
+      if (ret<0)  return ret;
+    }
+    memcpy (cb->buf + cb->fill, _buf, size);
+    cb->fill += size;
+    return size;
+  }
+  return multi_decompress_callback (what, _buf, size, param);
+}
+
 static DWORD WINAPI multi_compress_thread (void *paramPtr)
 {
   Params *param = (Params*) paramPtr;
   if (param->thread_num > 0)
     param->read.Lock(),
     param->read.Release();
-  int ret = Compress (param->method, multi_decompress_callback, param);
+  int ret;
+  if (nobitexact_speed_mode  &&  param->thread_num < param->threads_total-1)
+  {
+    CoalesceBuffer cb;
+    cb.buf  = (BYTE*) malloc (MULTI_COMPRESS_COALESCE_SIZE);
+    cb.fill = 0;
+    multi_compress_coalesce = cb.buf? &cb : NULL;
+    ret = Compress (param->method, multi_compress_callback, param);
+    if (ret>=0 && cb.buf)
+    {
+      int r = multi_compress_flush (param, &cb);
+      if (r<0 && r!=FREEARC_ERRCODE_NO_MORE_DATA_REQUIRED)  ret = r;
+    }
+    multi_compress_coalesce = NULL;
+    free (cb.buf);
+  }
+  else
+    ret = Compress (param->method, multi_decompress_callback, param);
   if (ret<0)
     param->SetExitCode (ret);
   if (param->thread_num > 0)

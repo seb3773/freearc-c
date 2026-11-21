@@ -20,7 +20,9 @@ extern "C" {
 /*-------------------------------------------------*/
 #ifndef FREEARC_DECOMPRESS_ONLY
 
-static NWindows::NSynchronization::CCriticalSection ppmd_comp_cs;
+// The encoder model lives in thread-local storage, so independent PPMd encoders
+// (4x4 jobs, concurrently compressed solid blocks) run in parallel without any lock.
+#define PPMD_TLS FA_THREAD_LOCAL
 
 namespace PPMD_compression {
 
@@ -29,7 +31,6 @@ namespace PPMD_compression {
 extern "C" {
 int ppmd_compress (int order, MemSize mem, int MRMethod, CALLBACK_FUNC *callback, void *auxdata)
 {
-  NWindows::NSynchronization::CCriticalSectionLock lock(ppmd_comp_cs);
   if ( !StartSubAllocator(mem) ) {
     return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
   }
@@ -62,6 +63,10 @@ void _STDCALL PrintInfo (_PPMD_FILE* DecodedFile, _PPMD_FILE* EncodedFile)
 /*-------------------------------------------------*/
 
 static NWindows::NSynchronization::CCriticalSection ppmd_decomp_cs;
+
+// The decoder keeps plain globals guarded by a lock (unchanged)
+#undef  PPMD_TLS
+#define PPMD_TLS
 
 namespace PPMD_decompression {
 
