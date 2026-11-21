@@ -293,6 +293,7 @@ struct Params
   CCriticalSection*   retcode_cs;     // Ensure single-threaded access to retcode
   CSemaphore          read;
   CSemaphore          write;
+  struct CoalesceBuffer *coalesce;    // -nobitexact write coalescing buffer of this compression stage (or NULL)
 
   // Abort multi_decompress and set its exit code
   void SetExitCode (int code)
@@ -496,6 +497,7 @@ int MultiCompress (char *_method, CALLBACK_FUNC *callback, void *auxdata)
     param[i].done          = &done;
     param[i].retcode       = &retcode;
     param[i].retcode_cs    = &retcode_cs;
+    param[i].coalesce      = NULL;
     param[i].thread.Create (multi_compress_thread, &param[i]);
   }
 
@@ -507,13 +509,15 @@ int MultiCompress (char *_method, CALLBACK_FUNC *callback, void *auxdata)
   return retcode;
 }
 
-// Per-thread coalescing state of the current compression stage (NULL when coalescing is off)
-static FA_THREAD_LOCAL CoalesceBuffer *multi_compress_coalesce = NULL;
-
+// The coalescing state belongs to the compression stage (Params), not to a thread: some codecs
+// write from several threads (e.g. 4x4 writes its stream header from its main thread and the
+// compressed chunks from its writer thread). With a thread-local buffer, writes coming from the
+// other thread bypassed the bytes still pending in the buffer and the stream was reordered
+// (corrupted archives whenever 4x4 was followed by another stage, e.g. with -p encryption).
 static int multi_compress_callback (const char *what, void *_buf, int size, void *paramPtr)
 {
   Params *param = (Params*) paramPtr;
-  CoalesceBuffer *cb = multi_compress_coalesce;
+  CoalesceBuffer *cb = param->coalesce;
   if (cb  &&  strequ(what,"write")  &&  param->thread_num < param->threads_total-1)
   {
     if (size >= MULTI_COMPRESS_COALESCE_SIZE/2)
@@ -547,14 +551,14 @@ static DWORD WINAPI multi_compress_thread (void *paramPtr)
     CoalesceBuffer cb;
     cb.buf  = (BYTE*) malloc (MULTI_COMPRESS_COALESCE_SIZE);
     cb.fill = 0;
-    multi_compress_coalesce = cb.buf? &cb : NULL;
+    param->coalesce = cb.buf? &cb : NULL;
     ret = Compress (param->method, multi_compress_callback, param);
+    param->coalesce = NULL;
     if (ret>=0 && cb.buf)
     {
       int r = multi_compress_flush (param, &cb);
       if (r<0 && r!=FREEARC_ERRCODE_NO_MORE_DATA_REQUIRED)  ret = r;
     }
-    multi_compress_coalesce = NULL;
     free (cb.buf);
   }
   else

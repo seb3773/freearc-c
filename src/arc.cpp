@@ -2574,6 +2574,78 @@ static ARC_THREAD_CALL block_worker_func(void *arg) {
   return ARC_THREAD_RET_VAL;
 }
 
+/* --- -nobitexact: balanced 4x4 chunking of LZMA streams ---
+ *
+ * 4x4 cuts its input into independent chunks of the inner dictionary size (96 MB for the
+ * -nobitexact LZMA profiles) and compresses them in parallel. Each LZMA chunk is inherently
+ * sequential (about two cores: optimal parser + match finder thread), so the wall time of a solid
+ * block is the time of its biggest chunk. A 266 MB binary group gives 96+96+74 MB: three jobs on
+ * a 16-thread machine, and the block lasts as long as one full 96 MB LZMA job.
+ *
+ * Knowing the size of the block, the chunk size is chosen so that:
+ *  - the number of chunks never drops below the default one (ceil(size/dict));
+ *  - when that leaves cores idle (fewer chunks than threads/2), extra chunks are allowed as long
+ *    as every chunk keeps at least 3/5 of the dictionary (bounded ratio cost, measured < 0.1%);
+ *  - the chunks have equal sizes (no long 96 MB job next to a short tail chunk).
+ * Blocks that already give enough chunks, chunks with an explicit size (4x4:b...) and other
+ * codecs are left untouched. Every chunk stays a standard independent 4x4 LZMA chunk.
+ */
+static std::string nbx_balance_4x4_lzma(const std::string &chain, uint64 insize, int threads) {
+  std::string out;
+  size_t p = 0;
+  while (p <= chain.size()) {
+    size_t plus = chain.find('+', p);
+    std::string stage = chain.substr(p, plus == std::string::npos ? std::string::npos : plus - p);
+    if (stage.compare(0, 4, "4x4:") == 0) {
+      // 4x4 parameters come first; the inner method starts at the first non-numeric token
+      size_t q = 4;
+      bool explicit_block = false;
+      while (q < stage.size()) {
+        size_t colon = stage.find(':', q);
+        std::string tok = stage.substr(q, colon == std::string::npos ? std::string::npos : colon - q);
+        bool param = !tok.empty() && (isdigit((unsigned char)tok[0]) || (tok.size() > 1 && isdigit((unsigned char)tok[1])));
+        if (!param) break;
+        if (tok[0] == 'b' || isdigit((unsigned char)tok[0])) {
+          char *end = NULL;
+          strtol(tok.c_str(), &end, 10);
+          if (tok[0] == 'b' || (end && *end != '\0')) explicit_block = true;   // b<size> or bare <size>
+        }
+        if (colon == std::string::npos) { q = stage.size(); break; }
+        q = colon + 1;
+      }
+      std::string inner = stage.substr(q);
+      if (!explicit_block && inner.compare(0, 4, "lzma") == 0 && insize > 0) {
+        char buf[MAX_METHOD_STRLEN];
+        strncopy(buf, (char *)inner.c_str(), MAX_METHOD_STRLEN);
+        uint64 dict = (uint64)GetDictionary(buf);
+        if (dict >= 4 * mb) {
+          uint64 n0 = (insize + dict - 1) / dict;
+          uint64 slots = (uint64)std::max(1, threads / 2);
+          uint64 n = n0;
+          if (n0 < slots) {
+            uint64 extra = insize / (dict * 3 / 5);
+            n = std::max(n0, std::min(slots, extra));
+          }
+          if (n >= 2) {
+            uint64 chunk = (insize + n - 1) / n;
+            chunk = (chunk + mb - 1) / mb * mb;
+            if (chunk < dict) {
+              char b[64];
+              snprintf(b, sizeof(b), "4x4:b%llum:", (unsigned long long)(chunk / mb));
+              stage = std::string(b) + stage.substr(4);
+            }
+          }
+        }
+      }
+    }
+    if (!out.empty() || p > 0) out += '+';
+    out += stage;
+    if (plus == std::string::npos) break;
+    p = plus + 1;
+  }
+  return out;
+}
+
 /* --- -nobitexact: concurrent compression of independent solid blocks ---
  *
  * In the default (bit-exact) mode, auto profiles (-m1..-m5, -mx) compress their solid blocks
@@ -2938,6 +3010,15 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
   std::vector<DataBlockRec> data_blocks;
   FileRec *files_ptr = files.empty() ? NULL : &files[0];
   int threads = GetCompressionThreads();
+
+  if (g_opt_nobitexact && threads > 1) {
+    for (size_t i = 0; i < tasks.size(); i++) {
+      uint64 insize = 0;
+      for (int k = 0; k < tasks[i].count; k++) insize += files[tasks[i].start + k].size;
+      const std::string mth = tasks[i].method.empty() ? default_method : tasks[i].method;
+      tasks[i].method = nbx_balance_4x4_lzma(mth, insize, threads);
+    }
+  }
 
   bool has_4x4 = false;
   for (size_t i = 0; i < tasks.size(); i++) {
