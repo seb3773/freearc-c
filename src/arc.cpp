@@ -1548,7 +1548,7 @@ static std::string group_type_from_name(const std::string &name) {
       "jpg", "jpeg", "webp", "avif", "heic", "heif",
       "opus", "flac", "alac", "webm", "m4a",
       "zst", "zstandard", "tzst", "xz", "txz", "lzma", "tlz", "br", "lz4", "snappy",
-      "zpaq", "paq8px", "apk", "appx", "whl", "deb", "rpm", "dmg", "wim", "nupkg", "crx",
+      "zpaq", "paq8px", "uha", "apk", "appx", "whl", "deb", "rpm", "dmg", "wim", "nupkg", "crx",
       NULL
     };
     static const char *data_exts[] = {
@@ -1775,7 +1775,7 @@ static int get_extension_cluster(const std::string &e) {
     "fa", "fasta", "fna", "fastq", "fq", "sam", "bam", "cram", "vcf", "gff", "gtf", "bed", "pdb", NULL
   };
   static const char *const archives[] = {
-    "zip", "gz", "bz2", "xz", "txz", "lzma", "tlz", "zst", "tzst", "7z", "rar", "arc", "tar", "tgz", "tbz2", "zpaq", "paq8px", "cab",
+    "zip", "gz", "bz2", "xz", "txz", "lzma", "tlz", "zst", "tzst", "7z", "rar", "arc", "tar", "tgz", "tbz2", "zpaq", "paq8px", "uha", "cab",
     "iso", "jar", "apk", "deb", "rpm", "dmg", NULL
   };
   static const char *const compressed_media[] = {
