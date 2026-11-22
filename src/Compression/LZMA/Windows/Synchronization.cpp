@@ -6,110 +6,56 @@
 
 #ifndef FREEARC_WIN
 
-static NWindows::NSynchronization::CCriticalSection gbl_criticalSection;
+#include <sched.h>
 
-#define myEnter() gbl_criticalSection.Enter()
-#define myLeave() gbl_criticalSection.Leave()
-#define myYield() gbl_criticalSection.WaitCond()
+// Per-object synchronization (see CBaseHandle in Synchronization.h): no global lock and no
+// broadcast to unrelated waiters.
+
+static bool TryAcquire (NWindows::NSynchronization::CBaseHandle *h)
+{
+  // Called with h->_mtx locked
+  if (h->type == NWindows::NSynchronization::CBaseHandle::EVENT) {
+    if (!h->u.event._state)  return false;
+    if (!h->u.event._manual_reset)  h->u.event._state = false;
+    return true;
+  }
+  if (h->u.sema.count > 0) { h->u.sema.count--; return true; }
+  return false;
+}
+
+static bool WaitOne (NWindows::NSynchronization::CBaseHandle *h, DWORD timeout)
+{
+  ::pthread_mutex_lock(&h->_mtx);
+  bool ok = TryAcquire(h);
+  if (timeout == INFINITE)
+    while (!ok) {
+      ::pthread_cond_wait(&h->_cnd, &h->_mtx);
+      ok = TryAcquire(h);
+    }
+  ::pthread_mutex_unlock(&h->_mtx);
+  return ok;
+}
 
 DWORD WINAPI WaitForMultipleObjects( DWORD count, const HANDLE *handles, BOOL wait_all, DWORD timeout )
 {
-  unsigned wait_count = 1;
-  unsigned wait_delta;
-
-  switch (timeout)
-  {
-    case 0        : wait_delta = 1; break; // trick - one "while"
-    case INFINITE : wait_delta = 0; break; // trick - infinite "while"
-    default:
-      printf("\n\n INTERNAL ERROR - WaitForMultipleObjects(...) timeout(%u) != 0 or INFINITE\n\n",(unsigned)timeout);
-      abort();
+  if (timeout != 0 && timeout != INFINITE) {
+    printf("\n\n INTERNAL ERROR - WaitForMultipleObjects(...) timeout(%u) != 0 or INFINITE\n\n",(unsigned)timeout);
+    abort();
   }
-
-  myEnter();
+  if (count == 1)
+    return WaitOne((NWindows::NSynchronization::CBaseHandle*)handles[0], timeout) ? WAIT_OBJECT_0 : WAIT_TIMEOUT;
   if (wait_all) {
-    while(wait_count) {
-      bool found_all = true;
-      for(DWORD i=0;i<count;i++) {
-        NWindows::NSynchronization::CBaseHandle* hitem = (NWindows::NSynchronization::CBaseHandle*)handles[i];
-
-        switch (hitem->type)
-        {
-	case NWindows::NSynchronization::CBaseHandle::EVENT :
-          if (hitem->u.event._state == false) {
-            found_all = false;
-          }
-          break;
-	case NWindows::NSynchronization::CBaseHandle::SEMAPHORE :
-          if (hitem->u.sema.count == 0) {
-            found_all = false;
-          }
-          break;
-        default:
-          printf("\n\n INTERNAL ERROR - WaitForMultipleObjects(...,true) with unknown type (%d)\n\n",hitem->type);
-          abort();
-        }
-      }
-      if (found_all) {
-        for(DWORD i=0;i<count;i++) {
-          NWindows::NSynchronization::CBaseHandle* hitem = (NWindows::NSynchronization::CBaseHandle*)handles[i];
-
-          switch (hitem->type)
-          {
-	  case NWindows::NSynchronization::CBaseHandle::EVENT :
-            if (hitem->u.event._manual_reset == false) {
-              hitem->u.event._state = false;
-            }
-            break;
-	  case NWindows::NSynchronization::CBaseHandle::SEMAPHORE :
-            hitem->u.sema.count--;
-            break;
-          default:
-            printf("\n\n INTERNAL ERROR - WaitForMultipleObjects(...,true) with unknown type (%d)\n\n",hitem->type);
-            abort();
-          }
-        }
-        myLeave();
-        return WAIT_OBJECT_0;
-      } else {
-        wait_count -= wait_delta;
-        if (wait_count) myYield();
-      }
-    }
-  } else {
-    while(wait_count) {
-      for(DWORD i=0;i<count;i++) {
-        NWindows::NSynchronization::CBaseHandle* hitem = (NWindows::NSynchronization::CBaseHandle*)handles[i];
-
-        switch (hitem->type)
-        {
-	case NWindows::NSynchronization::CBaseHandle::EVENT :
-          if (hitem->u.event._state == true) {
-            if (hitem->u.event._manual_reset == false) {
-              hitem->u.event._state = false;
-            }
-            myLeave();
-            return WAIT_OBJECT_0+i;
-          }
-          break;
-	case NWindows::NSynchronization::CBaseHandle::SEMAPHORE :
-          if (hitem->u.sema.count > 0) {
-            hitem->u.sema.count--;
-            myLeave();
-            return WAIT_OBJECT_0+i;
-          }
-          break;
-        default:
-          printf("\n\n INTERNAL ERROR - WaitForMultipleObjects(...,true) with unknown type (%d)\n\n",hitem->type);
-          abort();
-        }
-      }
-      wait_count -= wait_delta;
-      if (wait_count) myYield();
-    }
+    printf("\n\n INTERNAL ERROR - WaitForMultipleObjects(...,true) with several handles is not supported\n\n");
+    abort();
   }
-  myLeave();
-  return WAIT_TIMEOUT;
+  // Several handles (not used by FreeArc): poll them
+  for (;;) {
+    for (DWORD i=0; i<count; i++)
+      if (WaitOne((NWindows::NSynchronization::CBaseHandle*)handles[i], 0))
+        return WAIT_OBJECT_0+i;
+    if (timeout == 0)  return WAIT_TIMEOUT;
+    sched_yield();
+  }
 }
 
 
@@ -118,36 +64,25 @@ namespace NSynchronization {
 
 bool CBaseEvent::Set()
 {
-  myEnter();
+  ::pthread_mutex_lock(&_mtx);
   this->u.event._state = true;
-  myLeave();
-  gbl_criticalSection.SignalCond();
+  if (this->u.event._manual_reset)  ::pthread_cond_broadcast(&_cnd);
+  else                              ::pthread_cond_signal(&_cnd);
+  ::pthread_mutex_unlock(&_mtx);
   return true;
 }
 
 bool CBaseEvent::Reset()
 {
-  myEnter();
+  ::pthread_mutex_lock(&_mtx);
   this->u.event._state = false;
-  myLeave();
-  gbl_criticalSection.SignalCond();
+  ::pthread_mutex_unlock(&_mtx);
   return true;
 }
 
 bool CBaseEvent::Lock()
 {
-  myEnter();
-  while(true) {
-    if (this->u.event._state == true) {
-      if (this->u.event._manual_reset == false) {
-        this->u.event._state = false;
-      }
-      myLeave();
-      return true;
-    }
-    myYield();
-  }
-  // dead code
+  return WaitOne(this, INFINITE);
 }
 
 CEvent::CEvent(bool manualReset, bool initiallyOwn)
@@ -160,20 +95,23 @@ bool CSemaphore::Release(LONG releaseCount)
 {
   if (releaseCount < 1) return false;
 
-  myEnter();
+  ::pthread_mutex_lock(&_mtx);
   LONG newCount = this->u.sema.count + releaseCount;
   if (newCount > this->u.sema.maxCount)
   {
-    myLeave();
+    ::pthread_mutex_unlock(&_mtx);
     return false;
   }
   this->u.sema.count = newCount;
-
-  myLeave();
-
-  gbl_criticalSection.SignalCond(); // wake up "WaitForMultipleObjects"
-
+  if (releaseCount == 1)  ::pthread_cond_signal(&_cnd);
+  else                    ::pthread_cond_broadcast(&_cnd);
+  ::pthread_mutex_unlock(&_mtx);
   return true;
+}
+
+bool CSemaphore::Lock(DWORD timeoutInterval)
+{
+  return WaitOne(this, timeoutInterval);
 }
 
 }}
