@@ -12,8 +12,8 @@
 ;
 ; Override default options:
 ;   Any option defined in this file can be overridden on the command line.
-;   For example, if -nobitexact is enabled here, pass -nobitexact- or --bitexact
-;   on the command line to enforce strict legacy bit-exact parity.
+;   For example, if -nobitexact is enabled here, pass -nobitexact-
+;   on the command line to revert to default bit-exact parity.
 ; ==============================================================================
 
 ; --- Global options (applied to all commands) ---
@@ -41,3 +41,4 @@ arc = -nobitexact
 ; fast = tor:4
 ; max  = lzma:96m:max:128:mc256
 ; dna  = ppmd:16:256m
+

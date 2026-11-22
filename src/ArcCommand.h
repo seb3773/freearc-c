@@ -12,7 +12,9 @@
 #endif
 
 #define HEADER1        "UnArc 0.60RC "
-#define HEADER2        "  http://freearc.org  2009-10-05 (link seems dead)\n"
+#define HEADER2        "*** FreeArc-c - Copyright (c) Bulat Ziganshin\n" \
+                       "c-reimplementation and enhancements by seb3773\n" \
+                       "https://github.com/seb3773/freearc-c ***\n\n"
 
 
 /******************************************************************************
@@ -277,6 +279,7 @@ public:
   BOOL tempdir;
   BOOL wipeoutdir;
   BOOL ok;
+  BOOL is_help;
   int  silent;          // Silent mode -s
   BOOL yes;             // -o+
   BOOL no;              // -o-
@@ -421,6 +424,7 @@ COMMAND::COMMAND (int argc, char *argv[])
   }
 
   // Default options
+  is_help   = FALSE;
   noarcext  = FALSE;
   nooptions = FALSE;
   outpath.setname("");
@@ -436,6 +440,20 @@ COMMAND::COMMAND (int argc, char *argv[])
   limit_comp_mem = 0;
   custom_threads = 0;
   logfile_path.clear();
+
+#ifndef FREEARC_SFX
+  if (argc < 2) {
+    is_help = TRUE;
+  }
+#endif
+  for (int i = 1; i < argc; i++) {
+    if (strequ(argv[i], "-h") || strequ(argv[i], "--help") || strequ(argv[i], "--about") ||
+        strequ(argv[i], "-?") || strequ(argv[i], "/?") || strequ(argv[i], "/h") ||
+        strequ(argv[i], "/help") || strequ(argv[i], "help") || strequ(argv[i], "about")) {
+      is_help = TRUE;
+      break;
+    }
+  }
 #ifdef FREEARC_SFX
   arcname = argv[0];
 #ifndef FREEARC_WIN
@@ -474,95 +492,96 @@ COMMAND::COMMAND (int argc, char *argv[])
   }
 #endif
 
-  // Parse options
-  for (ok=TRUE; ok && *++argv; )
-  {
-    if (argv[0][0]=='-' || strequ(argv[0],"/?") || strequ(argv[0],"/help"))
+  if (is_help) {
+    ok = FALSE;
+  } else {
+    // Parse options
+    for (ok=TRUE; ok && *++argv; )
     {
-      std::string dp_val;
-      bool dp_next = false;
-      std::string opt_val;
-      bool opt_next = false;
-           if (strequ(argv[0],"-l"))       cmd = 'l', silent = silent || 2;
-      else if (strequ(argv[0],"-v"))       cmd = 'v', silent = silent || 2;
-      else if (strequ(argv[0],"-e"))       cmd = 'e', silent = silent || 2;
-      else if (strequ(argv[0],"-x"))       cmd = 'x', silent = silent || 2;
-      else if (strequ(argv[0],"-t"))       cmd = 't', silent = silent || 2;
-      else if (strequ(argv[0],"-p"))       cmd = 'p', silent = silent || 2, to_stdout = TRUE;
-      else if (strequ(argv[0],"-so"))      to_stdout = TRUE;
-      else if (strequ(argv[0],"-y") || strequ(argv[0],"-o+")) yes = TRUE, no = FALSE;
-      else if (strequ(argv[0],"-n") || strequ(argv[0],"-o-")) no  = TRUE, yes = FALSE;
-      else if (strequ(argv[0],"-p") && argv[1]) password = *++argv;
-      else if (start_with(argv[0],"-p") && argv[0][2]) password = argv[0]+2;
-      else if (strequ(argv[0],"-d") && argv[1]) {
-        clean_outpath_storage = clean_option_path(*++argv);
-        outpath.setname((char*)clean_outpath_storage.c_str());
-      }
-      else if (start_with(argv[0],"-d") && !start_with(argv[0],"-dp")) {
-        clean_outpath_storage = clean_option_path(argv[0]+2);
-        outpath.setname((char*)clean_outpath_storage.c_str());
-      }
-      else if (is_diskpath_opt(argv[0], dp_val, dp_next)) {
-        if (dp_next && argv[1]) clean_outpath_storage = clean_option_path(*++argv);
-        else clean_outpath_storage = clean_option_path(dp_val);
-        outpath.setname((char*)clean_outpath_storage.c_str());
-      }
-      else if (start_with(argv[0],"-w"))   workdir.setname(argv[0]+2);
-      else if (start_with(argv[0],"-ap"))  arcprefix = argv[0]+3;
-      else if (strequ(argv[0],"-x") && argv[1]) add_exclude(*++argv);
-      else if (start_with(argv[0],"-x") && argv[0][2]) add_exclude(argv[0]+2);
-      else if (strequ(argv[0],"-i") && argv[1]) add_include(*++argv);
-      else if (start_with(argv[0],"-i") && argv[0][2]) add_include(argv[0]+2);
-      else if (strequ(argv[0],"-s") || strequ(argv[0],"-s1") || strequ(argv[0],"-q")) silent = 1;
-      else if (strequ(argv[0],"-s0"))      silent = 0;
-      else if (strequ(argv[0],"-s2"))      silent = 2;
-      else if (strequ(argv[0],"--"))       nooptions=TRUE;
-      else if (is_limit_decomp_opt(argv[0], opt_val, opt_next)) {
-        if (opt_next && argv[1] && argv[1][0] != '-') limit_decomp_mem = parse_mem_limit(*++argv);
-        else limit_decomp_mem = parse_mem_limit(opt_val.c_str());
-      }
-      else if (is_limit_comp_opt(argv[0], opt_val, opt_next)) {
-        if (opt_next && argv[1] && argv[1][0] != '-') limit_comp_mem = parse_mem_limit(*++argv);
-        else limit_comp_mem = parse_mem_limit(opt_val.c_str());
-      }
-      else if (is_multithread_opt(argv[0], opt_val, opt_next)) {
-        if (opt_next && argv[1] && argv[1][0] != '-') custom_threads = parse_threads_val(*++argv);
-        else custom_threads = parse_threads_val(opt_val.c_str());
-      }
-      else if (is_logfile_opt(argv[0], opt_val, opt_next)) {
-        if (opt_next && argv[1] && argv[1][0] != '-') logfile_path = clean_option_path(*++argv);
-        else logfile_path = clean_option_path(opt_val);
-        if (!logfile_path.empty()) {
-          ensure_parent_dirs(logfile_path);
-          if (g_logfile) { fclose(g_logfile); g_logfile = NULL; }
-          g_logfile = fopen(logfile_path.c_str(), "a+");
+      if (argv[0][0]=='-' || strequ(argv[0],"/?") || strequ(argv[0],"/help"))
+      {
+        std::string dp_val;
+        bool dp_next = false;
+        std::string opt_val;
+        bool opt_next = false;
+             if (strequ(argv[0],"-l"))       cmd = 'l', silent = silent || 2;
+        else if (strequ(argv[0],"-v"))       cmd = 'v', silent = silent || 2;
+        else if (strequ(argv[0],"-e"))       cmd = 'e', silent = silent || 2;
+        else if (strequ(argv[0],"-x"))       cmd = 'x', silent = silent || 2;
+        else if (strequ(argv[0],"-t"))       cmd = 't', silent = silent || 2;
+        else if (strequ(argv[0],"-p"))       cmd = 'p', silent = silent || 2, to_stdout = TRUE;
+        else if (strequ(argv[0],"-so"))      to_stdout = TRUE;
+        else if (strequ(argv[0],"-y") || strequ(argv[0],"-o+")) yes = TRUE, no = FALSE;
+        else if (strequ(argv[0],"-n") || strequ(argv[0],"-o-")) no  = TRUE, yes = FALSE;
+        else if (strequ(argv[0],"-p") && argv[1]) password = *++argv;
+        else if (start_with(argv[0],"-p") && argv[0][2]) password = argv[0]+2;
+        else if (strequ(argv[0],"-d") && argv[1]) {
+          clean_outpath_storage = clean_option_path(*++argv);
+          outpath.setname((char*)clean_outpath_storage.c_str());
+        }
+        else if (start_with(argv[0],"-d") && !start_with(argv[0],"-dp")) {
+          clean_outpath_storage = clean_option_path(argv[0]+2);
+          outpath.setname((char*)clean_outpath_storage.c_str());
+        }
+        else if (is_diskpath_opt(argv[0], dp_val, dp_next)) {
+          if (dp_next && argv[1]) clean_outpath_storage = clean_option_path(*++argv);
+          else clean_outpath_storage = clean_option_path(dp_val);
+          outpath.setname((char*)clean_outpath_storage.c_str());
+        }
+        else if (start_with(argv[0],"-w"))   workdir.setname(argv[0]+2);
+        else if (start_with(argv[0],"-ap"))  arcprefix = argv[0]+3;
+        else if (strequ(argv[0],"-x") && argv[1]) add_exclude(*++argv);
+        else if (start_with(argv[0],"-x") && argv[0][2]) add_exclude(argv[0]+2);
+        else if (strequ(argv[0],"-i") && argv[1]) add_include(*++argv);
+        else if (start_with(argv[0],"-i") && argv[0][2]) add_include(argv[0]+2);
+        else if (strequ(argv[0],"-s") || strequ(argv[0],"-s1") || strequ(argv[0],"-q")) silent = 1;
+        else if (strequ(argv[0],"-s0"))      silent = 0;
+        else if (strequ(argv[0],"-s2"))      silent = 2;
+        else if (strequ(argv[0],"--"))       nooptions=TRUE;
+        else if (is_limit_decomp_opt(argv[0], opt_val, opt_next)) {
+          if (opt_next && argv[1] && argv[1][0] != '-') limit_decomp_mem = parse_mem_limit(*++argv);
+          else limit_decomp_mem = parse_mem_limit(opt_val.c_str());
+        }
+        else if (is_limit_comp_opt(argv[0], opt_val, opt_next)) {
+          if (opt_next && argv[1] && argv[1][0] != '-') limit_comp_mem = parse_mem_limit(*++argv);
+          else limit_comp_mem = parse_mem_limit(opt_val.c_str());
+        }
+        else if (is_multithread_opt(argv[0], opt_val, opt_next)) {
+          if (opt_next && argv[1] && argv[1][0] != '-') custom_threads = parse_threads_val(*++argv);
+          else custom_threads = parse_threads_val(opt_val.c_str());
+        }
+        else if (is_logfile_opt(argv[0], opt_val, opt_next)) {
+          if (opt_next && argv[1] && argv[1][0] != '-') logfile_path = clean_option_path(*++argv);
+          else logfile_path = clean_option_path(opt_val);
+          if (!logfile_path.empty()) {
+            ensure_parent_dirs(logfile_path);
+            if (g_logfile) { fclose(g_logfile); g_logfile = NULL; }
+            g_logfile = fopen(logfile_path.c_str(), "a+");
+          }
+        }
+        else if (strncasecmp(argv[0],"-di", 3) == 0 || strncasecmp(argv[0],"-ds", 3) == 0 ||
+                 strncasecmp(argv[0],"-ed", 3) == 0 || strcasecmp(argv[0],"--nodir") == 0 ||
+                 strcasecmp(argv[0],"--no-pause") == 0 || strcasecmp(argv[0],"-kb") == 0 ||
+                 strcasecmp(argv[0],"-ka") == 0 || strcasecmp(argv[0],"-kc") == 0) {}
+        else if (strequ(argv[0], "-cfg") || strequ(argv[0], "--config")) {
+          if (argv[1] && argv[1][0] != '-') argv++;
+        }
+        else if (start_with(argv[0], "-cfg") || start_with(argv[0], "--config") || strequ(argv[0], "--no-config") ||
+                 start_with(argv[0], "--display") || start_with(argv[0], "--language") ||
+                 start_with(argv[0], "-nobitexact") || start_with(argv[0], "--nobitexact") ||
+                 start_with(argv[0], "-mc") || start_with(argv[0], "--mc") ||
+                 start_with(argv[0], "-fb") || start_with(argv[0], "--fb") ||
+                 strequ(argv[0], "--max-ratio") || strequ(argv[0], "-max-ratio")) {}
+        else {
+          // Do not abort on unknown legacy options
         }
       }
-      else if (strncasecmp(argv[0],"-di", 3) == 0 || strncasecmp(argv[0],"-ds", 3) == 0 ||
-               strncasecmp(argv[0],"-ed", 3) == 0 || strcasecmp(argv[0],"--nodir") == 0 ||
-               strcasecmp(argv[0],"--no-pause") == 0 || strcasecmp(argv[0],"-kb") == 0 ||
-               strcasecmp(argv[0],"-ka") == 0 || strcasecmp(argv[0],"-kc") == 0) {}
-      else if (strequ(argv[0], "-cfg") || strequ(argv[0], "--config")) {
-        if (argv[1] && argv[1][0] != '-') argv++;
-      }
-      else if (start_with(argv[0], "-cfg") || start_with(argv[0], "--config") || strequ(argv[0], "--no-config") ||
-               start_with(argv[0], "--display") || start_with(argv[0], "--language") ||
-               start_with(argv[0], "-nobitexact") || start_with(argv[0], "--nobitexact") ||
-               start_with(argv[0], "-nocompat") || start_with(argv[0], "--nocompat") ||
-               start_with(argv[0], "-mc") || start_with(argv[0], "--mc") ||
-               start_with(argv[0], "-fb") || start_with(argv[0], "--fb") ||
-               strequ(argv[0], "--max-ratio") || strequ(argv[0], "-max-ratio") ||
-               strequ(argv[0], "--bitexact") || strequ(argv[0], "-bitexact") ||
-               strequ(argv[0], "--compat") || strequ(argv[0], "-compat")) {}
-      else {
-        // Do not abort on unknown legacy options
-      }
+      else break;
     }
-    else break;
-  }
 
-  filenames = argv;            // the rest of arguments are filenames
-  if (cmd == 'p') to_stdout = TRUE;
+    filenames = argv;            // the rest of arguments are filenames
+    if (cmd == 'p') to_stdout = TRUE;
+  }
   if (ok) {
     while (*argv) {
       if (argv[0][0] == '@') {
@@ -612,106 +631,107 @@ COMMAND::COMMAND (int argc, char *argv[])
 #endif
 
 #else
-  cmd       = ' ';
-  arcname   = NULL;
-  to_stdout = FALSE;
-  for (ok=TRUE; ok && *++argv; )
-  {
-    if (argv[0][0]=='-')
+  if (is_help) {
+    ok = FALSE;
+  } else {
+    cmd       = ' ';
+    arcname   = NULL;
+    to_stdout = FALSE;
+    for (ok=TRUE; ok && *++argv; )
     {
-      std::string dp_val;
-      bool dp_next = false;
-      std::string opt_val;
-      bool opt_next = false;
-      if (strequ(argv[0],"--noarcext"))    noarcext =TRUE;
-      else if (strequ(argv[0],"-o+"))      yes      =TRUE, no = FALSE;
-      else if (strequ(argv[0],"-o-"))      no       =TRUE, yes = FALSE;
-      else if (strequ(argv[0],"-so"))      to_stdout=TRUE;
-      else if (strequ(argv[0],"-p") && argv[1]) password = *++argv;
-      else if (start_with(argv[0],"-p") && argv[0][2]) password = argv[0]+2;
-      else if (strequ(argv[0],"-d") && argv[1]) {
-        clean_outpath_storage = clean_option_path(*++argv);
-        outpath.setname((char*)clean_outpath_storage.c_str());
-      }
-      else if (start_with(argv[0],"-d") && !start_with(argv[0],"-dp")) {
-        clean_outpath_storage = clean_option_path(argv[0]+2);
-        outpath.setname((char*)clean_outpath_storage.c_str());
-      }
-      else if (is_diskpath_opt(argv[0], dp_val, dp_next)) {
-        if (dp_next && argv[1]) clean_outpath_storage = clean_option_path(*++argv);
-        else clean_outpath_storage = clean_option_path(dp_val);
-        outpath.setname((char*)clean_outpath_storage.c_str());
-      }
-      else if (start_with(argv[0],"-ap"))  arcprefix = argv[0]+3;
-      else if (start_with(argv[0],"-w"))   workdir.setname(argv[0]+2);
-      else if (strequ(argv[0],"-s") || strequ(argv[0],"-s1") || strequ(argv[0],"-q")) silent = 1;
-      else if (strequ(argv[0],"-s2"))      silent = 2;
-      else if (strequ(argv[0],"-s0"))      silent = 0;
-      else if (strequ(argv[0],"-x") && argv[1]) add_exclude(*++argv);
-      else if (start_with(argv[0],"-x") && argv[0][2]) add_exclude(argv[0]+2);
-      else if (strequ(argv[0],"-i") && argv[1]) add_include(*++argv);
-      else if (start_with(argv[0],"-i") && argv[0][2]) add_include(argv[0]+2);
-      else if (strequ(argv[0],"--"))       nooptions=TRUE;
-      else if (is_limit_decomp_opt(argv[0], opt_val, opt_next)) {
-        if (opt_next && argv[1] && argv[1][0] != '-') limit_decomp_mem = parse_mem_limit(*++argv);
-        else limit_decomp_mem = parse_mem_limit(opt_val.c_str());
-      }
-      else if (is_limit_comp_opt(argv[0], opt_val, opt_next)) {
-        if (opt_next && argv[1] && argv[1][0] != '-') limit_comp_mem = parse_mem_limit(*++argv);
-        else limit_comp_mem = parse_mem_limit(opt_val.c_str());
-      }
-      else if (is_multithread_opt(argv[0], opt_val, opt_next)) {
-        if (opt_next && argv[1] && argv[1][0] != '-') custom_threads = parse_threads_val(*++argv);
-        else custom_threads = parse_threads_val(opt_val.c_str());
-      }
-      else if (is_logfile_opt(argv[0], opt_val, opt_next)) {
-        if (opt_next && argv[1] && argv[1][0] != '-') logfile_path = clean_option_path(*++argv);
-        else logfile_path = clean_option_path(opt_val);
-        if (!logfile_path.empty()) {
-          ensure_parent_dirs(logfile_path);
-          if (g_logfile) { fclose(g_logfile); g_logfile = NULL; }
-          g_logfile = fopen(logfile_path.c_str(), "a+");
+      if (argv[0][0]=='-')
+      {
+        std::string dp_val;
+        bool dp_next = false;
+        std::string opt_val;
+        bool opt_next = false;
+        if (strequ(argv[0],"--noarcext"))    noarcext =TRUE;
+        else if (strequ(argv[0],"-o+"))      yes      =TRUE, no = FALSE;
+        else if (strequ(argv[0],"-o-"))      no       =TRUE, yes = FALSE;
+        else if (strequ(argv[0],"-so"))      to_stdout=TRUE;
+        else if (strequ(argv[0],"-p") && argv[1]) password = *++argv;
+        else if (start_with(argv[0],"-p") && argv[0][2]) password = argv[0]+2;
+        else if (strequ(argv[0],"-d") && argv[1]) {
+          clean_outpath_storage = clean_option_path(*++argv);
+          outpath.setname((char*)clean_outpath_storage.c_str());
+        }
+        else if (start_with(argv[0],"-d") && !start_with(argv[0],"-dp")) {
+          clean_outpath_storage = clean_option_path(argv[0]+2);
+          outpath.setname((char*)clean_outpath_storage.c_str());
+        }
+        else if (is_diskpath_opt(argv[0], dp_val, dp_next)) {
+          if (dp_next && argv[1]) clean_outpath_storage = clean_option_path(*++argv);
+          else clean_outpath_storage = clean_option_path(dp_val);
+          outpath.setname((char*)clean_outpath_storage.c_str());
+        }
+        else if (start_with(argv[0],"-ap"))  arcprefix = argv[0]+3;
+        else if (start_with(argv[0],"-w"))   workdir.setname(argv[0]+2);
+        else if (strequ(argv[0],"-s") || strequ(argv[0],"-s1") || strequ(argv[0],"-q")) silent = 1;
+        else if (strequ(argv[0],"-s2"))      silent = 2;
+        else if (strequ(argv[0],"-s0"))      silent = 0;
+        else if (strequ(argv[0],"-x") && argv[1]) add_exclude(*++argv);
+        else if (start_with(argv[0],"-x") && argv[0][2]) add_exclude(argv[0]+2);
+        else if (strequ(argv[0],"-i") && argv[1]) add_include(*++argv);
+        else if (start_with(argv[0],"-i") && argv[0][2]) add_include(argv[0]+2);
+        else if (strequ(argv[0],"--"))       nooptions=TRUE;
+        else if (is_limit_decomp_opt(argv[0], opt_val, opt_next)) {
+          if (opt_next && argv[1] && argv[1][0] != '-') limit_decomp_mem = parse_mem_limit(*++argv);
+          else limit_decomp_mem = parse_mem_limit(opt_val.c_str());
+        }
+        else if (is_limit_comp_opt(argv[0], opt_val, opt_next)) {
+          if (opt_next && argv[1] && argv[1][0] != '-') limit_comp_mem = parse_mem_limit(*++argv);
+          else limit_comp_mem = parse_mem_limit(opt_val.c_str());
+        }
+        else if (is_multithread_opt(argv[0], opt_val, opt_next)) {
+          if (opt_next && argv[1] && argv[1][0] != '-') custom_threads = parse_threads_val(*++argv);
+          else custom_threads = parse_threads_val(opt_val.c_str());
+        }
+        else if (is_logfile_opt(argv[0], opt_val, opt_next)) {
+          if (opt_next && argv[1] && argv[1][0] != '-') logfile_path = clean_option_path(*++argv);
+          else logfile_path = clean_option_path(opt_val);
+          if (!logfile_path.empty()) {
+            ensure_parent_dirs(logfile_path);
+            if (g_logfile) { fclose(g_logfile); g_logfile = NULL; }
+            g_logfile = fopen(logfile_path.c_str(), "a+");
+          }
+        }
+        else if (strncasecmp(argv[0],"-di", 3) == 0 || strncasecmp(argv[0],"-ds", 3) == 0 ||
+                 strncasecmp(argv[0],"-ed", 3) == 0 || strcasecmp(argv[0],"--nodir") == 0 ||
+                 strcasecmp(argv[0],"--no-pause") == 0 || strcasecmp(argv[0],"-kb") == 0 ||
+                 strcasecmp(argv[0],"-ka") == 0 || strcasecmp(argv[0],"-kc") == 0) {}
+        else if (strequ(argv[0], "-cfg") || strequ(argv[0], "--config")) {
+          if (argv[1] && argv[1][0] != '-') argv++;
+        }
+        else if (start_with(argv[0], "-cfg") || start_with(argv[0], "--config") || strequ(argv[0], "--no-config") ||
+                 start_with(argv[0], "--display") || start_with(argv[0], "--language") ||
+                 start_with(argv[0], "-nobitexact") || start_with(argv[0], "--nobitexact") ||
+                 start_with(argv[0], "-mc") || start_with(argv[0], "--mc") ||
+                 start_with(argv[0], "-fb") || start_with(argv[0], "--fb") ||
+                 strequ(argv[0], "--max-ratio") || strequ(argv[0], "-max-ratio")) {}
+        else {
+          // Do not abort on unknown legacy options
         }
       }
-      else if (strncasecmp(argv[0],"-di", 3) == 0 || strncasecmp(argv[0],"-ds", 3) == 0 ||
-               strncasecmp(argv[0],"-ed", 3) == 0 || strcasecmp(argv[0],"--nodir") == 0 ||
-               strcasecmp(argv[0],"--no-pause") == 0 || strcasecmp(argv[0],"-kb") == 0 ||
-               strcasecmp(argv[0],"-ka") == 0 || strcasecmp(argv[0],"-kc") == 0) {}
-      else if (strequ(argv[0], "-cfg") || strequ(argv[0], "--config")) {
-        if (argv[1] && argv[1][0] != '-') argv++;
+      else if (cmd==' ') {
+        if (strcasecmp(argv[0], "x") == 0 || strcasecmp(argv[0], "extract") == 0) cmd = 'x';
+        else if (strcasecmp(argv[0], "e") == 0) cmd = 'e';
+        else if (strcasecmp(argv[0], "t") == 0 || strcasecmp(argv[0], "test") == 0) cmd = 't';
+        else if (strcasecmp(argv[0], "l") == 0 || strcasecmp(argv[0], "list") == 0) cmd = 'l';
+        else if (strcasecmp(argv[0], "v") == 0 || strcasecmp(argv[0], "view") == 0) cmd = 'v';
+        else if (strcasecmp(argv[0], "p") == 0) cmd = 'p';
+        else ok = FALSE;
       }
-      else if (start_with(argv[0], "-cfg") || start_with(argv[0], "--config") || strequ(argv[0], "--no-config") ||
-               start_with(argv[0], "--display") || start_with(argv[0], "--language") ||
-               start_with(argv[0], "-nobitexact") || start_with(argv[0], "--nobitexact") ||
-               start_with(argv[0], "-nocompat") || start_with(argv[0], "--nocompat") ||
-               start_with(argv[0], "-mc") || start_with(argv[0], "--mc") ||
-               start_with(argv[0], "-fb") || start_with(argv[0], "--fb") ||
-               strequ(argv[0], "--max-ratio") || strequ(argv[0], "-max-ratio") ||
-               strequ(argv[0], "--bitexact") || strequ(argv[0], "-bitexact") ||
-               strequ(argv[0], "--compat") || strequ(argv[0], "-compat")) {}
-      else {
-        // Do not abort on unknown legacy options
+      else if (!arcname) {
+        clean_arcname_storage = clean_option_path(argv[0]);
+        arcname = (char*)clean_arcname_storage.c_str();
       }
+      else break;
     }
-    else if (cmd==' ') {
-      if (strcasecmp(argv[0], "x") == 0 || strcasecmp(argv[0], "extract") == 0) cmd = 'x';
-      else if (strcasecmp(argv[0], "e") == 0) cmd = 'e';
-      else if (strcasecmp(argv[0], "t") == 0 || strcasecmp(argv[0], "test") == 0) cmd = 't';
-      else if (strcasecmp(argv[0], "l") == 0 || strcasecmp(argv[0], "list") == 0) cmd = 'l';
-      else if (strcasecmp(argv[0], "v") == 0 || strcasecmp(argv[0], "view") == 0) cmd = 'v';
-      else if (strcasecmp(argv[0], "p") == 0) cmd = 'p';
-      else ok = FALSE;
-    }
-    else if (!arcname) {
-      clean_arcname_storage = clean_option_path(argv[0]);
-      arcname = (char*)clean_arcname_storage.c_str();
-    }
-    else break;
-  }
 
-  filenames = argv;            // the rest of arguments are filenames
-  if (cmd == 'p') to_stdout = TRUE;
-  ok = ok && strchr("lvtexp",cmd) && arcname;
+    filenames = argv;            // the rest of arguments are filenames
+    if (cmd == 'p') to_stdout = TRUE;
+    ok = ok && strchr("lvtexp",cmd) && arcname;
+  }
   if (ok) {
     while (*argv) {
       if (argv[0][0] == '@') {

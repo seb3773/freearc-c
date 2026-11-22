@@ -57,6 +57,9 @@ static void err_msg(const char *fmt, ...) {
 #define ON_CHECK_FAIL()  do { if (g_logfile) { fputs("\n", g_logfile); fflush(g_logfile); } fprintf(stderr, "\n"); exit(FREEARC_EXIT_ERROR); } while (0)
 
 static const char *g_usage =
+  "*** FreeArc-c - Copyright (c) Bulat Ziganshin\n"
+  "c-reimplementation and enhancements by seb3773\n"
+  "https://github.com/seb3773/freearc-c ***\n\n"
   "Usage: arc <command> [options] archive[.arc] [files...]\n"
   "Commands:\n"
   "  a, add, c, create  add files to archive (default)\n"
@@ -99,7 +102,7 @@ static const char *g_usage =
   "  -i PATTERN         include only files matching pattern (@listfile supported)\n"
   "  -so                write extracted files to stdout\n"
   "  -p PASS            encrypt data blocks\n"
-  "  -hp PASS           encrypt headers and data\n"
+  "  -hp PASS            encrypt headers and data\n"
   "  -ae ALG            aes (default), aes-128, aes-256, blowfish, twofish, serpent\n"
   "  -ld<mem>           limit decompression memory (e.g. -ld64m, --LimitDecompMem)\n"
   "  -lc<mem>           limit compression memory (e.g. -lc128m, --LimitCompMem)\n"
@@ -110,8 +113,6 @@ static const char *g_usage =
   "  -cfg-, --no-config disable configuration file\n"
   "  --print-config     display definitions of compression methods\n"
   "  -nobitexact, --max-ratio   maximize ratio, format-compatible with legacy unarc\n"
-  "  -nobitexact-, --bitexact   enforce strict legacy bit-exact parity (default)\n"
-  "  -nocompat                  next-gen mode (breaks legacy unarc compatibility)\n"
   "  -mc=N                      set LZMA match finder search cycles (16..1000)\n"
   "  -fb=N                      set LZMA fast bytes / nice match length (32..273)\n"
   "  @LIST              read file names from LIST (one path per line)\n";
@@ -119,7 +120,6 @@ static const char *g_usage =
 static int g_quiet = 0;
 bool g_opt_nobitexact = false;
 static bool g_opt_solid_continuous = false;
-bool g_opt_nocompat   = false;
 int  g_opt_mc         = 0;
 int  g_opt_fb         = 0;
 
@@ -3764,6 +3764,15 @@ int main(int argc, char **argv) {
     return argc == 1 ? 0 : FREEARC_EXIT_ERROR;
   }
 
+  for (int i = 1; i < argc; i++) {
+    if (strequ(argv[i], "-h") || strequ(argv[i], "--help") || strequ(argv[i], "--about") ||
+        strequ(argv[i], "-?") || strequ(argv[i], "/?") || strequ(argv[i], "/h") ||
+        strequ(argv[i], "/help") || strequ(argv[i], "help") || strequ(argv[i], "about")) {
+      fputs(g_usage, stdout);
+      return 0;
+    }
+  }
+
   ArcIni::ConfigScanResult cfg_scan = ArcIni::scan_config_options(argc, argv);
   if (cfg_scan.print_config) {
     ArcIni ini;
@@ -3860,7 +3869,9 @@ int main(int argc, char **argv) {
     if (!stop_opts && a[0] == '-' && a[1] != '\0') {
       std::string opt_val;
       bool opt_next = false;
-      if (strequ(a, "-h") || strequ(a, "--help")) {
+      if (strequ(a, "-h") || strequ(a, "--help") || strequ(a, "--about") ||
+          strequ(a, "-?") || strequ(a, "/?") || strequ(a, "/h") ||
+          strequ(a, "/help")) {
         fputs(g_usage, stdout);
         return 0;
       }
@@ -3959,17 +3970,8 @@ int main(int argc, char **argv) {
                strequ(a, "-max-ratio")) {
         g_opt_nobitexact = true;
       }
-      else if (strequ(a, "-nobitexact-") || strequ(a, "--nobitexact-") ||
-               strequ(a, "--bitexact") || strequ(a, "-bitexact")) {
+      else if (strequ(a, "-nobitexact-") || strequ(a, "--nobitexact-")) {
         g_opt_nobitexact = false;
-      }
-      else if (strequ(a, "-nocompat") || strequ(a, "--nocompat") ||
-               strequ(a, "-nocompat+")) {
-        g_opt_nocompat = true;
-      }
-      else if (strequ(a, "-nocompat-") || strequ(a, "--nocompat-") ||
-               strequ(a, "--compat") || strequ(a, "-compat")) {
-        g_opt_nocompat = false;
       }
       else if (start_with(a, "-mc=") || start_with(a, "--mc=") || start_with(a, "-mc") || start_with(a, "--mc")) {
         const char *val = NULL;
@@ -4089,10 +4091,7 @@ int main(int argc, char **argv) {
   method = method_str.c_str();
 
   if (!g_quiet && (cmd == 'a' || cmd == 'u' || cmd == 'f' || cmd == 'm')) {
-    if (g_opt_nocompat) {
-      msg("!!! WARNING: -nocompat specified: the resulting archive is NOT compatible with\n"
-          "!!! legacy FreeArc (CANNOT be decoded by legacy unarc 0.6x; decodable ONLY by modern FreeArc-c).\n");
-    } else if (g_opt_nobitexact) {
+    if (g_opt_nobitexact) {
       msg("*** NOTICE: -nobitexact specified: the resulting archive is fully format-compatible\n"
           "*** with legacy FreeArc (decodable by legacy unarc 0.6x), but will not be byte-for-byte\n"
           "*** identical to archives created by the historical FreeArc 0.67 encoder.\n");

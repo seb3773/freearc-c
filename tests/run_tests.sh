@@ -380,7 +380,7 @@ test_arc_ini_group() {
 check "arc.ini configuration support (-cfg, --config, -cfg-, --print-config, aliases, auto-discovery)" test_arc_ini_group
 
 # ------------------------------------------------------------------
-# Test Group 12: Compatibility Modes & Notice Banners (-nobitexact / -nocompat)
+# Test Group 12: Compatibility Modes & Notice Banners (-nobitexact / --max-ratio)
 # ------------------------------------------------------------------
 echo ""
 echo "=== Test Group 12: Compatibility Modes & Notice Banners ==="
@@ -390,7 +390,7 @@ test_compat_modes_group() {
     return 0
 }
 
-check "Compatibility modes & warning banners (-nobitexact, --max-ratio, -nocompat)" test_compat_modes_group
+check "Compatibility modes & notice banners (-nobitexact, --max-ratio, CLI attribution)" test_compat_modes_group
 
 # ------------------------------------------------------------------
 # Summary

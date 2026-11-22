@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # FreeArc Native C/C++ — Compatibility Modes & Banners Test Suite
-# Tests: -nobitexact, --max-ratio, -nocompat, arc.ini injection & CLI overrides
+# Tests: -nobitexact, --max-ratio, arc.ini injection, CLI overrides & banners
 # ==============================================================================
 set -eu
 
@@ -61,16 +61,67 @@ test_max_ratio_alias_banner() {
   fi
 }
 
-# 3. -nocompat displays warning banner
-test_nocompat_warning_banner() {
-  echo "Testing -nocompat warning banner..."
-  echo "test data 3" > "$T/data3.txt"
-  local out
-  out=$("$ARC" a -nocompat "$T/test3.arc" "$T/data3.txt" 2>&1)
-  if echo "$out" | grep -q "!!! WARNING: -nocompat specified: the resulting archive is NOT compatible"; then
-    pass "-nocompat displays the warning banner"
+# 3. CLI attribution banners on help / about / empty args
+test_cli_banners() {
+  echo "Testing CLI attribution banners..."
+  local expected_line1="*** FreeArc-c - Copyright (c) Bulat Ziganshin"
+  local expected_line2="c-reimplementation and enhancements by seb3773"
+  local expected_line3="https://github.com/seb3773/freearc-c ***"
+
+  # arc no args
+  local out_arc_noargs
+  out_arc_noargs=$("$ARC" 2>&1 || true)
+  if echo "$out_arc_noargs" | grep -Fq "$expected_line1" && \
+     echo "$out_arc_noargs" | grep -Fq "$expected_line2" && \
+     echo "$out_arc_noargs" | grep -Fq "$expected_line3"; then
+    pass "arc without arguments displays attribution banner"
   else
-    fail "-nocompat did not display the warning banner: $out"
+    fail "arc without arguments missing banner: $out_arc_noargs"
+  fi
+
+  # arc --help and --about
+  local out_arc_help out_arc_about
+  out_arc_help=$("$ARC" --help 2>&1)
+  out_arc_about=$("$ARC" --about 2>&1)
+  if echo "$out_arc_help" | grep -Fq "$expected_line1" && echo "$out_arc_about" | grep -Fq "$expected_line1"; then
+    pass "arc --help and --about display attribution banner"
+  else
+    fail "arc --help/--about missing banner"
+  fi
+
+  # Verify arc help does not contain -nocompat or --bitexact
+  if echo "$out_arc_help" | grep -q -- "-nocompat" || echo "$out_arc_help" | grep -q -- "--bitexact"; then
+    fail "arc help contains obsolete options (-nocompat or --bitexact)"
+  else
+    pass "arc help cleanly removed -nocompat and --bitexact"
+  fi
+
+  # unarc no args
+  local out_unarc_noargs
+  out_unarc_noargs=$("$UNARC" 2>&1 || true)
+  if echo "$out_unarc_noargs" | grep -Fq "$expected_line1" && \
+     echo "$out_unarc_noargs" | grep -Fq "$expected_line2" && \
+     echo "$out_unarc_noargs" | grep -Fq "$expected_line3"; then
+    pass "unarc without arguments displays attribution banner"
+  else
+    fail "unarc without arguments missing banner: $out_unarc_noargs"
+  fi
+
+  # unarc --help and --about
+  local out_unarc_help out_unarc_about
+  out_unarc_help=$("$UNARC" --help 2>&1)
+  out_unarc_about=$("$UNARC" --about 2>&1)
+  if echo "$out_unarc_help" | grep -Fq "$expected_line1" && echo "$out_unarc_about" | grep -Fq "$expected_line1"; then
+    pass "unarc --help and --about display attribution banner"
+  else
+    fail "unarc --help/--about missing banner"
+  fi
+
+  # Verify unarc --help does not print "UnArc 0.60RC unpacker" at the end
+  if echo "$out_unarc_help" | grep -Fq "UnArc 0.60RC unpacker"; then
+    fail "unarc --help printed UnArc 0.60RC unpacker at bottom"
+  else
+    pass "unarc --help does not print unpacker header at bottom"
   fi
 }
 
@@ -93,7 +144,7 @@ test_default_no_banner() {
   echo "test data 5" > "$T/data5.txt"
   local out
   out=$("$ARC" a "$T/test5.arc" "$T/data5.txt" 2>&1)
-  if echo "$out" | grep -q "\*\*\* NOTICE:" || echo "$out" | grep -q "!!! WARNING:"; then
+  if echo "$out" | grep -q "\*\*\* NOTICE:"; then
     fail "Default mode emitted unexpected banner"
   else
     pass "Default mode runs clean with no banners"
@@ -126,15 +177,6 @@ EOF
     fail "CLI override -nobitexact- failed to cancel INI option"
   else
     pass "CLI override -nobitexact- successfully cancels INI default option"
-  fi
-
-  # With INI + CLI override (--bitexact): banner should NOT appear
-  local out3
-  out3=$("$ARC" -cfg="$ini" a --bitexact "$T/test6c.arc" "$T/data6.txt" 2>&1)
-  if echo "$out3" | grep -q "\*\*\* NOTICE: -nobitexact specified"; then
-    fail "CLI override --bitexact failed to cancel INI option"
-  else
-    pass "CLI override --bitexact successfully cancels INI default option"
   fi
 }
 
@@ -318,7 +360,7 @@ test_text_ppmd_tuning() {
 
 test_nobitexact_notice_banner
 test_max_ratio_alias_banner
-test_nocompat_warning_banner
+test_cli_banners
 test_quiet_suppresses_banners
 test_default_no_banner
 test_ini_injection_and_override

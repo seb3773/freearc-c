@@ -25,15 +25,15 @@ FILE *g_logfile = NULL;
 int main (int argc, char *argv[])
 {
   COMMAND command (argc, argv);    // Parse command first
-  if (!command.to_stdout && !command.silent)
+  if (command.ok && !command.to_stdout && !command.silent)
     UI.DisplayHeader (HEADER1 NAME);
   if (command.ok)                  // If parsing succeeded
     PROCESS (&command, &UI);       // Execute command
-  if (!command.to_stdout && !command.silent)
+  if (command.ok && !command.to_stdout && !command.silent)
     cui_printf ("\n");
   if (g_logfile) {
     fclose(g_logfile);
     g_logfile = NULL;
   }
-  return command.ok? EXIT_SUCCESS : FREEARC_EXIT_ERROR;
+  return (command.ok || command.is_help) ? EXIT_SUCCESS : FREEARC_EXIT_ERROR;
 }

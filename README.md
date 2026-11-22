@@ -243,7 +243,7 @@ Both `arc` / `unarc` on Linux and `arc.exe` / `unarc.exe` on Windows 64-bit serv
 * **Disabling Config Loading**: `-cfg-` or `--no-config` skips searching and loading any `arc.ini`.
 * **Inspection**: `--print-config` displays the parsed active configuration, default options, and compression method aliases.
 * **Supported INI Sections**:
-  * `[Default options]`: Global or per-command default switches automatically injected (e.g. `arc = -mx -nobitexact`, `unarc = -o+`). Supports key-value syntax (`nobitexact = true`), bare options (`-nobitexact`), and command-specific rules (`arc = ...`, `a create = ...`). All default options can be overridden or cancelled via the command line (e.g. `-nobitexact-` or `--bitexact`).
+  * `[Default options]`: Global or per-command default switches automatically injected (e.g. `arc = -mx -nobitexact`, `unarc = -o+`). Supports key-value syntax (`nobitexact = true`), bare options (`-nobitexact`), and command-specific rules (`arc = ...`, `a create = ...`). All default options can be overridden or cancelled via the command line (e.g. `-nobitexact-`).
   * `[Compression methods]`: Custom compression method aliases, multi-group pipelines with `/` (e.g. `$text:ppmd / $wav:tta / lzma`), and numeric wildcard `#` (e.g. `lzma# = lzma:#m`).
   * `[External compressor:NAME]`: Registration and piping rules for external archivers and preprocessors.
 
