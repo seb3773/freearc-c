@@ -1400,7 +1400,6 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string("$wav"), "tta"));
     out.push_back(std::make_pair(std::string("$bmp"), bmp));
     if (g_opt_nobitexact) {
-      out.push_back(std::make_pair(std::string("$compressed"), mt ? "4x4:tor:8m:c3" : "tor:8m:c3"));
       out.push_back(std::make_pair(std::string("$dna"), text_ppmd_nbx));
     }
   } else if (strequ(name, "5x") || strequ(name, "x") || strequ(name, "mx") || strequ(name, "max") || strequ(name, "ultra")) {
@@ -1414,7 +1413,6 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
     out.push_back(std::make_pair(std::string("$bmp"), std::string("mm+") + lzma5));
     if (g_opt_nobitexact) {
-      out.push_back(std::make_pair(std::string("$compressed"), mt ? "4x4:tor:8m:c3" : "tor:8m:c3"));
       out.push_back(std::make_pair(std::string("$dna"), text_ppmd_nbx));
     }
   }
