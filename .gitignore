@@ -3,8 +3,16 @@ src/dec/
 src/enc/
 src/dec_win64/
 src/enc_win64/
+src/dec_arm64/
+src/enc_arm64/
 src/arc
 src/arc.sfx
 src/unarc
+src/arc.exe
+src/unarc.exe
+src/arc-arm64
+src/arc.sfx-arm64
+src/unarc-arm64
 bench/work/
 bench/bin/
+historical_bin/

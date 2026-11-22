@@ -1,7 +1,9 @@
 CXX ?= g++
 CXX_WIN64 ?= x86_64-w64-mingw32-g++
+CXX_ARM64 ?= aarch64-linux-gnu-g++
 CC ?= gcc
 CC_WIN64 ?= x86_64-w64-mingw32-gcc
+CC_ARM64 ?= aarch64-linux-gnu-gcc
 # C flags for the vendored LZMA SDK 25.01 decoder (separate translation unit)
 FASTDEC_SRC = Compression/LZMA2/sdk25/lzma_fastdec.c
 # x86-64 assembly LZMA decoder loop (LzmaDecOpt from LZMA SDK 25.01, GNU as syntax).
@@ -68,10 +70,20 @@ WIN64_ENC_CFLAGS       = $(CODE_FLAGS) -O3 $(WIN64_DEFINES) -I. -ICompression
 WIN64_ENC_CFLAGS_NO_SA = $(CODE_FLAGS) -O3 $(WIN64_DEFINES) -I. -ICompression -fno-strict-aliasing
 WIN64_LINK_FLAGS       = -static -static-libgcc -static-libstdc++ -lkernel32 -luser32 -lshell32 -ladvapi32 -lole32 -s
 
+# --- ARM64 configuration ---
+ARM64_DEFINES = -DFREEARC_UNIX -DFREEARC_INTEL_BYTE_ORDER -DFREEARC_64BIT
+ARM64_CFLAGS           = $(CODE_FLAGS) -O3 $(ARM64_DEFINES) $(Extractor_DEFINES) -I. -ICompression
+ARM64_CFLAGS_NO_SA     = $(CODE_FLAGS) -O3 $(ARM64_DEFINES) $(Extractor_DEFINES) -I. -ICompression -fno-strict-aliasing
+ARM64_ENC_CFLAGS       = $(CODE_FLAGS) -O3 $(ARM64_DEFINES) -I. -ICompression
+ARM64_ENC_CFLAGS_NO_SA = $(CODE_FLAGS) -O3 $(ARM64_DEFINES) -I. -ICompression -fno-strict-aliasing
+ARM64_LINK_FLAGS       = -lstdc++ -lrt -lpthread -lm -Wl,-O1 -Wl,--gc-sections -Wl,--as-needed -Wl,--build-id=none -s
+
 DEC_OBJDIR       = dec
 ENC_OBJDIR       = enc
 DEC_WIN64_OBJDIR = dec_win64
 ENC_WIN64_OBJDIR = enc_win64
+DEC_ARM64_OBJDIR = dec_arm64
+ENC_ARM64_OBJDIR = enc_arm64
 
 HEADERS       = Compression/Compression.h Compression/Common.h
 UNARC_HEADERS = ArcStructure.h ArcCommand.h ArcProcess.h CUI.h WinCompat.h ArcIni.h $(HEADERS)
@@ -111,7 +123,28 @@ ENC_WIN64_LINKOBJ = $(ENC_WIN64_OBJDIR)/arc.o $(ENC_WIN64_OBJDIR)/Environment.o 
                     $(ENC_WIN64_OBJDIR)/C_MM.o $(ENC_WIN64_OBJDIR)/C_TTA.o $(ENC_WIN64_OBJDIR)/C_Tornado.o \
                     $(ENC_WIN64_OBJDIR)/C_GRZip.o $(ENC_WIN64_OBJDIR)/C_4x4.o $(ENC_WIN64_OBJDIR)/C_Encryption.o
 
-.PHONY: all win64 both debug clean info info_win64 install uninstall
+DEC_ARM64_LINKOBJ = $(DEC_ARM64_OBJDIR)/unarc.o $(DEC_ARM64_OBJDIR)/Environment.o $(DEC_ARM64_OBJDIR)/Common.o \
+                    $(DEC_ARM64_OBJDIR)/CompressionLibrary.o $(DEC_ARM64_OBJDIR)/C_LZMA.o $(DEC_ARM64_OBJDIR)/lzma_fastdec.o $(DEC_ARM64_OBJDIR)/C_BCJ.o \
+                    $(DEC_ARM64_OBJDIR)/C_Dict.o $(DEC_ARM64_OBJDIR)/C_Delta.o $(DEC_ARM64_OBJDIR)/C_REP.o \
+                    $(DEC_ARM64_OBJDIR)/C_LZP.o $(DEC_ARM64_OBJDIR)/C_PPMD.o $(DEC_ARM64_OBJDIR)/C_External.o \
+                    $(DEC_ARM64_OBJDIR)/C_MM.o $(DEC_ARM64_OBJDIR)/C_TTA.o $(DEC_ARM64_OBJDIR)/C_Tornado.o \
+                    $(DEC_ARM64_OBJDIR)/C_GRZip.o $(DEC_ARM64_OBJDIR)/C_4x4.o $(DEC_ARM64_OBJDIR)/C_Encryption.o
+
+SFX_ARM64_LINKOBJ = $(DEC_ARM64_OBJDIR)/unarc_sfx.o $(DEC_ARM64_OBJDIR)/Environment.o $(DEC_ARM64_OBJDIR)/Common.o \
+                    $(DEC_ARM64_OBJDIR)/CompressionLibrary.o $(DEC_ARM64_OBJDIR)/C_LZMA.o $(DEC_ARM64_OBJDIR)/lzma_fastdec.o $(DEC_ARM64_OBJDIR)/C_BCJ.o \
+                    $(DEC_ARM64_OBJDIR)/C_Dict.o $(DEC_ARM64_OBJDIR)/C_Delta.o $(DEC_ARM64_OBJDIR)/C_REP.o \
+                    $(DEC_ARM64_OBJDIR)/C_LZP.o $(DEC_ARM64_OBJDIR)/C_PPMD.o $(DEC_ARM64_OBJDIR)/C_External.o \
+                    $(DEC_ARM64_OBJDIR)/C_MM.o $(DEC_ARM64_OBJDIR)/C_TTA.o $(DEC_ARM64_OBJDIR)/C_Tornado.o \
+                    $(DEC_ARM64_OBJDIR)/C_GRZip.o $(DEC_ARM64_OBJDIR)/C_4x4.o $(DEC_ARM64_OBJDIR)/C_Encryption.o
+
+ENC_ARM64_LINKOBJ = $(ENC_ARM64_OBJDIR)/arc.o $(ENC_ARM64_OBJDIR)/Environment.o $(ENC_ARM64_OBJDIR)/Common.o \
+                    $(ENC_ARM64_OBJDIR)/CompressionLibrary.o $(ENC_ARM64_OBJDIR)/C_LZMA.o $(ENC_ARM64_OBJDIR)/lzma_fastdec.o $(ENC_ARM64_OBJDIR)/lzma_fastenc.o $(ENC_ARM64_OBJDIR)/C_BCJ.o \
+                    $(ENC_ARM64_OBJDIR)/C_Dict.o $(ENC_ARM64_OBJDIR)/C_Delta.o $(ENC_ARM64_OBJDIR)/C_REP.o \
+                    $(ENC_ARM64_OBJDIR)/C_LZP.o $(ENC_ARM64_OBJDIR)/C_PPMD.o $(ENC_ARM64_OBJDIR)/C_External.o \
+                    $(ENC_ARM64_OBJDIR)/C_MM.o $(ENC_ARM64_OBJDIR)/C_TTA.o $(ENC_ARM64_OBJDIR)/C_Tornado.o \
+                    $(ENC_ARM64_OBJDIR)/C_GRZip.o $(ENC_ARM64_OBJDIR)/C_4x4.o $(ENC_ARM64_OBJDIR)/C_Encryption.o
+
+.PHONY: all win64 arm64 both all-platforms debug clean info info_win64 info_arm64 install uninstall
 
 all: info arc unarc arc.sfx
 	@mkdir -p ../build/linux
@@ -130,7 +163,18 @@ win64: info_win64 arc.exe unarc.exe
 	@echo "=== Windows 64-bit binaries updated in ../build/win64/ ==="
 	@ls -lh ../build/win64/arc.exe ../build/win64/unarc.exe
 
+arm64: info_arm64 arc-arm64 unarc-arm64 arc.sfx-arm64
+	@mkdir -p ../build/linux-arm64
+	cp -f arc-arm64 ../build/linux-arm64/arc
+	cp -f unarc-arm64 ../build/linux-arm64/unarc
+	cp -f arc.sfx-arm64 ../build/linux-arm64/arc.sfx
+	@if [ -f ../arc.ini.example ]; then cp -f ../arc.ini.example ../build/linux-arm64/arc.ini.example; fi
+	@echo "=== Linux ARM64 binaries updated in ../build/linux-arm64/ ==="
+	@ls -lh ../build/linux-arm64/arc ../build/linux-arm64/unarc ../build/linux-arm64/arc.sfx
+
 both: all win64
+
+all-platforms: all win64 arm64
 
 info:
 	@echo "Building Linux targets with $(MODE_DESC)"
@@ -138,11 +182,14 @@ info:
 info_win64:
 	@echo "Building Windows 64-bit targets (MinGW-w64 static)"
 
+info_arm64:
+	@echo "Building Linux ARM64 targets (aarch64 cross-compilation)"
+
 debug:
 	$(MAKE) DEBUG=1
 
 clean:
-	rm -rf arc unarc arc.sfx arc.exe unarc.exe $(DEC_OBJDIR) $(ENC_OBJDIR) $(DEC_WIN64_OBJDIR) $(ENC_WIN64_OBJDIR) *.o
+	rm -rf arc unarc arc.sfx arc.exe unarc.exe arc-arm64 unarc-arm64 arc.sfx-arm64 $(DEC_OBJDIR) $(ENC_OBJDIR) $(DEC_WIN64_OBJDIR) $(ENC_WIN64_OBJDIR) $(DEC_ARM64_OBJDIR) $(ENC_ARM64_OBJDIR) *.o
 
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
@@ -447,3 +494,144 @@ $(DEC_WIN64_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(D
 	$(CC_WIN64) -c -o $@ $<
 $(ENC_WIN64_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(ENC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -o $@ $<
+
+# ===================================================================
+# Linux ARM64 Binaries (aarch64 cross-compilation)
+# ===================================================================
+
+arc-arm64: $(ENC_ARM64_LINKOBJ)
+	$(CXX_ARM64) $(ENC_ARM64_LINKOBJ) $(ARM64_LINK_FLAGS) -o $@
+
+unarc-arm64: $(DEC_ARM64_LINKOBJ)
+	$(CXX_ARM64) $(DEC_ARM64_LINKOBJ) $(ARM64_LINK_FLAGS) -o $@
+
+arc.sfx-arm64: $(SFX_ARM64_LINKOBJ)
+	$(CXX_ARM64) $(SFX_ARM64_LINKOBJ) $(ARM64_LINK_FLAGS) -o $@
+
+# --- ARM64 unarc (decoder) objects ---
+
+$(DEC_ARM64_OBJDIR):
+	mkdir -p $(DEC_ARM64_OBJDIR)
+
+$(DEC_ARM64_OBJDIR)/unarc.o: unarc.cpp $(UNARC_HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/unarc_sfx.o: unarc.cpp $(UNARC_HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -DFREEARC_SFX -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/Environment.o: Environment.cpp Environment.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/CompressionLibrary.o: Compression/CompressionLibrary.cpp $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/Common.o: Compression/Common.cpp $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_External.o: Compression/External/C_External.cpp Compression/External/C_External.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h Compression/LZMA2/C/Bra86.c Compression/LZMA2/C/Bra.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h Compression/Dict/dict.cpp $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h Compression/Delta/Delta.cpp $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_REP.o: Compression/REP/C_REP.cpp Compression/REP/C_REP.h Compression/REP/rep.cpp $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_LZP.o: Compression/LZP/C_LZP.cpp Compression/LZP/C_LZP.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h Compression/PPMD/Model.cpp Compression/PPMD/SubAlloc.hpp Compression/PPMD/Coder.hpp Compression/PPMD/PPMd.h Compression/PPMD/PPMdType.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS_NO_SA) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp Compression/MM/mmdet.cpp Compression/MM/mmdet.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h Compression/MM/tta.cpp Compression/MM/filters.cpp Compression/MM/filters.h Compression/MM/entropy.cpp Compression/MM/entropy.h Compression/MM/mmdet.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS_NO_SA) -fwrapv -fno-lto -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_Tornado.o: Compression/Tornado/C_Tornado.cpp Compression/Tornado/C_Tornado.h Compression/Tornado/Tornado.cpp Compression/Tornado/MatchFinder.cpp $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_GRZip.o: Compression/GRZip/C_GRZip.cpp Compression/GRZip/C_GRZip.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_4x4.o: Compression/4x4/C_4x4.cpp Compression/4x4/C_4x4.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/C_Encryption.o: Compression/_Encryption/C_Encryption.cpp Compression/_Encryption/C_Encryption.h $(HEADERS) | $(DEC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_CFLAGS) -ICompression -ICompression/_Encryption -ICompression/_Encryption/headers -o $@ $<
+
+# --- ARM64 arc (encoder) objects ---
+
+$(ENC_ARM64_OBJDIR):
+	mkdir -p $(ENC_ARM64_OBJDIR)
+
+$(ENC_ARM64_OBJDIR)/arc.o: arc.cpp Environment.h ArcIni.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/Environment.o: Environment.cpp Environment.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/CompressionLibrary.o: Compression/CompressionLibrary.cpp $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/Common.o: Compression/Common.cpp $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_External.o: Compression/External/C_External.cpp Compression/External/C_External.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h Compression/LZMA2/C/Bra86.c Compression/LZMA2/C/Bra.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h Compression/Dict/dict.cpp $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_Delta.o: Compression/Delta/C_Delta.cpp Compression/Delta/C_Delta.h Compression/Delta/Delta.cpp $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_REP.o: Compression/REP/C_REP.cpp Compression/REP/C_REP.h Compression/REP/rep.cpp $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_LZP.o: Compression/LZP/C_LZP.cpp Compression/LZP/C_LZP.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_PPMD.o: Compression/PPMD/C_PPMD.cpp Compression/PPMD/C_PPMD.h Compression/PPMD/Model.cpp Compression/PPMD/SubAlloc.hpp Compression/PPMD/Coder.hpp Compression/PPMD/PPMd.h Compression/PPMD/PPMdType.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS_NO_SA) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_MM.o: Compression/MM/C_MM.cpp Compression/MM/C_MM.h Compression/MM/mm.cpp Compression/MM/mmdet.cpp Compression/MM/mmdet.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h Compression/MM/tta.cpp Compression/MM/filters.cpp Compression/MM/filters.h Compression/MM/entropy.cpp Compression/MM/entropy.h Compression/MM/mmdet.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS_NO_SA) -fwrapv -fno-lto -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_Tornado.o: Compression/Tornado/C_Tornado.cpp Compression/Tornado/C_Tornado.h Compression/Tornado/Tornado.cpp Compression/Tornado/MatchFinder.cpp $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_GRZip.o: Compression/GRZip/C_GRZip.cpp Compression/GRZip/C_GRZip.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_4x4.o: Compression/4x4/C_4x4.cpp Compression/4x4/C_4x4.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -o $@ $<
+
+$(ENC_ARM64_OBJDIR)/C_Encryption.o: Compression/_Encryption/C_Encryption.cpp Compression/_Encryption/C_Encryption.h $(HEADERS) | $(ENC_ARM64_OBJDIR)
+	$(CXX_ARM64) -c $(ARM64_ENC_CFLAGS) -ICompression -ICompression/_Encryption -ICompression/_Encryption/headers -o $@ $<
+
+$(DEC_ARM64_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(DEC_ARM64_OBJDIR)
+	$(CC_ARM64) -c -w -O3 -o $@ $(FASTDEC_SRC)
+$(ENC_ARM64_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(ENC_ARM64_OBJDIR)
+	$(CC_ARM64) -c -w -O3 -o $@ $(FASTDEC_SRC)
+$(ENC_ARM64_OBJDIR)/lzma_fastenc.o: $(FASTENC_DEPS) | $(ENC_ARM64_OBJDIR)
+	$(CC_ARM64) -c -w -O3 -o $@ $(FASTENC_SRC)

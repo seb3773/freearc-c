@@ -95,6 +95,13 @@ Binaries are organized cleanly by target platform:
 | `build/linux/unarc` | ~197 KB | Standalone unpacker, lister, and integrity tester |
 | `build/linux/arc.sfx` | ~194 KB | Standalone Linux ELF stub for self-extracting packages (`.sfx` / `.run`) |
 
+### Linux ARM64 (aarch64) — `./build/linux-arm64/`
+| Binary | Size | Description |
+|---|---|---|
+| `build/linux-arm64/arc` | ~431 KB | Full archiver and archive manager compiled natively for Linux ARM64 (AArch64) |
+| `build/linux-arm64/unarc` | ~198 KB | Standalone unpacker, lister, and integrity tester for Linux ARM64 |
+| `build/linux-arm64/arc.sfx` | ~196 KB | Standalone Linux ARM64 ELF stub for self-extracting packages (`.sfx` / `.run`) |
+
 ### Windows (x86_64) — `./build/win64/`
 | Binary | Size | Description |
 |---|---|---|
@@ -112,22 +119,28 @@ Binaries are organized cleanly by target platform:
 git clone https://github.com/seb3773/freearc-c.git
 cd freearc-c
 
-# Compile Linux production binaries (into ./build/linux/)
+# Compile Linux x86_64 production binaries (into ./build/linux/)
 make
+
+# Compile Linux ARM64 (aarch64) production binaries (into ./build/linux-arm64/)
+make arm64
 
 # Compile Windows 64-bit native binaries (into ./build/win64/)
 make win64
 
-# (Or compile both simultaneously)
-make both
+# (Or compile all platforms simultaneously)
+make all-platforms
 
-# Run the automated Linux validation suite (24 tests)
+# Run the automated Linux x86_64 validation suite
 make test
 
-# Run the automated Windows 64-bit validation suite (24 tests under Wine, bit-for-bit exact)
+# Run the automated Linux ARM64 validation suite (via QEMU)
+make test-arm64
+
+# Run the automated Windows 64-bit validation suite (under Wine, bit-for-bit exact)
 make test-win64
 
-# Run both test suites
+# Run all test suites across all platforms
 make test-all
 
 # (Optional) Build standalone Debian .deb package

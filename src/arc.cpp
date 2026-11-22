@@ -1988,8 +1988,10 @@ static std::string find_sfx_stub(const char *argv0, const std::string &custom) {
     }
   }
   if (access("build/linux/arc.sfx", R_OK) == 0) return "build/linux/arc.sfx";
+  if (access("build/linux-arm64/arc.sfx", R_OK) == 0) return "build/linux-arm64/arc.sfx";
   if (access("./arc.sfx", R_OK) == 0) return "./arc.sfx";
   if (access("../build/linux/arc.sfx", R_OK) == 0) return "../build/linux/arc.sfx";
+  if (access("../build/linux-arm64/arc.sfx", R_OK) == 0) return "../build/linux-arm64/arc.sfx";
   if (access("/usr/local/lib/freearc/arc.sfx", R_OK) == 0) return "/usr/local/lib/freearc/arc.sfx";
   if (access("/usr/lib/freearc/arc.sfx", R_OK) == 0) return "/usr/lib/freearc/arc.sfx";
   if (access("/usr/local/lib/arc/arc.sfx", R_OK) == 0) return "/usr/local/lib/arc/arc.sfx";

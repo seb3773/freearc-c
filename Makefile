@@ -1,10 +1,10 @@
 # FreeArc Modern C/C++ Root Makefile
-# Targets: all, win64, both, debug, clean, test, test-win64, test-all, install, uninstall, deb, help
+# Targets: all, win64, arm64, both, all-platforms, debug, clean, test, test-win64, test-arm64, test-all, install, uninstall, deb, help
 
 PREFIX ?= /usr/local
 DESTDIR ?=
 
-.PHONY: all win64 both debug clean test test-win64 test-all install uninstall deb help
+.PHONY: all win64 arm64 both all-platforms debug clean test test-win64 test-arm64 test-all install uninstall deb help
 
 all:
 	$(MAKE) -C src all
@@ -12,8 +12,14 @@ all:
 win64:
 	$(MAKE) -C src win64
 
+arm64:
+	$(MAKE) -C src arm64
+
 both:
 	$(MAKE) -C src both
+
+all-platforms:
+	$(MAKE) -C src all-platforms
 
 debug:
 	$(MAKE) -C src debug
@@ -32,7 +38,11 @@ test-win64: win64
 	@chmod +x tests/run_tests_win64.sh
 	./tests/run_tests_win64.sh
 
-test-all: test test-win64
+test-arm64: arm64
+	@chmod +x tests/run_tests_arm64.sh
+	./tests/run_tests_arm64.sh
+
+test-all: test test-win64 test-arm64
 
 deb: all
 	@chmod +x build_deb.sh
@@ -46,13 +56,16 @@ uninstall:
 
 help:
 	@echo "FreeArc Native build targets:"
-	@echo "  make            - Build Linux production binaries (./build/linux/arc, unarc, arc.sfx)"
+	@echo "  make            - Build Linux x86_64 production binaries (./build/linux/arc, unarc, arc.sfx)"
 	@echo "  make win64      - Build Windows 64-bit production binaries (./build/win64/arc.exe, unarc.exe)"
-	@echo "  make both       - Build both Linux and Windows 64-bit binaries"
+	@echo "  make arm64      - Build Linux ARM64 production binaries (./build/linux-arm64/arc, unarc, arc.sfx)"
+	@echo "  make both       - Build both Linux x86_64 and Windows 64-bit binaries"
+	@echo "  make all-platforms - Build all targets (Linux x86_64, Windows Win64, Linux ARM64)"
 	@echo "  make debug      - Build Linux debug binaries with symbols enabled"
 	@echo "  make test       - Run Linux automated test suite"
 	@echo "  make test-win64 - Run Windows 64-bit automated test suite (bit-for-bit exact & cross-platform via Wine)"
-	@echo "  make test-all   - Run both Linux and Windows 64-bit test suites"
+	@echo "  make test-arm64 - Run Linux ARM64 automated test suite (QEMU user-mode execution & cross-platform)"
+	@echo "  make test-all   - Run all test suites (Linux, Win64, ARM64)"
 	@echo "  make deb        - Build and package standalone Debian .deb package"
 	@echo "  make install    - Install Linux binaries to PREFIX (default: /usr/local)"
 	@echo "  make clean      - Clean build artifacts"
