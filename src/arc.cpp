@@ -1615,7 +1615,50 @@ static std::string detect_file_datatype(const FileRec &f, int detect_level) {
   return choose_detected_type(dataTypes, defaultType);
 }
 
+/* PERF: content-based type detection (detect_level >= 2) reads and analyzes up to ~sqrt(5*N)
+ * 64 KB chunks of every file before compression can start, on the critical path of every auto
+ * profile. Files are independent and detect_file_datatype() only uses local state (its own FILE*
+ * and buffers; detect_datatype / detect_mm allocate their tables per call), so the files are
+ * distributed over the -mt threads. Every file gets exactly the same type as with the sequential
+ * loop (each result depends only on that file's contents), so the archive is unchanged. */
+struct DetectTypesCtx {
+  std::vector<FileRec> *files;
+  int detect_level;
+  volatile long next;
+};
+
+static ARC_THREAD_CALL detect_types_worker(void *arg) {
+  DetectTypesCtx *ctx = (DetectTypesCtx *)arg;
+  std::vector<FileRec> &files = *ctx->files;
+  for (;;) {
+    long i = __sync_fetch_and_add(&ctx->next, 1);
+    if (i >= (long)files.size())
+      break;
+    if (files[i].datatype.empty())
+      files[i].datatype = detect_file_datatype(files[i], ctx->detect_level);
+  }
+  return ARC_THREAD_RET_VAL;
+}
+
 static void detect_file_types(std::vector<FileRec> &files, int detect_level) {
+  int threads = GetCompressionThreads();
+  size_t pending = 0;
+  for (size_t i = 0; i < files.size(); i++)
+    if (files[i].datatype.empty() && !files[i].isdir && files[i].size > 0) pending++;
+  if (detect_level > 1 && threads > 1 && pending > 1) {
+    DetectTypesCtx ctx;
+    ctx.files = &files;
+    ctx.detect_level = detect_level;
+    ctx.next = 0;
+    int nw = (int)std::min((size_t)threads, pending);
+    std::vector<ArcThread> workers;
+    for (int w = 1; w < nw; w++)
+      workers.push_back(arc_spawn_thread((ArcThreadFunc)detect_types_worker, &ctx));
+    detect_types_worker(&ctx);
+    for (size_t w = 0; w < workers.size(); w++)
+      arc_wait_thread(workers[w]);
+    return;
+  }
   for (size_t i = 0; i < files.size(); i++) {
     if (files[i].datatype.empty())
       files[i].datatype = detect_file_datatype(files[i], detect_level);
@@ -2554,8 +2597,9 @@ struct GroupCompressJob {
   BlockInfo       info;
   int             ordered_seq;   // >= 0 for jobs that must not overlap and keep their order
   uint64          mem;           // estimated compression memory
+  bool            started;
   bool            done;
-  GroupCompressJob() : start(0), count(0), direct_out(NULL), ordered_seq(-1), mem(0), done(false) {}
+  GroupCompressJob() : start(0), count(0), direct_out(NULL), ordered_seq(-1), mem(0), started(false), done(false) {}
 };
 
 struct GroupPoolContext {
@@ -2605,16 +2649,48 @@ static bool group_job_admissible(GroupPoolContext *ctx, GroupCompressJob *job) {
   return true;
 }
 
+/* PERF: pick the next group to start (caller holds ctx->mutex).
+ * Groups are still admitted in task order, with one exception: a group that is only waiting
+ * for its turn in the ordered gate (DICT/TTA/MM chains, see method_has_global_stream_state)
+ * no longer blocks the independent groups queued behind it. Before, e.g. in -m5, the
+ * $bmp group (mm+...) waited for the $text group (dict+...) and, being next in line, held back
+ * the main LZMA group until the whole text chain had finished, so the two longest groups ran one
+ * after the other. Ordered groups keep their relative order and never overlap (the gate is
+ * unchanged), a group blocked by the memory budget still blocks everything behind it, and
+ * every group produces the same bytes whatever its start time (blocks are appended to the
+ * archive in task order by compress_groups_parallel), so the archive is unchanged. */
+static GroupCompressJob *pick_group_job(GroupPoolContext *ctx) {
+  std::vector<GroupCompressJob*> &jobs = *ctx->jobs;
+  while (ctx->next_job < jobs.size() && jobs[ctx->next_job]->started)
+    ctx->next_job++;
+  for (size_t i = ctx->next_job; i < jobs.size(); i++) {
+    GroupCompressJob *job = jobs[i];
+    if (job->started)
+      continue;
+    if (group_job_admissible(ctx, job))
+      return job;
+    bool gated = job->ordered_seq >= 0 && job->ordered_seq != ctx->next_ordered_seq;
+    if (!gated)
+      return NULL;   /* blocked by the memory budget: keep strict order behind it */
+  }
+  return NULL;
+}
+
 static ARC_THREAD_CALL group_worker_func(void *arg) {
   GroupPoolContext *ctx = (GroupPoolContext*)arg;
   std::vector<GroupCompressJob*> &jobs = *ctx->jobs;
   ctx->mutex.lock();
   for (;;) {
-    while (ctx->next_job < jobs.size() && !group_job_admissible(ctx, jobs[ctx->next_job]))
+    GroupCompressJob *job = NULL;
+    for (;;) {
+      job = pick_group_job(ctx);
+      if (job || ctx->next_job >= jobs.size())
+        break;
       ctx->cond.wait(ctx->mutex);
-    if (ctx->next_job >= jobs.size())
+    }
+    if (!job)
       break;
-    GroupCompressJob *job = jobs[ctx->next_job++];
+    job->started = true;
     ctx->running++;
     ctx->mem_in_use += job->mem;
     ctx->mutex.unlock();
