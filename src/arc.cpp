@@ -2591,6 +2591,7 @@ static ARC_THREAD_CALL block_worker_func(void *arg) {
  * codecs are left untouched. Every chunk stays a standard independent 4x4 LZMA chunk.
  */
 static std::string nbx_balance_4x4_lzma(const std::string &chain, uint64 insize, int threads) {
+  if (threads < 8) return chain;
   std::string out;
   size_t p = 0;
   while (p <= chain.size()) {
@@ -3011,7 +3012,7 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
   FileRec *files_ptr = files.empty() ? NULL : &files[0];
   int threads = GetCompressionThreads();
 
-  if (g_opt_nobitexact && threads > 1) {
+  if (g_opt_nobitexact && threads >= 8) {
     for (size_t i = 0; i < tasks.size(); i++) {
       uint64 insize = 0;
       for (int k = 0; k < tasks[i].count; k++) insize += files[tasks[i].start + k].size;
