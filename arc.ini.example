@@ -1,0 +1,43 @@
+; ==============================================================================
+; FreeArc-c Configuration File (arc.ini)
+; ==============================================================================
+; Discovery paths:
+;   1. Explicit CLI flag: -cfg<path> or --config <path>
+;   2. Executable directory: arc.ini located alongside arc / unarc
+;   3. Current working directory: ./arc.ini
+;   4. System-wide configuration: /etc/arc.ini (Linux) or %APPDATA%\FreeArc\arc.ini (Windows)
+;
+; Disabling configuration:
+;   Pass -cfg- or --no-config on the command line.
+;
+; Override default options:
+;   Any option defined in this file can be overridden on the command line.
+;   For example, if -nobitexact is enabled here, pass -nobitexact- or --bitexact
+;   on the command line to enforce strict legacy bit-exact parity.
+; ==============================================================================
+
+; --- Global options (applied to all commands) ---
+; Uncomment the next line to enable -nobitexact globally as the default:
+;-nobitexact
+
+[Default options]
+; --- Archiver Default Options (arc) ---
+; Enable ratio-maximizing mode (-nobitexact) by default for archive creation:
+; (Format-compatible with legacy unarc 0.67, maximizes ratio, outperforms 7-Zip Ultra)
+arc = -nobitexact
+
+; Key-value alternative syntax is also supported:
+;nobitexact = true
+
+; Default compression level (uncomment to default to ultra compression):
+;a = -mx
+
+; --- Extractor Default Options (unarc) ---
+; Overwrite existing files by default during extraction:
+;unarc = -o+
+
+[Compression methods]
+; Built-in method definitions and aliases can be customized here:
+; fast = tor:4
+; max  = lzma:96m:max:128:mc256
+; dna  = ppmd:16:256m

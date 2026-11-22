@@ -118,6 +118,7 @@ all: info arc unarc arc.sfx
 	cp -f arc ../build/linux/arc
 	cp -f unarc ../build/linux/unarc
 	cp -f arc.sfx ../build/linux/arc.sfx
+	@if [ -f ../arc.ini.example ]; then cp -f ../arc.ini.example ../build/linux/arc.ini.example; fi
 	@echo "=== Linux binaries updated in ../build/linux/ ==="
 	@ls -lh ../build/linux/arc ../build/linux/unarc ../build/linux/arc.sfx
 
@@ -125,6 +126,7 @@ win64: info_win64 arc.exe unarc.exe
 	@mkdir -p ../build/win64
 	cp -f arc.exe ../build/win64/arc.exe
 	cp -f unarc.exe ../build/win64/unarc.exe
+	@if [ -f ../arc.ini.example ]; then cp -f ../arc.ini.example ../build/win64/arc.ini.example; fi
 	@echo "=== Windows 64-bit binaries updated in ../build/win64/ ==="
 	@ls -lh ../build/win64/arc.exe ../build/win64/unarc.exe
 

@@ -339,6 +339,54 @@ EOF
 check "Win64 arc.exe and unarc.exe parity under Wine" test_win64_parity
 
 # ------------------------------------------------------------------
+# Test 9: -nobitexact configuration via arc.ini & CLI override
+# ------------------------------------------------------------------
+test_nobitexact_ini_support() {
+    # 1. arc = -nobitexact in [Default options]
+    local cfg1="$T/nbx_cfg1.ini"
+    printf "[Default options]\narc = -nobitexact\n" > "$cfg1"
+    local out1="$T/out_nbx1.txt"
+    "$ARC" a -ep -cfg="$cfg1" "$T/nbx1.arc" "$T/corpus/hello.txt" > "$out1" 2>&1 || return 1
+    grep -q "NOTICE: -nobitexact specified" "$out1" || return 1
+
+    # 2. CLI override with -nobitexact- should enforce bit-exact parity
+    local out2="$T/out_nbx2.txt"
+    "$ARC" a -ep -cfg="$cfg1" -nobitexact- "$T/nbx2.arc" "$T/corpus/hello.txt" > "$out2" 2>&1 || return 1
+    if grep -q "NOTICE: -nobitexact specified" "$out2"; then return 1; fi
+
+    # 3. Key-value style: nobitexact = true in [Options]
+    local cfg3="$T/nbx_cfg3.ini"
+    printf "[Options]\nnobitexact = true\n" > "$cfg3"
+    local out3="$T/out_nbx3.txt"
+    "$ARC" a -ep -cfg="$cfg3" "$T/nbx3.arc" "$T/corpus/hello.txt" > "$out3" 2>&1 || return 1
+    grep -q "NOTICE: -nobitexact specified" "$out3" || return 1
+
+    # 4. Bare option line under [Default options]
+    local cfg4="$T/nbx_cfg4.ini"
+    printf "[Default options]\n-nobitexact\n" > "$cfg4"
+    local out4="$T/out_nbx4.txt"
+    "$ARC" a -ep -cfg="$cfg4" "$T/nbx4.arc" "$T/corpus/hello.txt" > "$out4" 2>&1 || return 1
+    grep -q "NOTICE: -nobitexact specified" "$out4" || return 1
+
+    # 5. Top-level option before any section
+    local cfg5="$T/nbx_cfg5.ini"
+    printf '%s\n\n[Default options]\na = -m1\n' "-nobitexact" > "$cfg5"
+    local out5="$T/out_nbx5.txt"
+    "$ARC" a -ep -cfg="$cfg5" "$T/nbx5.arc" "$T/corpus/hello.txt" > "$out5" 2>&1 || return 1
+    grep -q "NOTICE: -nobitexact specified" "$out5" || return 1
+
+    # 6. Win64 under Wine parity with INI -nobitexact
+    if command -v wine >/dev/null 2>&1 && [ -f "$ARC_WIN" ]; then
+        local out_w64="$T/out_nbx_w64.txt"
+        run_wine "$ARC_WIN" a -ep -cfg="$cfg1" "$T/nbx_w64.arc" "$T/corpus/hello.txt" > "$out_w64" 2>&1 || return 1
+        grep -q "NOTICE: -nobitexact specified" "$out_w64" || return 1
+    fi
+
+    return 0
+}
+check "-nobitexact configuration via arc.ini and CLI override" test_nobitexact_ini_support
+
+# ------------------------------------------------------------------
 # Summary
 # ------------------------------------------------------------------
 echo ""

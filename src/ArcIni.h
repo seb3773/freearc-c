@@ -240,7 +240,7 @@ public:
         std::string section_name = trim(clean.substr(1, close_bracket - 1));
         std::string sec_lower = to_lower(section_name);
 
-        if (sec_lower == "default options") {
+        if (sec_lower == "default options" || sec_lower == "options" || sec_lower == "general" || sec_lower == "settings") {
           sec = SEC_DEFAULT_OPTIONS;
         } else if (sec_lower == "compression methods") {
           sec = SEC_COMPRESSION_METHODS;
@@ -264,6 +264,37 @@ public:
         if (eq != std::string::npos) {
           std::string left = trim(clean.substr(0, eq));
           std::string right = trim(clean.substr(eq + 1));
+          std::string left_lower = to_lower(left);
+
+          // Support key-value style configuration for nobitexact / bitexact:
+          if (left_lower == "nobitexact" || left_lower == "max-ratio" || left_lower == "max_ratio") {
+            std::string rv = to_lower(right);
+            if (rv == "1" || rv == "true" || rv == "yes" || rv == "on" || rv.empty()) {
+              global_options.push_back("-nobitexact");
+            } else if (rv == "0" || rv == "false" || rv == "no" || rv == "off") {
+              global_options.push_back("-nobitexact-");
+            }
+            continue;
+          }
+          if (left_lower == "bitexact") {
+            std::string rv = to_lower(right);
+            if (rv == "1" || rv == "true" || rv == "yes" || rv == "on" || rv.empty()) {
+              global_options.push_back("-nobitexact-");
+            } else if (rv == "0" || rv == "false" || rv == "no" || rv == "off") {
+              global_options.push_back("-nobitexact");
+            }
+            continue;
+          }
+          if (left_lower == "mode") {
+            std::string rv = to_lower(right);
+            if (rv == "nobitexact" || rv == "max-ratio" || rv == "max_ratio") {
+              global_options.push_back("-nobitexact");
+            } else if (rv == "bitexact") {
+              global_options.push_back("-nobitexact-");
+            }
+            continue;
+          }
+
           std::vector<std::string> cmds = tokenize(to_lower(left));
           std::vector<std::string> opts = tokenize(right);
           if (!cmds.empty() && !opts.empty()) {
@@ -272,6 +303,10 @@ public:
             rule.options = opts;
             default_rules.push_back(rule);
           }
+        } else if (clean[0] == '-') {
+          // Bare option line like "-nobitexact" or "-mx" under [Default options]
+          std::vector<std::string> opts = tokenize(clean);
+          global_options.insert(global_options.end(), opts.begin(), opts.end());
         }
       } else if (sec == SEC_COMPRESSION_METHODS) {
         size_t eq = clean.find('=');
@@ -321,6 +356,14 @@ public:
     if (!cw.empty() && rc == cw) return true;
     char c = (char)tolower((unsigned char)cmd);
     if (c != ' ' && rc.size() == 1 && rc[0] == c) return true;
+    if (rc == "arc") {
+      // Matches archiver commands in arc: a, c, u, f, m, d, s
+      return (c == 'a' || c == 'u' || c == 'f' || c == 'm' || c == 'd' || c == 's' || c == 'c');
+    }
+    if (rc == "unarc") {
+      // Matches extractor commands in unarc: x, e, t, l, v, p
+      return (c == 'x' || c == 'e' || c == 't' || c == 'l' || c == 'v' || c == 'p');
+    }
     if (c == 'a' && (rc == "a" || rc == "add" || rc == "c" || rc == "create")) return true;
     if (c == 'x' && (rc == "x" || rc == "extract")) return true;
     if (c == 'e' && rc == "e") return true;

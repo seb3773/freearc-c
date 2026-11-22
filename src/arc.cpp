@@ -2862,7 +2862,7 @@ static std::string nbx_balance_4x4_lzma(const std::string &chain, uint64 insize,
         if (tok[0] == 'b' || isdigit((unsigned char)tok[0])) {
           char *end = NULL;
           strtol(tok.c_str(), &end, 10);
-          if (tok[0] == 'b' || (end && *end != ' ')) explicit_block = true;   // b<size> or bare <size>
+          if (tok[0] == 'b' || (end && *end != '\0')) explicit_block = true;   // b<size> or bare <size>
         }
         if (colon == std::string::npos) { q = stage.size(); break; }
         q = colon + 1;
