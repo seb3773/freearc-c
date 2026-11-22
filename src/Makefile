@@ -13,6 +13,11 @@ ifeq ($(LZMA_ASM),1)
   LZMA_ASM_ENC = $(ENC_OBJDIR)/LzmaDecOpt.o
 endif
 FASTDEC_DEPS = $(FASTDEC_SRC) Compression/LZMA2/sdk25/LzmaDec.c Compression/LZMA2/sdk25/LzmaDec.h Compression/LZMA2/sdk25/lzma_fastdec.h
+# LZMA SDK 25.01 encoder (unity build, symbols renamed), used by the archiver in -nobitexact mode
+FASTENC_SRC = Compression/LZMA2/sdk25/lzma_fastenc.c
+FASTENC_DEPS = $(FASTENC_SRC) $(wildcard Compression/LZMA2/sdk25/*.h) Compression/LZMA2/sdk25/LzmaEnc.c \
+               Compression/LZMA2/sdk25/LzFind.c Compression/LZMA2/sdk25/LzFindMt.c Compression/LZMA2/sdk25/LzFindOpt.c \
+               Compression/LZMA2/sdk25/Threads.c Compression/LZMA2/sdk25/CpuArch.c
 
 # Build mode configuration:
 #   make (or make DEBUG=0) -> Production build: aggressive optimization (-O3, LTO, gc-sections, sstrip)
@@ -86,7 +91,7 @@ SFX_LINKOBJ = $(DEC_OBJDIR)/unarc_sfx.o $(DEC_OBJDIR)/Environment.o $(DEC_OBJDIR
               $(DEC_OBJDIR)/C_GRZip.o $(DEC_OBJDIR)/C_4x4.o $(DEC_OBJDIR)/C_Encryption.o
 
 ENC_LINKOBJ = $(ENC_OBJDIR)/arc.o $(ENC_OBJDIR)/Environment.o $(ENC_OBJDIR)/Common.o \
-              $(ENC_OBJDIR)/CompressionLibrary.o $(ENC_OBJDIR)/C_LZMA.o $(ENC_OBJDIR)/lzma_fastdec.o $(LZMA_ASM_ENC) $(ENC_OBJDIR)/C_BCJ.o \
+              $(ENC_OBJDIR)/CompressionLibrary.o $(ENC_OBJDIR)/C_LZMA.o $(ENC_OBJDIR)/lzma_fastdec.o $(ENC_OBJDIR)/lzma_fastenc.o $(LZMA_ASM_ENC) $(ENC_OBJDIR)/C_BCJ.o \
               $(ENC_OBJDIR)/C_Dict.o $(ENC_OBJDIR)/C_Delta.o $(ENC_OBJDIR)/C_REP.o \
               $(ENC_OBJDIR)/C_LZP.o $(ENC_OBJDIR)/C_PPMD.o $(ENC_OBJDIR)/C_External.o \
               $(ENC_OBJDIR)/C_MM.o $(ENC_OBJDIR)/C_TTA.o $(ENC_OBJDIR)/C_Tornado.o \
@@ -100,7 +105,7 @@ DEC_WIN64_LINKOBJ = $(DEC_WIN64_OBJDIR)/unarc.o $(DEC_WIN64_OBJDIR)/Environment.
                     $(DEC_WIN64_OBJDIR)/C_GRZip.o $(DEC_WIN64_OBJDIR)/C_4x4.o $(DEC_WIN64_OBJDIR)/C_Encryption.o
 
 ENC_WIN64_LINKOBJ = $(ENC_WIN64_OBJDIR)/arc.o $(ENC_WIN64_OBJDIR)/Environment.o $(ENC_WIN64_OBJDIR)/Common.o \
-                    $(ENC_WIN64_OBJDIR)/CompressionLibrary.o $(ENC_WIN64_OBJDIR)/C_LZMA.o $(ENC_WIN64_OBJDIR)/lzma_fastdec.o $(ENC_WIN64_OBJDIR)/LzmaDecOpt.o $(ENC_WIN64_OBJDIR)/C_BCJ.o \
+                    $(ENC_WIN64_OBJDIR)/CompressionLibrary.o $(ENC_WIN64_OBJDIR)/C_LZMA.o $(ENC_WIN64_OBJDIR)/lzma_fastdec.o $(ENC_WIN64_OBJDIR)/lzma_fastenc.o $(ENC_WIN64_OBJDIR)/LzmaDecOpt.o $(ENC_WIN64_OBJDIR)/C_BCJ.o \
                     $(ENC_WIN64_OBJDIR)/C_Dict.o $(ENC_WIN64_OBJDIR)/C_Delta.o $(ENC_WIN64_OBJDIR)/C_REP.o \
                     $(ENC_WIN64_OBJDIR)/C_LZP.o $(ENC_WIN64_OBJDIR)/C_PPMD.o $(ENC_WIN64_OBJDIR)/C_External.o \
                     $(ENC_WIN64_OBJDIR)/C_MM.o $(ENC_WIN64_OBJDIR)/C_TTA.o $(ENC_WIN64_OBJDIR)/C_Tornado.o \
@@ -424,6 +429,8 @@ $(DEC_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(DEC_OBJDIR)
 	$(CC) -c -w $(MODE_CFLAGS) $(FASTDEC_DEFS) -o $@ $(FASTDEC_SRC)
 $(ENC_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(ENC_OBJDIR)
 	$(CC) -c -w $(MODE_CFLAGS) $(FASTDEC_DEFS) -o $@ $(FASTDEC_SRC)
+$(ENC_OBJDIR)/lzma_fastenc.o: $(FASTENC_DEPS) | $(ENC_OBJDIR)
+	$(CC) -c -w $(MODE_CFLAGS) -o $@ $(FASTENC_SRC)
 $(DEC_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(DEC_OBJDIR)
 	$(CC) -c -o $@ $<
 $(ENC_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(ENC_OBJDIR)
@@ -432,6 +439,8 @@ $(DEC_WIN64_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(DEC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -w -O3 -DZ7_LZMA_DEC_OPT -o $@ $(FASTDEC_SRC)
 $(ENC_WIN64_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(ENC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -w -O3 -DZ7_LZMA_DEC_OPT -o $@ $(FASTDEC_SRC)
+$(ENC_WIN64_OBJDIR)/lzma_fastenc.o: $(FASTENC_DEPS) | $(ENC_WIN64_OBJDIR)
+	$(CC_WIN64) -c -w -O3 -o $@ $(FASTENC_SRC)
 $(DEC_WIN64_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(DEC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -o $@ $<
 $(ENC_WIN64_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(ENC_WIN64_OBJDIR)

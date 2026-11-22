@@ -5,8 +5,14 @@
 #include "Common.h"
 #include "Compression.h"
 
-// Used in 4x4 only: read entire input buffer before compression begins, allocate output buffer large enough to hold entire compressed output
-FREEARC_THREAD_LOCAL int compress_all_at_once = 0;
+// Used in 4x4 only: read entire input buffer before compression begins, allocate output buffer large enough to hold entire compressed output.
+// Thread-local: 4x4 sets it for its own reader thread and for each of its worker threads, so that
+// independent solid blocks compressed concurrently in other threads are never affected.
+FA_THREAD_LOCAL int compress_all_at_once = 0;
+
+// Set by the archiver in -nobitexact mode: codecs may then trade bit-exact parity with legacy
+// FreeArc for encoding speed (the produced streams stay decodable by any FreeArc unarc).
+int nobitexact_speed_mode = 0;
 
 // Для обработки ошибок во вложенных процедурах - longjmp сигнализирует процедуре верхнего уровня о произошедшей ошибке
 int jmpready = FALSE;

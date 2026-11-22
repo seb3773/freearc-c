@@ -62,6 +62,10 @@ namespace LzmaEncoder {
 using namespace LzmaEncoder;
 #endif
 
+#ifndef FREEARC_DECOMPRESS_ONLY
+#include "sdk25/lzma_fastenc.h"
+#endif
+
 static void *SzAlloc(void *p, size_t size) { p = p; return BigAlloc(size); }
 static void SzFree(void *p, void *address) { p = p; BigFree(address); }
 static ISzAlloc g_Alloc = { SzAlloc, SzFree };
@@ -163,10 +167,55 @@ static void FillLzmaEncProps (CLzmaEncProps *props,
     case kBT4:  props->btMode = MF_BinaryTree;  props->numHashBytes = 4; break;
     case kHT4:  props->btMode = MF_HashTable;   props->numHashBytes = 4; break;
   }
-  props->numThreads = compress_all_at_once ? 1 : GetCompressionThreads();
+  props->numThreads = compress_all_at_once ? ((nobitexact_speed_mode && algorithm) ? 2 : 1) : GetCompressionThreads();
   props->writeEndMark = 1;
   LzmaEncProps_Normalize(props);
 }
+
+// -nobitexact: binary-tree match finders (BT2/BT3/BT4, used by "max" profiles) are served by the
+// LZMA SDK 25.01 encoder: its optimal parser and its multithreaded match finder (batched
+// GetMatchesSpecN, larger sync blocks) are faster than the 2009 code, and it finds slightly better
+// matches. The output is a standard LZMA stream with end marker, decoded by the existing decoder.
+// HT4 (FreeArc-specific hash table match finder) and HC4 stay on the 2009 encoder.
+static bool lzma_use_fastenc (const CLzmaEncProps *props)
+{
+  return nobitexact_speed_mode
+      && props->btMode == MF_BinaryTree
+      && props->numHashBytes >= 2 && props->numHashBytes <= 4
+      && (props->algo == 0 || props->algo == 1)
+      && props->fb >= 5 && props->fb <= LZMA_MATCH_LEN_MAX
+      && props->lc <= 8 && props->lp <= 4 && props->pb <= 4
+      && props->dictSize >= (1 << 12) && (uint64)props->dictSize <= ((uint64)15 << 28);
+}
+
+static void *FastEncBigAlloc (size_t size)  {return BigAlloc (size);}
+static void  FastEncBigFree  (void *address) {BigFree (address);}
+
+static lzfe *lzma_fastenc_create (const CLzmaEncProps *props, int numThreads)
+{
+  lzfe_props fp;
+  fp.dictSize     = props->dictSize;
+  fp.lc           = props->lc;
+  fp.lp           = props->lp;
+  fp.pb           = props->pb;
+  fp.algo         = props->algo;
+  fp.fb           = props->fb;
+  fp.btMode       = 1;
+  fp.numHashBytes = props->numHashBytes;
+  fp.mc           = props->mc;
+  fp.numThreads   = numThreads > 1 ? 2 : 1;
+  return lzfe_create (&fp, FastEncBigAlloc, FastEncBigFree);
+}
+
+static int  FastEncRead  (void *aux, void *buf, size_t *size)       {return CallbackRead (aux, buf, size);}
+static size_t FastEncWrite (void *aux, const void *buf, size_t size) {return CallbackWrite (aux, buf, size);}
+
+// Per-job encoder state kept by 4x4 between its chunks (CodecState)
+struct LzmaCodecState
+{
+  lzfe          *fast;   // SDK 25.01 encoder, or NULL
+  CLzmaEncHandle enc;    // 2009 encoder, or NULL
+};
 
 int lzma_compress  ( int dictionarySize,
                      int hashSize,
@@ -188,6 +237,16 @@ int lzma_compress  ( int dictionarySize,
   CLzmaEncProps props;
   FillLzmaEncProps (&props, dictionarySize, hashSize, algorithm, numFastBytes,
                     matchFinder, matchFinderCycles, posStateBits, litContextBits, litPosBits);
+
+  if (lzma_use_fastenc (&props)) {
+    lzfe *fe = lzma_fastenc_create (&props, props.numThreads);
+    if (fe == NULL)  return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+    res = (SRes) lzfe_encode_stream (fe, FastEncRead, &inStream, FastEncWrite, &outStream);
+    lzfe_destroy (fe);
+    if (inStream.errcode)   return inStream.errcode;
+    if (outStream.errcode)  return outStream.errcode;
+    return SRes_to_FreeArc(res);
+  }
 
   enc = LzmaEnc_Create(&g_Alloc);
   if (enc == 0)   return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
@@ -220,7 +279,10 @@ int lzma_compress2  (int dictionarySize,
 {
   if (!input && !callback) {
     if (CodecState && *CodecState) {
-      LzmaEnc_Destroy(*CodecState, &g_Alloc, &g_Alloc);
+      LzmaCodecState *st = (LzmaCodecState*) *CodecState;
+      if (st->fast)  lzfe_destroy (st->fast);
+      if (st->enc)   LzmaEnc_Destroy(st->enc, &g_Alloc, &g_Alloc);
+      delete st;
       *CodecState = NULL;
     }
     return FREEARC_OK;
@@ -229,37 +291,58 @@ int lzma_compress2  (int dictionarySize,
   CallbackInStream  inStream;    inStream.Read  = CallbackRead;    inStream.callback = callback;   inStream.auxdata = auxdata;   inStream.errcode = FREEARC_OK;  inStream.first_read = TRUE;
   CallbackOutStream outStream;  outStream.Write = CallbackWrite;  outStream.callback = callback;  outStream.auxdata = auxdata;  outStream.errcode = FREEARC_OK;
 
-  CLzmaEncHandle enc;
   SRes res = SZ_OK;
   const int writeEndMark = 1;
+  LzmaCodecState local = {NULL, NULL};
+  LzmaCodecState *st = (CodecState && *CodecState) ? (LzmaCodecState*) *CodecState : &local;
 
-  if (CodecState && *CodecState) {
-    enc = *CodecState;
-  } else {
+  if (!st->fast && !st->enc) {
     CLzmaEncProps props;
     FillLzmaEncProps (&props, dictionarySize, hashSize, algorithm, numFastBytes,
                       matchFinder, matchFinderCycles, posStateBits, litContextBits, litPosBits);
     if (input && output && outputSize)
-      props.numThreads = 1;
-    enc = LzmaEnc_Create(&g_Alloc);
-    if (enc == 0)   return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
-    res = LzmaEnc_SetProps(enc, &props);
+      // Memory-to-memory mode is used by 4x4. In -nobitexact mode keep the multithreaded match
+      // finder there too: the match search runs in its own threads, overlapping with the optimal
+      // parser, which roughly halves the wall time of each 4x4 job (the stream is a standard LZMA stream).
+      props.numThreads = (nobitexact_speed_mode && algorithm) ? 2 : 1;
+    if (lzma_use_fastenc (&props)) {
+      st->fast = lzma_fastenc_create (&props, props.numThreads);
+      if (st->fast == NULL)  return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+    } else {
+      st->enc = LzmaEnc_Create(&g_Alloc);
+      if (st->enc == 0)   return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+      res = LzmaEnc_SetProps(st->enc, &props);
+    }
   }
 
   if (res == SZ_OK) {
     if (input && output && outputSize) {
       SizeT outsize = *outputSize;
-      res = LzmaEnc_MemEncode(enc, (Byte*)output, &outsize, (const Byte*)input, inputSize, writeEndMark, NULL, &g_Alloc, &g_Alloc);
+      if (st->fast) {
+        size_t ol = outsize;
+        res = (SRes) lzfe_encode_mem (st->fast, (unsigned char*)output, &ol, (const unsigned char*)input, inputSize);
+        outsize = ol;
+      } else {
+        res = LzmaEnc_MemEncode(st->enc, (Byte*)output, &outsize, (const Byte*)input, inputSize, writeEndMark, NULL, &g_Alloc, &g_Alloc);
+      }
       *outputSize = (int) outsize;
     } else {
-      res = LzmaEnc_Encode(enc, (ISeqOutStream*)&outStream, (ISeqInStream*)&inStream, NULL, &g_Alloc, &g_Alloc);
+      if (st->fast)
+        res = (SRes) lzfe_encode_stream (st->fast, FastEncRead, &inStream, FastEncWrite, &outStream);
+      else
+        res = LzmaEnc_Encode(st->enc, (ISeqOutStream*)&outStream, (ISeqInStream*)&inStream, NULL, &g_Alloc, &g_Alloc);
     }
   }
 
   if (CodecState) {
-    *CodecState = enc;
+    if (!*CodecState && (st->fast || st->enc)) {
+      LzmaCodecState *keep = new LzmaCodecState;
+      *keep = *st;
+      *CodecState = keep;
+    }
   } else {
-    LzmaEnc_Destroy(enc, &g_Alloc, &g_Alloc);
+    if (st->fast)  lzfe_destroy (st->fast);
+    if (st->enc)   LzmaEnc_Destroy(st->enc, &g_Alloc, &g_Alloc);
   }
 
   if (inStream.errcode)  return inStream.errcode;
@@ -489,6 +572,8 @@ void LZMA_METHOD::CalcCompressionMemories (MemSize *pmem, MemSize *phashSize)
   props.numThreads = GetCompressionThreads();
   props.writeEndMark = 1;
   LzmaEncProps_Normalize(&props);
+  if (lzma_use_fastenc (&props))   // the SDK 25.01 encoder sizes its hash tables itself
+    props.hashSize = (UInt32) lzfe_hash_bytes (props.dictSize, 1, props.numHashBytes);
 
   uint64 sizeReserv  =  matchFinder==kHT4?  (props.dictSize <= 768*mb           ?  props.dictSize/4  :  props.dictSize/8)
                                           :  (props.dictSize <= ((UInt32)2 << 30)?  props.dictSize/2  :  props.dictSize/4);

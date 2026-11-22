@@ -118,6 +118,7 @@ static const char *g_usage =
 
 static int g_quiet = 0;
 bool g_opt_nobitexact = false;
+static bool g_opt_solid_continuous = false;
 bool g_opt_nocompat   = false;
 int  g_opt_mc         = 0;
 int  g_opt_fb         = 0;
@@ -1313,17 +1314,22 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     int mc4 = (g_opt_mc > 0) ? g_opt_mc : 32;
     char buf4[128];
     snprintf(buf4, sizeof(buf4), "lzma:96m:normal:%d:mc%d", fb4, mc4);
-    lzma4 = mt3 ? (std::string("4x4:") + buf4) : std::string(buf4);
+    bool use_4x4_lzma = mt3 && !g_opt_solid_continuous;
+    lzma4 = use_4x4_lzma ? (std::string("4x4:b128m:") + buf4) : std::string(buf4);
 
-    int fb5 = (g_opt_fb > 0) ? g_opt_fb : 64;
+    int fb5 = (g_opt_fb > 0) ? g_opt_fb : 128;
     int mc5 = (g_opt_mc > 0) ? g_opt_mc : 256;
     char buf5[128];
     snprintf(buf5, sizeof(buf5), "lzma:96m:max:%d:mc%d", fb5, mc5);
-    lzma5 = mt3 ? (std::string("4x4:") + buf5) : std::string(buf5);
+    lzma5 = use_4x4_lzma ? (std::string("4x4:b192m:") + buf5) : std::string(buf5);
 
     bin3 = mt ? "4x4:lzma:96m:normal:32:mc16" : "lzma:96m:normal:32:mc16";
   }
   std::string etor_c3 = mt ? "4x4:tor:c3" : "tor:c3";
+  // -nobitexact text back-end: PPMd restarts its model whenever its 256 MB are exhausted, so
+  // cutting the (dict+lzp preprocessed) text stream into independent 32 MB 4x4 jobs costs no
+  // ratio while letting the PPMd encoders (thread-local state, no global lock) run in parallel.
+  std::string text_ppmd_nbx = mt ? "4x4:b32m:ppmd:16:256m" : "ppmd:16:256m";
   std::string bmp = "mm+grzip:m1:l2048:a";
   std::string bin1 = mt ? "4x4:tor:3:8mb" : "tor:4";
   std::string bin2 = mt ? "4x4:tor:5" : "tor:6";
@@ -1370,6 +1376,9 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string("$compressed"), std::string("rep:96m+") + etor_c3));
     out.push_back(std::make_pair(std::string("$wav"), "tta"));
     out.push_back(std::make_pair(std::string("$bmp"), bmp));
+    if (g_opt_nobitexact) {
+      out.push_back(std::make_pair(std::string("$dna"), text_ppmd_nbx));
+    }
   } else if (strequ(name, "4x")) {
     out.push_back(std::make_pair(std::string(""), std::string("exe+delta+") + lzma4));
     out.push_back(std::make_pair(std::string("$obj"), std::string("delta+") + lzma4));
@@ -1377,24 +1386,35 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
     out.push_back(std::make_pair(std::string("$bmp"), std::string("mm+") + lzma4));
     out.push_back(std::make_pair(std::string("$compressed"), mt ? "4x4:tor:8m:c3" : "tor:8m:c3"));
+    if (g_opt_nobitexact) {
+      out.push_back(std::make_pair(std::string("$dna"), text_ppmd_nbx));
+    }
   } else if (strequ(name, "5")) {
-    out.push_back(std::make_pair(std::string(""), std::string("rep:96m+exe+delta+") + lzma5));
-    out.push_back(std::make_pair(std::string("$obj"), std::string("rep:96m+delta+") + lzma5));
+    std::string rep_m5 = g_opt_nobitexact ? "rep:256m+" : "rep:96m+";
+    out.push_back(std::make_pair(std::string(""), rep_m5 + "exe+delta+" + lzma5));
+    out.push_back(std::make_pair(std::string("$obj"), rep_m5 + "delta+" + lzma5));
     std::string text_m5 = g_opt_nobitexact
-      ? "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m"
+      ? std::string("dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+") + text_ppmd_nbx
       : "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:12:192m";
     out.push_back(std::make_pair(std::string("$text"), text_m5));
     out.push_back(std::make_pair(std::string("$wav"), "tta"));
     out.push_back(std::make_pair(std::string("$bmp"), bmp));
+    if (g_opt_nobitexact) {
+      out.push_back(std::make_pair(std::string("$dna"), text_ppmd_nbx));
+    }
   } else if (strequ(name, "5x") || strequ(name, "x") || strequ(name, "mx") || strequ(name, "max") || strequ(name, "ultra")) {
-    out.push_back(std::make_pair(std::string(""), std::string("exe+delta+") + lzma5));
-    out.push_back(std::make_pair(std::string("$obj"), std::string("delta+") + lzma5));
+    std::string prefix = g_opt_nobitexact ? "rep:256m+" : "";
+    out.push_back(std::make_pair(std::string(""), prefix + "exe+delta+" + lzma5));
+    out.push_back(std::make_pair(std::string("$obj"), prefix + "delta+" + lzma5));
     std::string text_mx = g_opt_nobitexact
-      ? "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m"
+      ? std::string("dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+") + text_ppmd_nbx
       : (std::string("dict:128m:75%+") + lzma5);
     out.push_back(std::make_pair(std::string("$text"), text_mx));
     out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
     out.push_back(std::make_pair(std::string("$bmp"), std::string("mm+") + lzma5));
+    if (g_opt_nobitexact) {
+      out.push_back(std::make_pair(std::string("$dna"), text_ppmd_nbx));
+    }
   }
   return out;
 }
@@ -1514,6 +1534,31 @@ static std::string group_type_from_name(const std::string &name) {
   if (ext_in_list(name, exe_exts)) return "$exe";
   if (ext_in_list(name, iso_exts)) return "$iso";
   if (ext_in_list(name, precomp_exts)) return "$precomp";
+
+  if (g_opt_nobitexact) {
+    static const char *dna_exts[] = {"fa", "fna", "fasta", "fastq", "fq", "sam", "bam", "cram", "vcf", "gff", "gtf", NULL};
+    static const char *extra_text_exts[] = {
+      "po", "pot", "dic", "json", "yaml", "yml", "toml", "proto", "graphql",
+      "rs", "go", "ts", "tsx", "swift", "kt", "kts", "dart", "zig", "nim", "v",
+      "md", "markdown", "rst", "tsv", "nfo", NULL
+    };
+    static const char *extra_comp_exts[] = {
+      "jpg", "jpeg", "webp", "avif", "heic", "heif",
+      "opus", "flac", "alac", "webm", "m4a",
+      "zst", "zstandard", "tzst", "xz", "txz", "lzma", "tlz", "br", "lz4", "snappy",
+      "zpaq", "paq8px", "uha", "apk", "appx", "whl", "deb", "rpm", "dmg", "wim", "nupkg", "crx",
+      NULL
+    };
+    static const char *data_exts[] = {
+      "pyc", "pyo", "mo", "gmo", "class", "dex", NULL
+    };
+
+    if (ext_in_list(name, dna_exts)) return "$dna";
+    if (ext_in_list(name, extra_text_exts)) return "$text";
+    if (ext_in_list(name, extra_comp_exts)) return "$compressed";
+    if (ext_in_list(name, data_exts)) return "$obj";
+  }
+
   return "";
 }
 
@@ -1553,7 +1598,8 @@ static std::string choose_detected_type(const std::vector<std::string> &dataType
       (n_nondef == total || (total >= aCHUNKS && n_nondef == total - 1) || n_nondef * 12 >= total * 11))
     best = x;
   if (best == "default") {
-    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj")
+    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj" ||
+        (g_opt_nobitexact && (defaultType == "$dna" || defaultType == "$compressed" || defaultType == "$text")))
       return defaultType;
     return "default";
   }
@@ -1567,13 +1613,19 @@ static std::string detect_file_datatype(const FileRec &f, int detect_level) {
   if (detect_level <= 1) {
     if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj" ||
         defaultType == "$text" || defaultType == "$compressed" || defaultType == "$exe" ||
-        defaultType == "$iso" || defaultType == "$precomp")
+        defaultType == "$iso" || defaultType == "$precomp" ||
+        (g_opt_nobitexact && defaultType == "$dna"))
       return defaultType;
     return "default";
   }
+  // Under -nobitexact, if the file is known genomic data ($dna), bypass disk sampling.
+  if (g_opt_nobitexact && defaultType == "$dna")
+    return defaultType;
+
   FILE *fp = fopen(f.path.c_str(), "rb");
   if (!fp) {
-    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj")
+    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj" ||
+        (g_opt_nobitexact && (defaultType == "$dna" || defaultType == "$compressed" || defaultType == "$text")))
       return defaultType;
     return "default";
   }
@@ -1608,7 +1660,8 @@ static std::string detect_file_datatype(const FileRec &f, int detect_level) {
   }
   fclose(fp);
   if (dataTypes.empty()) {
-    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj")
+    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj" ||
+        (g_opt_nobitexact && (defaultType == "$dna" || defaultType == "$compressed" || defaultType == "$text")))
       return defaultType;
     return "default";
   }
@@ -1707,7 +1760,7 @@ static int get_extension_cluster(const std::string &e) {
     "reg", "env", "inf", "xsd", "xsl", "dtd", NULL
   };
   static const char *const docs[] = {
-    "txt", "md", "markdown", "rst", "tex", "log", "asc", "man", "po", "pot", "nfo", "diz",
+    "txt", "md", "markdown", "rst", "tex", "log", "asc", "man", "po", "pot", "dic", "nfo", "diz",
     "doc", "docx", "rtf", "odt", "pdf", "ps", "eps", "texi", "info", NULL
   };
   static const char *const binaries[] = {
@@ -1718,14 +1771,14 @@ static int get_extension_cluster(const std::string &e) {
     "bmp", "dib", "raw", "pbm", "pgm", "ppm", "tga", "pcx", "wav", "wave", "aif", "aiff", "au", "pcm", NULL
   };
   static const char *const scientific[] = {
-    "fa", "fasta", "fna", "fastq", "sam", "bam", "vcf", "gff", "bed", "pdb", NULL
+    "fa", "fasta", "fna", "fastq", "fq", "sam", "bam", "cram", "vcf", "gff", "gtf", "bed", "pdb", NULL
   };
   static const char *const archives[] = {
-    "zip", "gz", "bz2", "xz", "zst", "7z", "rar", "arc", "tar", "tgz", "tbz2", "zpaq", "cab",
+    "zip", "gz", "bz2", "xz", "txz", "lzma", "tlz", "zst", "tzst", "7z", "rar", "arc", "tar", "tgz", "tbz2", "zpaq", "paq8px", "uha", "cab",
     "iso", "jar", "apk", "deb", "rpm", "dmg", NULL
   };
   static const char *const compressed_media[] = {
-    "jpg", "jpeg", "png", "gif", "webp", "avif", "mp3", "ogg", "flac", "aac", "m4a", "mp4",
+    "jpg", "jpeg", "png", "gif", "webp", "avif", "heic", "heif", "mp3", "ogg", "flac", "aac", "m4a", "opus", "webm", "mp4",
     "mkv", "avi", "mov", "wmv", NULL
   };
 
@@ -2697,7 +2750,7 @@ static ARC_THREAD_CALL group_worker_func(void *arg) {
 
     IArchiveWriter *dst = job->direct_out ? job->direct_out : &job->writer;
     job->info = compress_range(dst, job->method.c_str(), ctx->password, ctx->algorithm,
-                               ctx->files, job->start, job->count, true);
+                               ctx->files, job->start, job->count, false);
 
     ctx->mutex.lock();
     ctx->running--;
@@ -2772,6 +2825,263 @@ static void compress_groups_parallel(VolumeWriter &out, std::vector<BlockTask> &
   }
   for (int w = 0; w < num_workers; w++)
     arc_wait_thread(workers[w]);
+}
+
+/* --- -nobitexact: balanced 4x4 chunking of LZMA streams ---
+ *
+ * 4x4 cuts its input into independent chunks of the inner dictionary size (96 MB for the
+ * -nobitexact LZMA profiles) and compresses them in parallel. Each LZMA chunk is inherently
+ * sequential (about two cores: optimal parser + match finder thread), so the wall time of a solid
+ * block is the time of its biggest chunk. A 266 MB binary group gives 96+96+74 MB: three jobs on
+ * a 16-thread machine, and the block lasts as long as one full 96 MB LZMA job.
+ *
+ * Knowing the size of the block, the chunk size is chosen so that:
+ *  - the number of chunks never drops below the default one (ceil(size/dict));
+ *  - when that leaves cores idle (fewer chunks than threads/2), extra chunks are allowed as long
+ *    as every chunk keeps at least 3/5 of the dictionary (bounded ratio cost, measured < 0.1%);
+ *  - the chunks have equal sizes (no long 96 MB job next to a short tail chunk).
+ * Blocks that already give enough chunks, chunks with an explicit size (4x4:b...) and other
+ * codecs are left untouched. Every chunk stays a standard independent 4x4 LZMA chunk.
+ */
+static std::string nbx_balance_4x4_lzma(const std::string &chain, uint64 insize, int threads) {
+  if (threads < 8) return chain;
+  std::string out;
+  size_t p = 0;
+  while (p <= chain.size()) {
+    size_t plus = chain.find('+', p);
+    std::string stage = chain.substr(p, plus == std::string::npos ? std::string::npos : plus - p);
+    if (stage.compare(0, 4, "4x4:") == 0) {
+      // 4x4 parameters come first; the inner method starts at the first non-numeric token
+      size_t q = 4;
+      bool explicit_block = false;
+      while (q < stage.size()) {
+        size_t colon = stage.find(':', q);
+        std::string tok = stage.substr(q, colon == std::string::npos ? std::string::npos : colon - q);
+        bool param = !tok.empty() && (isdigit((unsigned char)tok[0]) || (tok.size() > 1 && isdigit((unsigned char)tok[1])));
+        if (!param) break;
+        if (tok[0] == 'b' || isdigit((unsigned char)tok[0])) {
+          char *end = NULL;
+          strtol(tok.c_str(), &end, 10);
+          if (tok[0] == 'b' || (end && *end != ' ')) explicit_block = true;   // b<size> or bare <size>
+        }
+        if (colon == std::string::npos) { q = stage.size(); break; }
+        q = colon + 1;
+      }
+      std::string inner = stage.substr(q);
+      if (!explicit_block && inner.compare(0, 4, "lzma") == 0 && insize > 0) {
+        char buf[MAX_METHOD_STRLEN];
+        strncopy(buf, (char *)inner.c_str(), MAX_METHOD_STRLEN);
+        uint64 dict = (uint64)GetDictionary(buf);
+        if (dict >= 4 * mb) {
+          uint64 n0 = (insize + dict - 1) / dict;
+          uint64 slots = (uint64)std::max(1, threads / 2);
+          uint64 n = n0;
+          if (n0 < slots) {
+            uint64 extra = insize / (dict * 3 / 5);
+            n = std::max(n0, std::min(slots, extra));
+          }
+          if (n >= 2) {
+            uint64 chunk = (insize + n - 1) / n;
+            chunk = (chunk + mb - 1) / mb * mb;
+            if (chunk < dict) {
+              char b[64];
+              snprintf(b, sizeof(b), "4x4:b%llum:", (unsigned long long)(chunk / mb));
+              stage = std::string(b) + stage.substr(4);
+            }
+          }
+        }
+      }
+    }
+    if (!out.empty() || p > 0) out += '+';
+    out += stage;
+    if (plus == std::string::npos) break;
+    p = plus + 1;
+  }
+  return out;
+}
+
+/* --- -nobitexact: concurrent compression of independent solid blocks ---
+ *
+ * In the default (bit-exact) mode, auto profiles (-m1..-m5, -mx) compress their solid blocks
+ * (one per data-type group: default, $text, $obj, $wav, $bmp, ...) strictly one after another.
+ * The groups use very different codecs: e.g. with -m5 the $text group runs a single-threaded
+ * dict+lzp+ppmd chain while the binary group runs 4x4:lzma. Running them back to back leaves
+ * most cores idle for a large part of the run.
+ *
+ * Here all blocks are compressed concurrently. Each compressed stream is byte-identical to the
+ * one produced sequentially, only the wall time changes. The first block streams straight into
+ * the archive; the other blocks are buffered (TempBlockWriter) and appended in archive order.
+ *
+ * Safety rules:
+ *  - a memory budget (3/4 of physical RAM) caps the sum of the estimated compression memory of
+ *    the running blocks (a block that alone exceeds the budget still runs, but alone);
+ *  - codecs that keep process-global state (DICT, MM/TTA) never run in two blocks at once.
+ */
+enum {
+  CB_TAG_DICT = 1,   // DICT keeps its dictionary in globals
+  CB_TAG_MM   = 2    // MM / TTA keep per-stream state in globals
+};
+
+static unsigned concurrent_block_tags(const std::string &chain) {
+  unsigned tags = 0;
+  std::string tok;
+  for (size_t i = 0; i <= chain.size(); i++) {
+    char c = i < chain.size() ? chain[i] : '+';
+    if (c == '+' || c == ':') {
+      if (tok == "dict") tags |= CB_TAG_DICT;
+      else if (tok == "mm" || tok == "tta") tags |= CB_TAG_MM;
+      tok.clear();
+    } else {
+      tok += c;
+    }
+  }
+  return tags;
+}
+
+static uint64 concurrent_block_mem(const std::string &chain) {
+  // Sum of the compression memory of every stage (stages of a chain run concurrently)
+  uint64 total = 0;
+  size_t p = 0;
+  while (p <= chain.size()) {
+    size_t plus = chain.find('+', p);
+    std::string part = chain.substr(p, plus == std::string::npos ? std::string::npos : plus - p);
+    if (!part.empty()) {
+      char buf[MAX_METHOD_STRLEN];
+      strncopy(buf, (char *)part.c_str(), MAX_METHOD_STRLEN);
+      MemSize m = GetCompressionMem(buf);
+      if (m > 0) total += (uint64)m;
+    }
+    if (plus == std::string::npos) break;
+    p = plus + 1;
+  }
+  return total;
+}
+
+struct ConcurrentBlockJob {
+  int             start;
+  int             count;
+  std::string     method;
+  uint64          weight;     // input bytes, used to start the biggest blocks first
+  uint64          mem;
+  unsigned        tags;
+  IArchiveWriter *writer;
+  TempBlockWriter temp;
+  BlockInfo       info;
+  bool            started;
+};
+
+struct ConcurrentBlockCtx {
+  std::vector<ConcurrentBlockJob*> order;   // jobs sorted by decreasing weight
+  ArcMutex    mutex;
+  ArcCond     cond;
+  uint64      mem_budget;
+  uint64      mem_in_use;
+  unsigned    tags_in_use;
+  int         running;
+  size_t      remaining;
+  const char *password;
+  const char *algorithm;
+  FileRec    *files;
+};
+
+static ARC_THREAD_CALL concurrent_block_worker(void *arg) {
+  ConcurrentBlockCtx *ctx = (ConcurrentBlockCtx *)arg;
+  ctx->mutex.lock();
+  for (;;) {
+    if (ctx->remaining == 0) break;
+    ConcurrentBlockJob *job = NULL;
+    for (size_t i = 0; i < ctx->order.size(); i++) {
+      ConcurrentBlockJob *j = ctx->order[i];
+      if (j->started) continue;
+      if (j->tags & ctx->tags_in_use) continue;
+      if (ctx->running > 0 && ctx->mem_in_use + j->mem > ctx->mem_budget) continue;
+      job = j;
+      break;
+    }
+    if (!job) {
+      ctx->cond.wait(ctx->mutex);
+      continue;
+    }
+    job->started = true;
+    ctx->remaining--;
+    ctx->running++;
+    ctx->mem_in_use += job->mem;
+    ctx->tags_in_use |= job->tags;
+    ctx->mutex.unlock();
+
+    job->info = compress_range(job->writer, job->method.c_str(), ctx->password, ctx->algorithm,
+                               ctx->files, job->start, job->count, true);
+
+    ctx->mutex.lock();
+    ctx->running--;
+    ctx->mem_in_use -= job->mem;
+    ctx->tags_in_use &= ~job->tags;
+    ctx->cond.broadcast();
+  }
+  ctx->mutex.unlock();
+  return ARC_THREAD_RET_VAL;
+}
+
+static bool concurrent_job_heavier(const ConcurrentBlockJob *a, const ConcurrentBlockJob *b) {
+  return a->weight > b->weight;
+}
+
+static void compress_blocks_concurrently(VolumeWriter *out, const std::vector<BlockTask> &tasks,
+                                         const std::string &default_method, const char *password,
+                                         const char *algorithm, FileRec *files, int threads,
+                                         std::vector<DataBlockRec> &data_blocks) {
+  std::vector<ConcurrentBlockJob*> jobs;
+  for (size_t i = 0; i < tasks.size(); i++) {
+    ConcurrentBlockJob *job = new ConcurrentBlockJob();
+    job->start   = tasks[i].start;
+    job->count   = tasks[i].count;
+    job->method  = tasks[i].method.empty() ? default_method : tasks[i].method;
+    job->weight  = 0;
+    for (int k = 0; k < job->count; k++) job->weight += files[job->start + k].size;
+    job->mem     = concurrent_block_mem(job->method);
+    job->tags    = concurrent_block_tags(job->method);
+    job->writer  = (i == 0) ? (IArchiveWriter *)out : (IArchiveWriter *)&job->temp;
+    job->started = false;
+    memset(&job->info, 0, sizeof(job->info));
+    jobs.push_back(job);
+  }
+
+  ConcurrentBlockCtx ctx;
+  ctx.order = jobs;
+  std::stable_sort(ctx.order.begin(), ctx.order.end(), concurrent_job_heavier);
+  uint64 phys = GetPhysicalMemory();
+  ctx.mem_budget  = phys ? phys / 4 * 3 : (uint64)-1;
+  ctx.mem_in_use  = 0;
+  ctx.tags_in_use = 0;
+  ctx.running     = 0;
+  ctx.remaining   = jobs.size();
+  ctx.password    = password;
+  ctx.algorithm   = algorithm;
+  ctx.files       = files;
+
+  // Each block may be multithreaded itself (4x4, grzip, MT match finder...), so the number of
+  // blocks in flight is bounded by the thread count, not by the number of groups.
+  int num_workers = (int)std::min((size_t)std::max(threads, 1), jobs.size());
+  std::vector<ArcThread> workers;
+  for (int w = 0; w < num_workers; w++)
+    workers.push_back(arc_spawn_thread((ArcThreadFunc)concurrent_block_worker, &ctx));
+  for (int w = 0; w < num_workers; w++)
+    arc_wait_thread(workers[w]);
+
+  for (size_t i = 0; i < jobs.size(); i++) {
+    ConcurrentBlockJob *job = jobs[i];
+    DataBlockRec rec;
+    rec.start = job->start;
+    rec.count = job->count;
+    rec.info  = job->info;
+    if (i > 0) {
+      FILESIZE block_start_pos = out->tell();
+      CHECK(job->temp.copy_to(out), (s, "ERROR: writing block %d to archive failed", (int)i));
+      rec.info.pos = block_start_pos;
+    }
+    data_blocks.push_back(rec);
+    delete job;
+  }
 }
 
 static bool write_archive(const std::string &arcname, uint64 vol_size,
@@ -2955,6 +3265,15 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
   FileRec *files_ptr = files.empty() ? NULL : &files[0];
   int threads = GetCompressionThreads();
 
+  if (g_opt_nobitexact && threads >= 8) {
+    for (size_t i = 0; i < tasks.size(); i++) {
+      uint64 insize = 0;
+      for (int k = 0; k < tasks[i].count; k++) insize += files[tasks[i].start + k].size;
+      const std::string mth = tasks[i].method.empty() ? default_method : tasks[i].method;
+      tasks[i].method = nbx_balance_4x4_lzma(mth, insize, threads);
+    }
+  }
+
   bool has_4x4 = false;
   for (size_t i = 0; i < tasks.size(); i++) {
     const std::string &mth = tasks[i].method.empty() ? default_method : tasks[i].method;
@@ -2964,7 +3283,9 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
     }
   }
 
-  if (use_auto && threads > 1 && tasks.size() > 1) {
+  if (g_opt_nobitexact && threads > 1 && tasks.size() > 1) {
+    compress_blocks_concurrently(&out, tasks, default_method, password, algorithm, files_ptr, threads, data_blocks);
+  } else if (use_auto && threads > 1 && tasks.size() > 1) {
     compress_groups_parallel(out, tasks, default_method, password, algorithm, files_ptr, threads,
                              limit_comp_mem, data_blocks);
   } else if (threads <= 1 || tasks.size() <= 1 || has_4x4 || use_auto) {
@@ -3556,6 +3877,12 @@ int main(int argc, char **argv) {
         solid_block_size = 0;
         solid_block_files = 0;
       }
+      else if (strequ(a, "--solid") || strequ(a, "-solid") || strequ(a, "-s+")) {
+        solid = 1;
+        solid_block_size = 0;
+        solid_block_files = 0;
+        g_opt_solid_continuous = true;
+      }
       else if (strequ(a, "-s-")) {
         solid = 0;
         solid_block_size = 0;
@@ -3757,6 +4084,8 @@ int main(int argc, char **argv) {
 
   int num_threads = (custom_threads > 0) ? custom_threads : GetProcessorsCount();
   SetCompressionThreads(num_threads);
+  // Speed-oriented encoder paths in the compression library are enabled only in -nobitexact mode
+  nobitexact_speed_mode = g_opt_nobitexact ? 1 : 0;
   method = method_str.c_str();
 
   if (!g_quiet && (cmd == 'a' || cmd == 'u' || cmd == 'f' || cmd == 'm')) {

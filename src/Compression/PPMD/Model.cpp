@@ -17,7 +17,7 @@ enum { UP_FREQ=5, INT_BITS=7, PERIOD_BITS=7, TOT_BITS=INT_BITS+PERIOD_BITS,
     INTERVAL=1 << INT_BITS, BIN_SCALE=1 << TOT_BITS, MAX_FREQ=124, O_BOUND=9 };
 
 #pragma pack(1)
-static struct SEE2_CONTEXT { // SEE-contexts for PPM-contexts with masked symbols
+struct SEE2_CONTEXT { // SEE-contexts for PPM-contexts with masked symbols
     WORD Summ;
     BYTE Shift, Count;
     void init(UINT InitVal) { Summ=InitVal << (Shift=PERIOD_BITS-4); Count=7; }
@@ -30,8 +30,9 @@ static struct SEE2_CONTEXT { // SEE-contexts for PPM-contexts with masked symbol
             Summ += Summ;                   Count=3 << Shift++;
         }
     }
-} _PACK_ATTR SEE2Cont[24][32], DummySEE2Cont;
-static struct PPM_CONTEXT {                 // Notes:
+} _PACK_ATTR;
+static PPMD_TLS SEE2_CONTEXT SEE2Cont[24][32], DummySEE2Cont;
+struct PPM_CONTEXT {                 // Notes:
     BYTE NumStats, Flags;                   // 1. NumStats & NumMasked contain
     WORD SummFreq;                          //  number of symbols minus 1
     struct STATE {                          // 2. sizeof(WORD) > sizeof(BYTE)
@@ -54,17 +55,18 @@ static struct PPM_CONTEXT {                 // Notes:
     PPM_CONTEXT*          cutOff(int Order);
     PPM_CONTEXT*  removeBinConts(int Order);
     STATE& oneState() const { return (STATE&) SummFreq; }
-} _PACK_ATTR* MaxContext;
+} _PACK_ATTR;
+static PPMD_TLS PPM_CONTEXT* MaxContext;
 #pragma pack()
 typedef char ppmd_state_size_check[sizeof(PPM_CONTEXT::STATE)==6 ? 1 : -1];
 typedef char ppmd_ctx_size_check[sizeof(PPM_CONTEXT)==12 ? 1 : -1];
 
 static BYTE NS2BSIndx[256], QTable[260];    // constants
-static PPM_CONTEXT::STATE* FoundState;      // found next state transition
-static int  InitEsc, OrderFall, RunLength, InitRL, MaxOrder;
-static BYTE CharMask[256], NumMasked, PrevSuccess, EscCount, PrintCount;
-static WORD BinSumm[25][64];                // binary SEE-contexts
-static MR_METHOD MRMethod;
+static PPMD_TLS PPM_CONTEXT::STATE* FoundState;      // found next state transition
+static PPMD_TLS int  InitEsc, OrderFall, RunLength, InitRL, MaxOrder;
+static PPMD_TLS BYTE CharMask[256], NumMasked, PrevSuccess, EscCount, PrintCount;
+static PPMD_TLS WORD BinSumm[25][64];                // binary SEE-contexts
+static PPMD_TLS MR_METHOD MRMethod;
 
 inline void SWAP(PPM_CONTEXT::STATE& s1,PPM_CONTEXT::STATE& s2)
 {
@@ -99,6 +101,8 @@ inline PPMD_STARTUP::PPMD_STARTUP()         // constants initialization
 static void _STDCALL StartModelRare(int _MaxOrder,MR_METHOD _MRMethod)
 {
     UINT i, k, m;
+    // DummySEE2Cont may live in thread-local storage: (re)initialize it in the model's own thread
+    (DWORD&) DummySEE2Cont=PPMdSignature;
     memset(CharMask,0,sizeof(CharMask));    EscCount=PrintCount=1;
     if (_MaxOrder < 2) {                    // we are in solid mode
         OrderFall=MaxOrder;

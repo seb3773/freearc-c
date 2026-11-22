@@ -293,6 +293,7 @@ struct Params
   CCriticalSection*   retcode_cs;     // Ensure single-threaded access to retcode
   CSemaphore          read;
   CSemaphore          write;
+  struct CoalesceBuffer *coalesce;    // -nobitexact write coalescing buffer of this compression stage (or NULL)
 
   // Abort multi_decompress and set its exit code
   void SetExitCode (int code)
@@ -445,6 +446,28 @@ loop:
 
 static DWORD WINAPI multi_compress_thread (void *paramPtr);
 
+// -nobitexact: write coalescing between the stages of a compression chain.
+// The stage-to-stage transport is a rendezvous (producer and consumer threads are woken up for
+// every "write" call). Some filters emit many small writes (e.g. REP writes every literal run
+// separately), so the handoffs - two futex wake-ups each - dominate the cost of fast chains.
+// Small writes are therefore gathered into a per-stage buffer and handed over in large pieces.
+// The byte stream seen by the next stage is unchanged.
+const int MULTI_COMPRESS_COALESCE_SIZE = 1*mb;
+struct CoalesceBuffer
+{
+  BYTE *buf;
+  int   fill;
+};
+
+static int multi_compress_flush (Params *param, CoalesceBuffer *cb)
+{
+  if (cb->fill == 0)  return 0;
+  int n = cb->fill;
+  cb->fill = 0;
+  int ret = multi_decompress_callback ("write", cb->buf, n, param);
+  return ret<0? ret : 0;
+}
+
 int MultiCompress (char *_method, CALLBACK_FUNC *callback, void *auxdata)
 {
   if (strchr (_method, COMPRESSION_METHODS_DELIMITER) == NULL)
@@ -474,6 +497,7 @@ int MultiCompress (char *_method, CALLBACK_FUNC *callback, void *auxdata)
     param[i].done          = &done;
     param[i].retcode       = &retcode;
     param[i].retcode_cs    = &retcode_cs;
+    param[i].coalesce      = NULL;
     param[i].thread.Create (multi_compress_thread, &param[i]);
   }
 
@@ -485,13 +509,60 @@ int MultiCompress (char *_method, CALLBACK_FUNC *callback, void *auxdata)
   return retcode;
 }
 
+// The coalescing state belongs to the compression stage (Params), not to a thread: some codecs
+// write from several threads (e.g. 4x4 writes its stream header from its main thread and the
+// compressed chunks from its writer thread). With a thread-local buffer, writes coming from the
+// other thread bypassed the bytes still pending in the buffer and the stream was reordered
+// (corrupted archives whenever 4x4 was followed by another stage, e.g. with -p encryption).
+static int multi_compress_callback (const char *what, void *_buf, int size, void *paramPtr)
+{
+  Params *param = (Params*) paramPtr;
+  CoalesceBuffer *cb = param->coalesce;
+  if (cb  &&  strequ(what,"write")  &&  param->thread_num < param->threads_total-1)
+  {
+    if (size >= MULTI_COMPRESS_COALESCE_SIZE/2)
+    {
+      // Large write: flush pending bytes, then hand the caller's buffer over directly
+      int ret = multi_compress_flush (param, cb);
+      if (ret<0)  return ret;
+      return multi_decompress_callback (what, _buf, size, param);
+    }
+    if (cb->fill + size > MULTI_COMPRESS_COALESCE_SIZE)
+    {
+      int ret = multi_compress_flush (param, cb);
+      if (ret<0)  return ret;
+    }
+    memcpy (cb->buf + cb->fill, _buf, size);
+    cb->fill += size;
+    return size;
+  }
+  return multi_decompress_callback (what, _buf, size, param);
+}
+
 static DWORD WINAPI multi_compress_thread (void *paramPtr)
 {
   Params *param = (Params*) paramPtr;
   if (param->thread_num > 0)
     param->read.Lock(),
     param->read.Release();
-  int ret = Compress (param->method, multi_decompress_callback, param);
+  int ret;
+  if (nobitexact_speed_mode  &&  param->thread_num < param->threads_total-1)
+  {
+    CoalesceBuffer cb;
+    cb.buf  = (BYTE*) malloc (MULTI_COMPRESS_COALESCE_SIZE);
+    cb.fill = 0;
+    param->coalesce = cb.buf? &cb : NULL;
+    ret = Compress (param->method, multi_compress_callback, param);
+    param->coalesce = NULL;
+    if (ret>=0 && cb.buf)
+    {
+      int r = multi_compress_flush (param, &cb);
+      if (r<0 && r!=FREEARC_ERRCODE_NO_MORE_DATA_REQUIRED)  ret = r;
+    }
+    free (cb.buf);
+  }
+  else
+    ret = Compress (param->method, multi_decompress_callback, param);
   if (ret<0)
     param->SetExitCode (ret);
   if (param->thread_num > 0)
