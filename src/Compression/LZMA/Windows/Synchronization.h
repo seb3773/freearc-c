@@ -154,12 +154,20 @@ DWORD WINAPI WaitForMultipleObjects( DWORD count, const HANDLE *handles, BOOL wa
 namespace NWindows {
 namespace NSynchronization {
 
+// Every event/semaphore owns its mutex and condition variable. (The original p7zip emulation used a
+// single process-wide mutex + condition variable broadcast on every Set/Release: each signal woke up
+// every waiting thread of the process, e.g. the dozens of idle 4x4 workers, which then re-checked
+// their own object and went back to sleep. With multithreaded chains and concurrent blocks this
+// produced hundreds of thousands of futex calls per run and wasted a lot of CPU time.)
 struct CBaseHandle
 {
 	typedef enum { EVENT , SEMAPHORE } t_type;
 
-	CBaseHandle(t_type t) { type = t;  }
+	CBaseHandle(t_type t) { type = t;  ::pthread_mutex_init(&_mtx,0);  ::pthread_cond_init(&_cnd,0); }
+	~CBaseHandle()        { ::pthread_cond_destroy(&_cnd);  ::pthread_mutex_destroy(&_mtx); }
 
+	pthread_mutex_t _mtx;
+	pthread_cond_t  _cnd;
 	t_type type;
 	union
 	{
@@ -325,11 +333,7 @@ public:
     return true;
   }
   bool Release(LONG releaseCount = 1);
-  bool Lock(DWORD timeoutInterval = INFINITE)
-  {
-    const HANDLE handles[1] = { this };
-    return (::WaitForMultipleObjects (1, handles, FALSE, timeoutInterval) == WAIT_OBJECT_0);
-  }
+  bool Lock(DWORD timeoutInterval = INFINITE);
 };
 
 class CCriticalSectionLock
