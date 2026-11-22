@@ -286,6 +286,33 @@ The native C/C++ engine incorporates a multi-tier multithreading architecture an
 
 ---
 
+## Ratio Optimization Mode: `-nobitexact`
+
+The primary goal of this project is, of course, a faithful reimplementation of FreeArc in C, reproducing the exact behavior of the historical 0.67 binary, that is, producing archives that are bit-for-bit exact with it. This is done in order to preserve the format, and to have a "modern" implementation, faithful to the original and compilable on any current system. It also makes it possible to understand the mechanisms Bulat Ziganshin used back then to achieve such a compression ratio. That said, while working on this reimplementation, I noticed on several occasions that certain parameters could be "pushed" further, and others adjusted differently, to obtain a much better ratio, to the point that I sometimes had to "throttle" certain algorithms/search functions in order to match the exact behavior of the historical binary. Once bit-exactness was achieved, and various optimizations applied to improve performance (encoding time), I wondered how much better the FreeArc-c port could compress compared to the legacy version if it were no longer "constrained" by the bit-for-bit exact rule, while of course remaining 100% compatible with the specifications of the FreeArc format, meaning archives that decompress perfectly with the historical decoder under Windows. In short, what does the .arc format really "have under the hood", and how far can we go? The result is, on the face of it, more than interesting! I therefore decided to introduce a new argument (also taken into account in the `.ini` file): `-nobitexact` (alias: `--max-ratio`).
+
+If this argument is specified on the command line (for encoding only, of course), then FreeArc-c is no longer "limited" to bit-exactness with the legacy encoder, and "unleashes" the maximum possible power for the algorithms used, while also adding a few additional mechanisms upstream to maximize the ratio. As mentioned earlier, the archives produced this way, although smaller than those produced in bit-exact mode, are fully valid `.arc` archives that can be decoded by the legacy `unarc.exe` 0.67 (or any other decoder of the FreeArc 0.6x format).
+
+### Final Benchmark Results on Matt Mahoney 10 GB Corpus (79,431 files)
+
+| Compressor / Profile | Archive Size | Gain vs Legacy 0.67 | Difference vs 7-Zip Ultra | Encoding Time | Wine 0.67 Decompression |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **FreeArc 0.67 Legacy** (`-mx`) | 3,961,251,304 B (3.689 GiB) | Reference (0) | +308.57 MiB (larger) | ~85 min | All OK |
+| **7-Zip 26.02 Ultra** (`-mx=9`) | 3,652,683,873 B (3.402 GiB) | −308.57 MiB | Reference (0) | ~178 min | Incompatible (.7z reference) |
+| **FreeArc-c `-nobitexact`** (`-mx`) | **3,602,764,507 B (3.355 GiB)** | **−358.49 MiB (−9.05%)** | **−49.92 MiB (MORE COMPACT!)** | **21.85 min** | **All OK** |
+
+* **Speed**: Complete encoding of the 10 GB dataset (79,431 files) took only **21.85 minutes** (compared to ~85 min for historical FreeArc 0.67 and ~178 min for 7-Zip Ultra), measured on an **11th Gen Intel® Core™ i3-1115G4 @ 3.00GHz (2 cores / 4 threads)**.
+* **100% Backward Compatible (Strict Invariant)**: The final 3.60 GB archive was fully verified and extracted with zero errors (`All OK`) under Wine using the original historical 32-bit `unarc.exe 0.67` binary.
+
+### Key Enhancements in `-nobitexact` Mode
+
+* **Deep LZMA Match Finder Parameterization**: Extends search cycles (`-mc=256..1000` vs 32 default) and fast bytes / nice match length (`-fb=128..273` vs 64), discovering deep long-distance match chains and significantly increasing dictionary match density.
+* **Intelligent Solid Stem Grouping**: Prioritizes clustering files by common filename stem and subpath rather than pure alphabetical extension ordering, bringing related files (e.g. `.cpp`/`.h`, `.html`/`.js`) adjacent in the solid stream to maximize cross-file LZ redundancy.
+* **High-Order Text Routing**: Routes textual data in `-mx` to deep PPMd (Order 16, up to 256 MB memory) paired with LZP and Dictionary pre-filters, substantially outperforming LZMA on source code, text files, and logs.
+* **Concurrent Multi-Block Compression**: Scales compression across available CPU threads without fragmenting solid streams, drastically cutting encoding time while maintaining byte-level decompression compatibility.
+* **Incompressible Data Bypass**: Automatically skips futile compression passes on pre-compressed data (`.arc`, `.uha`, `.gz`, `.xz`, `.7z`, `.zip`, `.zst`, etc.), freeing CPU cycles for compressible payload.
+
+---
+
 ## Project Structure
 
 ```
