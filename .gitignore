@@ -16,3 +16,4 @@ src/unarc-arm64
 bench/work/
 bench/bin/
 historical_bin/
+/*.arc

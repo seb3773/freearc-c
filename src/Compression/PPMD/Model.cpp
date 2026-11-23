@@ -208,7 +208,9 @@ static void RestoreModelRare(PPM_CONTEXT* pc1,PPM_CONTEXT* MinContext,
 {
     PPM_CONTEXT* pc;
     PPM_CONTEXT::STATE* p;
-    for (pc=MaxContext, pText=HeapStart;pc != pc1;pc=pc->Suffix)
+    ppmd_note_ptext();
+    pText=HeapStart;
+    for (pc=MaxContext;pc != pc1;pc=pc->Suffix)
             if (--(pc->NumStats) == 0) {
                 pc->Flags=(pc->Flags & 0x10)+0x08*(pc->Stats->Symbol >= 0x40);
                 p=pc->Stats;                StateCpy(pc->oneState(),*p);
@@ -252,6 +254,7 @@ static PPM_CONTEXT* _FASTCALL ReduceOrder(PPM_CONTEXT::STATE* p,PPM_CONTEXT* pc)
         if ( !pc->Suffix ) {
             if (MRMethod > MRM_FREEZE) {
 FROZEN:         do { (*--pps)->Successor = pc; } while (pps != ps);
+                ppmd_note_ptext();
                 pText=HeapStart+1;          OrderFall=1;
             }
             return pc;
@@ -276,7 +279,7 @@ LOOP_ENTRY:
         FoundState=p1;
     }
     if (OrderFall == 1 && pc1 == MaxContext) {
-        FoundState->Successor=p->Successor; pText--;
+        FoundState->Successor=p->Successor; ppmd_note_ptext(); pText--;
     }
     return p->Successor;
 }
@@ -393,6 +396,7 @@ static inline void UpdateModel(PPM_CONTEXT* MinContext)
         MaxContext=FoundState->Successor;   return;
     }
     *pText++ = FSymbol;                     Successor = (PPM_CONTEXT*) pText;
+    ppmd_note_ptext();
     if (pText >= UnitsStart)                goto RESTART_MODEL;
     if ( FSuccessor ) {
         if ((BYTE*) FSuccessor < UnitsStart)
@@ -401,9 +405,9 @@ static inline void UpdateModel(PPM_CONTEXT* MinContext)
                 FSuccessor=ReduceOrder(p,MinContext);
     if ( !FSuccessor )                      goto RESTART_MODEL;
     if ( !--OrderFall ) {
-        Successor=FSuccessor;               pText -= (MaxContext != MinContext);
+        Successor=FSuccessor;               ppmd_note_ptext(); pText -= (MaxContext != MinContext);
     } else if (MRMethod > MRM_FREEZE) {
-        Successor=FSuccessor;               pText=HeapStart;
+        Successor=FSuccessor;               ppmd_note_ptext(); pText=HeapStart;
         OrderFall=0;
     }
     s0=MinContext->SummFreq-(ns=MinContext->NumStats)-FFreq;
@@ -513,6 +517,8 @@ inline void PPM_CONTEXT::encodeSymbol1(int symbol)
 }
 inline void PPM_CONTEXT::decodeSymbol1()
 {
+    if (NumStats) PrefetchData(Stats.get());
+    if (Suffix)   PrefetchData(Suffix.get());
     UINT i, count, HiCnt=Stats->Freq;
     STATE* p=Stats;                         SubRange.scale=SummFreq;
     if ((count=ariGetCurrentCount()) < HiCnt) {
@@ -588,6 +594,7 @@ inline void PPM_CONTEXT::encodeSymbol2(int symbol)
 }
 inline void PPM_CONTEXT::decodeSymbol2()
 {
+    if (Suffix) PrefetchData(Suffix.get());
     // PERF (bit-exact): branchless masked scans instead of the original pointer-array build.
     //  - Pass 1: total frequency of NON-masked states (mask = CharMask[s] == EscCount).
     //  - Found case: pass 2 accumulates the same masked sum until it exceeds `count`;
@@ -677,15 +684,20 @@ void _STDCALL DecodeFile(_PPMD_FILE* DecodedFile,_PPMD_FILE* EncodedFile,
         while ( !FoundState ) {
             ARI_DEC_NORMALIZE(EncodedFile);
             do {
-                OrderFall++;                MinContext=MinContext->Suffix;
+                OrderFall++;
+                if (MinContext->Suffix)     PrefetchData(MinContext->Suffix.get());
+                MinContext=MinContext->Suffix;
                 if ( !MinContext )          goto STOP_DECODING;
             } while (MinContext->NumStats == NumMasked);
             MinContext->decodeSymbol2();    ariRemoveSubrange();
         }
         _PPMD_D_PUTC(FoundState->Symbol,DecodedFile);
-        if (!OrderFall && (BYTE*) FoundState->Successor.get() >= UnitsStart)
-                PrefetchData(MaxContext=FoundState->Successor);
-        else {
+        if (!OrderFall && (BYTE*) FoundState->Successor.get() >= UnitsStart) {
+                MaxContext=FoundState->Successor;
+                PrefetchData(MaxContext);
+                if (MaxContext->NumStats)   PrefetchData(MaxContext->Stats.get());
+                if (MaxContext->Suffix)     PrefetchData(MaxContext->Suffix.get());
+        } else {
             UpdateModel(MinContext);        PrefetchData(MaxContext);
             if (EscCount == 0)              ClearMask(EncodedFile,DecodedFile);
         }

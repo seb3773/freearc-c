@@ -68,12 +68,38 @@ static PPMD_TLS UINT HeapCapacity=0;
 static PPMD_TLS int HeapViaMmap=0;
 #endif
 static PPMD_TLS BYTE * pText, * UnitsStart, * LoUnit, * HiUnit;
+/* Bytes actually written by the current arena, across model restarts.
+   Low* is the text area and the units grown from UnitsStart.
+   High* is the contexts grown down from the top.
+   The virgin gap between them stays zero and is not rewritten. */
+static PPMD_TLS BYTE *LowLo, *LowHi, *HighLo, *HighHi;
 
-inline void PrefetchData(void* Addr)
+inline void PrefetchData(const void* Addr)
 {
-#if defined(_USE_PREFETCHING)
-    BYTE PrefetchByte = *(volatile BYTE*) Addr;
-#endif /* defined(_USE_PREFETCHING) */
+#if defined(__GNUC__) || defined(__clang__)
+    __builtin_prefetch(Addr, 0, 3);
+#elif defined(_MSC_VER)
+    _mm_prefetch((const char*)Addr, _MM_HINT_T0);
+#endif
+}
+static inline void ppmd_note_low(const void *p, size_t n)
+{
+    if (!p || !n) return;
+    BYTE *b = (BYTE*)p, *e = b + n;
+    if (!LowLo || b < LowLo) LowLo = b;
+    if (e > LowHi)           LowHi = e;
+}
+static inline void ppmd_note_high(const void *p, size_t n)
+{
+    if (!p || !n) return;
+    BYTE *b = (BYTE*)p, *e = b + n;
+    if (!HighLo || b < HighLo) HighLo = b;
+    if (e > HighHi)            HighHi = e;
+}
+static inline void ppmd_note_ptext()
+{
+    if (HeapStart && pText > HeapStart)
+        ppmd_note_low(HeapStart, (size_t)(pText - HeapStart));
 }
 inline void BLK_NODE::insert(void* pv,int NU) {
     MEM_BLK* p=(MEM_BLK*) pv;               link(p);
@@ -108,6 +134,7 @@ void _STDCALL StopSubAllocator() {
             BigFree(HeapStart);
         HeapCapacity=0;                     SubAllocatorSize=0;
         HeapStart=NULL;
+        LowLo=LowHi=HighLo=HighHi=NULL;
 #ifdef PPMD_HEAP_MMAP
         HeapViaMmap=0;
 #endif
@@ -123,22 +150,37 @@ struct PPMDThreadArenaGuard {
 };
 static thread_local PPMDThreadArenaGuard ppmd_thread_arena_guard;
 
-/* A reused arena still holds Stamp=~0 markers from the previous block. A fresh
-   OS mapping is zero-filled, and mid-stream MRM_RESTART (InitSubAllocator only)
-   depends on leftovers from the current block, so the wipe is done here — once
-   per block — and not inside InitSubAllocator. The pages stay resident, which
-   keeps the following random model walk off the fault path. */
-static void WipeReusedArena(UINT t)
+/* Zero only the ranges the previous block actually wrote. A fresh mapping is
+   already zero, and a mid-stream MRM_RESTART must keep the leftovers of the
+   current block, so this runs once per block and not from InitSubAllocator.
+   Watermarks only grow: a later smaller block still clears the older footprint. */
+static void ZeroSpan(BYTE *b, BYTE *e)
 {
-    memset(HeapStart, 0, t);
+    if (!HeapStart || !b || !e || e <= b) return;
+    BYTE *lim = HeapStart + HeapCapacity;
+    if (b < HeapStart) b = HeapStart;
+    if (e > lim)       e = lim;
+    if (e > b)         memset(b, 0, (size_t)(e - b));
+}
+static void WipeReusedArena()
+{
+    ppmd_note_ptext();
+    if (LowHi && HighLo && HighLo <= LowHi) {
+        BYTE *b = (LowLo && LowLo < HighLo) ? LowLo : HighLo;
+        BYTE *e = (HighHi && HighHi > LowHi) ? HighHi : LowHi;
+        ZeroSpan(b, e);
+    } else {
+        ZeroSpan(LowLo, LowHi);
+        ZeroSpan(HighLo, HighHi);
+    }
 }
 
 BOOL _STDCALL StartSubAllocator(UINT t)
 {
     (void) ppmd_thread_arena_guard.alive;
     if (HeapStart != NULL && t != 0 && HeapCapacity >= t) {
+        WipeReusedArena();
         SubAllocatorSize = t;
-        WipeReusedArena(t);
         return TRUE;
     }
     StopSubAllocator();
@@ -163,10 +205,17 @@ BOOL _STDCALL StartSubAllocator(UINT t)
     if (HeapStart == NULL)                  return FALSE;
     if (!os_zeroed && t)                    memset(HeapStart, 0, t);
     HeapCapacity=t;                         SubAllocatorSize=t;
+    LowLo=LowHi=HighLo=HighHi=NULL;
+#if defined(PPMD_HEAP_MMAP) && defined(MADV_HUGEPAGE)
+    /* 256 MB in 4 KB pages overflows the L2 TLB. 2 MB pages bring it down to 128 entries. */
+    if (HeapViaMmap)
+        ::madvise(HeapStart, HeapCapacity, MADV_HUGEPAGE);
+#endif
     return TRUE;
 }
 static inline void InitSubAllocator()
 {
+    ppmd_note_ptext();
     memset(BList,0,sizeof(BList));
     HiUnit=(pText=HeapStart)+SubAllocatorSize;
     UINT Diff=UNIT_SIZE*(SubAllocatorSize/8/UNIT_SIZE*7);
@@ -176,7 +225,10 @@ static void GlueFreeBlocks()
 {
     UINT i, k, sz;
     MEM_BLK s0, * p, * p0, * p1;
-    if (LoUnit != HiUnit)                   *LoUnit=0;
+    if (LoUnit != HiUnit) {
+        ppmd_note_low(LoUnit, 1);
+        *LoUnit=0;
+    }
     for (i=0, (p0=&s0)->next=(BLK_NODE*)NULL;i < N_INDEXES;i++)
             while ( BList[i].avail() ) {
                 p=(MEM_BLK*) BList[i].remove();
@@ -208,7 +260,12 @@ static void* _STDCALL AllocUnitsRare(UINT indx)
     do {
         if (++i == N_INDEXES) {
             GlueCount--;                    i=U2B(Indx2Units[indx]);
-            return (UnitsStart-pText > i)?(UnitsStart -= i):(NULL);
+            if (UnitsStart-pText > i) {
+                UnitsStart -= i;
+                ppmd_note_low(UnitsStart, i);
+                return UnitsStart;
+            }
+            return NULL;
         }
     } while ( !BList[i].avail() );
     void* RetVal=BList[i].remove();         SplitBlock(RetVal,i,indx);
@@ -219,12 +276,19 @@ inline void* AllocUnits(UINT NU)
     UINT indx=Units2Indx[NU-1];
     if ( BList[indx].avail() )              return BList[indx].remove();
     void* RetVal=LoUnit;                    LoUnit += U2B(Indx2Units[indx]);
-    if (LoUnit <= HiUnit)                   return RetVal;
+    if (LoUnit <= HiUnit) {
+        ppmd_note_low(RetVal, (size_t)(LoUnit - (BYTE*)RetVal));
+        return RetVal;
+    }
     LoUnit -= U2B(Indx2Units[indx]);        return AllocUnitsRare(indx);
 }
 inline void* AllocContext()
 {
-    if (HiUnit != LoUnit)                   return (HiUnit -= UNIT_SIZE);
+    if (HiUnit != LoUnit) {
+        HiUnit -= UNIT_SIZE;
+        ppmd_note_high(HiUnit, UNIT_SIZE);
+        return HiUnit;
+    }
     else if ( BList->avail() )              return BList->remove();
     else                                    return AllocUnitsRare(0);
 }

@@ -93,13 +93,34 @@ inline void ariShiftEncodeSymbol(UINT SHIFT)
     for (UINT i=0;i < 4;i++)                                                \
             code=(code << 8) | _PPMD_D_GETC(stream);                        \
 }
-#define ARI_DEC_NORMALIZE(stream) {                                         \
-    while ((low ^ (low+range)) < TOP || range < BOT &&                      \
-            ((range= -low & (BOT-1)),1)) {                                  \
-        code=(code << 8) | _PPMD_D_GETC(stream);                            \
-        range <<= 8;                        low <<= 8;                      \
-    }                                                                       \
+/* Same bytes as the original while-loop. The common path (range already above
+   BOT and the high byte stable) returns immediately. When a shift is needed and
+   range cannot overflow 32 bits, the shift count comes from the leading zeros
+   of (low XOR low+range) instead of re-testing the condition each byte. */
+inline void ariDecNormalize(_PPMD_FILE *stream)
+{
+    if (range >= (DWORD)BOT && range < (DWORD)TOP) {
+        DWORD diff = low ^ (low + range);
+        if (diff >= (DWORD)TOP)
+            return;
+        if (diff != 0) {
+            unsigned k = (unsigned)__builtin_clz(diff) >> 3;
+            if (k > 0 && range < (1u << (32 - 8*k))) {
+                do {
+                    code=(code << 8) | _PPMD_D_GETC(stream);
+                    range <<= 8;            low <<= 8;
+                } while (--k);
+                return;
+            }
+        }
+    }
+    while ((low ^ (low+range)) < TOP || range < BOT &&
+            ((range= -low & (BOT-1)),1)) {
+        code=(code << 8) | _PPMD_D_GETC(stream);
+        range <<= 8;                        low <<= 8;
+    }
 }
+#define ARI_DEC_NORMALIZE(stream) ariDecNormalize(stream)
 inline UINT ariGetCurrentCount() {
     return (code-low)/(range /= SubRange.scale);
 }
