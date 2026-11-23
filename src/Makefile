@@ -14,6 +14,24 @@ ifeq ($(LZMA_ASM),1)
   LZMA_ASM_DEC = $(DEC_OBJDIR)/LzmaDecOpt.o
   LZMA_ASM_ENC = $(ENC_OBJDIR)/LzmaDecOpt.o
 endif
+# x86-64 assembly match finders for the ENCODER (bit-exact LZMA BT/HT match finder in
+# LzFind.c and Tornado match length kernels): see Compression/LZMA2/asm/LzFind_x86_64.S,
+# Compression/Tornado/asm/tor_match_x86_64.S and Compression/asm/. Output is bit-identical
+# to the C code. Enabled by default on x86-64 hosts (and always for the Win64 cross build);
+# MF_ASM=0 / MF_ASM_WIN64=0 force the portable C code. ARM64 never uses it.
+MF_ASM ?= $(if $(filter x86_64 amd64,$(shell uname -m)),1,0)
+MF_ASM_WIN64 ?= 1
+MF_ASM_INC = Compression/asm/fa_x86_64.h
+MF_ASM_NAMES = fa_cpu_x86_64.o LzFind_x86_64.o tor_match_x86_64.o
+ifeq ($(MF_ASM),1)
+  MF_ASM_DEFS = -DFA_MF_ASM
+  MF_ASM_ENC  = $(addprefix $(ENC_OBJDIR)/,$(MF_ASM_NAMES))
+endif
+ifeq ($(MF_ASM_WIN64),1)
+  MF_ASM_WIN64_DEFS = -DFA_MF_ASM
+  MF_ASM_ENC_WIN64  = $(addprefix $(ENC_WIN64_OBJDIR)/,$(MF_ASM_NAMES))
+endif
+LZMA_ENC_DEPS = Compression/LZMA2/C/LzFind.c Compression/LZMA2/C/LzFind.h Compression/LZMA2/C/LzmaEnc.c
 FASTDEC_DEPS = $(FASTDEC_SRC) Compression/LZMA2/sdk25/LzmaDec.c Compression/LZMA2/sdk25/LzmaDec.h Compression/LZMA2/sdk25/lzma_fastdec.h
 # LZMA SDK 25.01 encoder (unity build, symbols renamed), used by the archiver in -nobitexact mode
 FASTENC_SRC = Compression/LZMA2/sdk25/lzma_fastenc.c
@@ -103,7 +121,7 @@ SFX_LINKOBJ = $(DEC_OBJDIR)/unarc_sfx.o $(DEC_OBJDIR)/Environment.o $(DEC_OBJDIR
               $(DEC_OBJDIR)/C_GRZip.o $(DEC_OBJDIR)/C_4x4.o $(DEC_OBJDIR)/C_Encryption.o
 
 ENC_LINKOBJ = $(ENC_OBJDIR)/arc.o $(ENC_OBJDIR)/Environment.o $(ENC_OBJDIR)/Common.o \
-              $(ENC_OBJDIR)/CompressionLibrary.o $(ENC_OBJDIR)/C_LZMA.o $(ENC_OBJDIR)/lzma_fastdec.o $(ENC_OBJDIR)/lzma_fastenc.o $(LZMA_ASM_ENC) $(ENC_OBJDIR)/C_BCJ.o \
+              $(ENC_OBJDIR)/CompressionLibrary.o $(ENC_OBJDIR)/C_LZMA.o $(ENC_OBJDIR)/lzma_fastdec.o $(ENC_OBJDIR)/lzma_fastenc.o $(LZMA_ASM_ENC) $(MF_ASM_ENC) $(ENC_OBJDIR)/C_BCJ.o \
               $(ENC_OBJDIR)/C_Dict.o $(ENC_OBJDIR)/C_Delta.o $(ENC_OBJDIR)/C_REP.o \
               $(ENC_OBJDIR)/C_LZP.o $(ENC_OBJDIR)/C_PPMD.o $(ENC_OBJDIR)/C_External.o \
               $(ENC_OBJDIR)/C_MM.o $(ENC_OBJDIR)/C_TTA.o $(ENC_OBJDIR)/C_Tornado.o \
@@ -117,7 +135,7 @@ DEC_WIN64_LINKOBJ = $(DEC_WIN64_OBJDIR)/unarc.o $(DEC_WIN64_OBJDIR)/Environment.
                     $(DEC_WIN64_OBJDIR)/C_GRZip.o $(DEC_WIN64_OBJDIR)/C_4x4.o $(DEC_WIN64_OBJDIR)/C_Encryption.o
 
 ENC_WIN64_LINKOBJ = $(ENC_WIN64_OBJDIR)/arc.o $(ENC_WIN64_OBJDIR)/Environment.o $(ENC_WIN64_OBJDIR)/Common.o \
-                    $(ENC_WIN64_OBJDIR)/CompressionLibrary.o $(ENC_WIN64_OBJDIR)/C_LZMA.o $(ENC_WIN64_OBJDIR)/lzma_fastdec.o $(ENC_WIN64_OBJDIR)/lzma_fastenc.o $(ENC_WIN64_OBJDIR)/LzmaDecOpt.o $(ENC_WIN64_OBJDIR)/C_BCJ.o \
+                    $(ENC_WIN64_OBJDIR)/CompressionLibrary.o $(ENC_WIN64_OBJDIR)/C_LZMA.o $(ENC_WIN64_OBJDIR)/lzma_fastdec.o $(ENC_WIN64_OBJDIR)/lzma_fastenc.o $(ENC_WIN64_OBJDIR)/LzmaDecOpt.o $(MF_ASM_ENC_WIN64) $(ENC_WIN64_OBJDIR)/C_BCJ.o \
                     $(ENC_WIN64_OBJDIR)/C_Dict.o $(ENC_WIN64_OBJDIR)/C_Delta.o $(ENC_WIN64_OBJDIR)/C_REP.o \
                     $(ENC_WIN64_OBJDIR)/C_LZP.o $(ENC_WIN64_OBJDIR)/C_PPMD.o $(ENC_WIN64_OBJDIR)/C_External.o \
                     $(ENC_WIN64_OBJDIR)/C_MM.o $(ENC_WIN64_OBJDIR)/C_TTA.o $(ENC_WIN64_OBJDIR)/C_Tornado.o \
@@ -309,8 +327,8 @@ $(ENC_OBJDIR)/C_External.o: Compression/External/C_External.cpp Compression/Exte
 $(ENC_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h Compression/LZMA2/C/Bra86.c Compression/LZMA2/C/Bra.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
 
-$(ENC_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(HEADERS) | $(ENC_OBJDIR)
-	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
+$(ENC_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(LZMA_ENC_DEPS) $(HEADERS) | $(ENC_OBJDIR)
+	$(CXX) -c $(ENC_CFLAGS) $(MF_ASM_DEFS) -o $@ $<
 
 $(ENC_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h Compression/Dict/dict.cpp $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
@@ -334,7 +352,7 @@ $(ENC_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h Compressi
 	$(CXX) -c $(ENC_CFLAGS_NO_SA) -fwrapv -fno-lto -o $@ $<
 
 $(ENC_OBJDIR)/C_Tornado.o: Compression/Tornado/C_Tornado.cpp Compression/Tornado/C_Tornado.h Compression/Tornado/Tornado.cpp Compression/Tornado/MatchFinder.cpp $(HEADERS) | $(ENC_OBJDIR)
-	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
+	$(CXX) -c $(ENC_CFLAGS) $(MF_ASM_DEFS) -o $@ $<
 
 $(ENC_OBJDIR)/C_GRZip.o: Compression/GRZip/C_GRZip.cpp Compression/GRZip/C_GRZip.h $(HEADERS) | $(ENC_OBJDIR)
 	$(CXX) -c $(ENC_CFLAGS) -o $@ $<
@@ -437,8 +455,8 @@ $(ENC_WIN64_OBJDIR)/C_External.o: Compression/External/C_External.cpp Compressio
 $(ENC_WIN64_OBJDIR)/C_BCJ.o: Compression/LZMA2/C_BCJ.cpp Compression/LZMA2/C_BCJ.h Compression/LZMA2/C/Bra86.c Compression/LZMA2/C/Bra.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
 
-$(ENC_WIN64_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
-	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -DFREEARC_NO_MF_MT -o $@ $<
+$(ENC_WIN64_OBJDIR)/C_LZMA.o: Compression/LZMA2/C_LZMA.cpp Compression/LZMA2/C_LZMA.h $(LZMA_ENC_DEPS) $(HEADERS) | $(ENC_WIN64_OBJDIR)
+	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) $(MF_ASM_WIN64_DEFS) -DFREEARC_NO_MF_MT -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/C_Dict.o: Compression/Dict/C_Dict.cpp Compression/Dict/C_Dict.h Compression/Dict/dict.cpp $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
@@ -462,7 +480,7 @@ $(ENC_WIN64_OBJDIR)/C_TTA.o: Compression/MM/C_TTA.cpp Compression/MM/C_TTA.h Com
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS_NO_SA) -fwrapv -fno-lto -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/C_Tornado.o: Compression/Tornado/C_Tornado.cpp Compression/Tornado/C_Tornado.h Compression/Tornado/Tornado.cpp Compression/Tornado/MatchFinder.cpp $(HEADERS) | $(ENC_WIN64_OBJDIR)
-	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
+	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) $(MF_ASM_WIN64_DEFS) -o $@ $<
 
 $(ENC_WIN64_OBJDIR)/C_GRZip.o: Compression/GRZip/C_GRZip.cpp Compression/GRZip/C_GRZip.h $(HEADERS) | $(ENC_WIN64_OBJDIR)
 	$(CXX_WIN64) -c $(WIN64_ENC_CFLAGS) -o $@ $<
@@ -490,6 +508,19 @@ $(ENC_WIN64_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(ENC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -w -O3 -DZ7_LZMA_DEC_OPT -o $@ $(FASTDEC_SRC)
 $(ENC_WIN64_OBJDIR)/lzma_fastenc.o: $(FASTENC_DEPS) | $(ENC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -w -O3 -o $@ $(FASTENC_SRC)
+# --- x86-64 assembly match finders (encoder only) ---
+$(ENC_OBJDIR)/fa_cpu_x86_64.o: Compression/asm/fa_cpu_x86_64.S $(MF_ASM_INC) | $(ENC_OBJDIR)
+	$(CC) -c -o $@ $<
+$(ENC_OBJDIR)/LzFind_x86_64.o: Compression/LZMA2/asm/LzFind_x86_64.S $(MF_ASM_INC) | $(ENC_OBJDIR)
+	$(CC) -c -o $@ $<
+$(ENC_OBJDIR)/tor_match_x86_64.o: Compression/Tornado/asm/tor_match_x86_64.S $(MF_ASM_INC) | $(ENC_OBJDIR)
+	$(CC) -c -o $@ $<
+$(ENC_WIN64_OBJDIR)/fa_cpu_x86_64.o: Compression/asm/fa_cpu_x86_64.S $(MF_ASM_INC) | $(ENC_WIN64_OBJDIR)
+	$(CC_WIN64) -c -o $@ $<
+$(ENC_WIN64_OBJDIR)/LzFind_x86_64.o: Compression/LZMA2/asm/LzFind_x86_64.S $(MF_ASM_INC) | $(ENC_WIN64_OBJDIR)
+	$(CC_WIN64) -c -o $@ $<
+$(ENC_WIN64_OBJDIR)/tor_match_x86_64.o: Compression/Tornado/asm/tor_match_x86_64.S $(MF_ASM_INC) | $(ENC_WIN64_OBJDIR)
+	$(CC_WIN64) -c -o $@ $<
 $(DEC_WIN64_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(DEC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -o $@ $<
 $(ENC_WIN64_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(ENC_WIN64_OBJDIR)

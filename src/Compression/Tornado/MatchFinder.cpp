@@ -151,8 +151,43 @@ void BaseMatchFinder::shift (BYTE *buf, int shift)
 
 
 
+// PERF (x86-64 assembly, FA_MF_ASM): match length kernels in asm/tor_match_x86_64.S
+// (AVX2 32-byte / SSE2 16-byte compares, System V + Microsoft x64 ABIs). They return
+// exactly what the C functions below return; the C code stays the portable fallback
+// (ARM64, other CPUs, decoder-only builds, MF_ASM=0). FA_MF_ASM is defined by the
+// Makefile only for x86-64 encoder objects that link the assembly.
+#if defined(FA_MF_ASM) && (!(defined(__x86_64__) || defined(_M_X64)) || defined(FREEARC_DECOMPRESS_ONLY))
+#  undef FA_MF_ASM
+#endif
+#ifdef FA_MF_ASM
+extern "C" UINT tor_find_match_len (const BYTE *p, const BYTE *q, const void *bufend, UINT len);
+extern "C" UINT tor_ext4           (const BYTE *p, const BYTE *q, const void *bufend, UINT len);
+extern "C" void fa_x86_64_cpu_init (void);
+#endif
+
+// Legacy extension used by the caching match finders: 4-byte steps (which may stop up to
+// 3 bytes past bufend - this affects the output, so it is part of the format), then bytes.
+static inline UINT ext4_match_len (const BYTE *p, const BYTE *q, const void *bufend, UINT len)
+{
+#ifdef FA_MF_ASM
+    // Short matches (the vast majority) are resolved inline exactly like the C loops; the
+    // assembly kernel is only called once 8 bytes matched, where 16/32-byte compares pay off.
+    if (p+len<bufend && val32equ(p+len, q+len)) {
+        len += 4;
+        if (p+len<bufend && val32equ(p+len, q+len))
+            return tor_ext4 (p, q, bufend, len+4);
+    }
+    for (; p+len<bufend && p[len] == q[len];       len++);
+    return len;
+#else
+    for (; p+len<bufend && val32equ(p+len, q+len); len+=4);
+    for (; p+len<bufend && p[len] == q[len];       len++);
+    return len;
+#endif
+}
+
 // Fast match length computation using 64-bit comparison and CTZ
-static inline UINT find_match_len(const BYTE *p, const BYTE *q, const void *bufend, UINT len)
+static inline UINT find_match_len_c(const BYTE *p, const BYTE *q, const void *bufend, UINT len)
 {
     const BYTE *end = (const BYTE *)bufend;
     while (p + len + 8 <= end) {
@@ -169,6 +204,25 @@ static inline UINT find_match_len(const BYTE *p, const BYTE *q, const void *bufe
         len++;
     }
     return len;
+}
+
+static inline UINT find_match_len(const BYTE *p, const BYTE *q, const void *bufend, UINT len)
+{
+#ifdef FA_MF_ASM
+    // First 8 bytes inline (most matches end there), then the assembly kernel.
+    if (p + len + 8 <= (const BYTE *)bufend) {
+        uint64 v1, v2;
+        memcpy(&v1, p + len, 8);
+        memcpy(&v2, q + len, 8);
+        uint64 diff = v1 ^ v2;
+        if (diff != 0)
+            return len + (UINT)(__builtin_ctzll(diff) >> 3);
+        return tor_find_match_len (p, q, bufend, len + 8);
+    }
+    return find_match_len_c (p, q, bufend, len);
+#else
+    return find_match_len_c (p, q, bufend, len);
+#endif
 }
 
 // ****************************************************************************
@@ -453,16 +507,14 @@ struct CachingMatchFinder : BaseMatchFinder
             UINT len = MINLEN-1;
             if (val32equ(p, q)) {
                 len = mymin(MINLEN-1, 4);
-                for (; p+len<bufend && val32equ(p+len, q+len); len+=4);
-                for (; p+len<bufend && p[len] == q[len];       len++);
+                len = ext4_match_len (p, q, bufend, len);
             }
             while (c4) {
                 BYTE *q1 = toPtr (x[__builtin_ctzll(c4) >> 3]);
                 c4 &= c4-1;
                 if (p[len] == q1[len] && val32equ(p, q1)) {
                     UINT len1 = mymin(MINLEN-1, 4);
-                    for (; p+len1<bufend && val32equ(p+len1, q1+len1); len1+=4);
-                    for (; p+len1<bufend && p[len1] == q1[len1];       len1++);
+                    len1 = ext4_match_len (p, q1, bufend, len1);
                     if (len1>len)  len=len1, q=q1;
                 }
             }
@@ -543,8 +595,7 @@ len7:   q = toPtr(x1);
         len = MINLEN-1;
         if (val32equ(p, q)) {
             len = mymin(MINLEN-1, 4);
-            for (; p+len<bufend && val32equ(p+len, q+len); len+=4);
-            for (; p+len<bufend && p[len] == q[len];       len++);
+            len = ext4_match_len (p, q, bufend, len);
         }
 
         while (table!=tabend) {
@@ -552,8 +603,7 @@ len7:   q = toPtr(x1);
             BYTE *q1 = toPtr(x1);
             if (t == 0 && p[len] == q1[len] && val32equ(p, q1)) {
                 UINT len1 = mymin(MINLEN-1, 4);
-                for (; p+len1<bufend && val32equ(p+len1, q1+len1); len1+=4);
-                for (; p+len1<bufend && p[len1] == q1[len1];       len1++);
+                len1 = ext4_match_len (p, q1, bufend, len1);
                 if (len1>len)  len=len1, q=q1;
             }
         }
@@ -821,8 +871,7 @@ len7:   len = MINLEN-1;
         q = toPtr(x1);
         if (val32equ(p, q)) {
             len = mymin(MINLEN-1, 4);
-            for (; p+len<bufend && val32equ(p+len, q+len); len+=4);
-            for (; p+len<bufend && p[len] == q[len];       len++);
+            len = ext4_match_len (p, q, bufend, len);
         }
 
         while (table!=tabend) {
@@ -831,8 +880,7 @@ len7:   len = MINLEN-1;
             BYTE *q1 = toPtr(x1);
             if (t == 0 && p[len] == q1[len] && val32equ(p, q1)) {
                 UINT len1 = mymin(MINLEN-1, 4);
-                for (; p+len1<bufend && val32equ(p+len1, q1+len1); len1+=4);
-                for (; p+len1<bufend && p[len1] == q1[len1];       len1++);
+                len1 = ext4_match_len (p, q1, bufend, len1);
                 if (len1>len  &&  !(len1==len+1 && ChangePair(p-q, p-q1)) )
                     len=len1, q=q1;
             }

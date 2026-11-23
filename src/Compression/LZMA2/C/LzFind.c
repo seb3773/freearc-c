@@ -10,6 +10,65 @@ For a commercial license write to Bulat.Ziganshin@gmail.com
 #include "LzFind.h"
 #include "LzHash.h"
 
+/* PERF (x86-64 assembly, FA_MF_ASM): the binary-tree walk (GetMatchesSpec1 /
+ * SkipMatchesSpec) and the HT4 row search (Ht_GetMatchesSpec) are implemented in
+ * ../asm/LzFind_x86_64.S (System V + Microsoft x64 ABIs). The kernels return
+ * exactly the same matches/distances and leave son[]/hash[] in exactly the same
+ * state as the C code below (verified bit-exact), which stays the reference and
+ * the portable fallback (ARM64, other CPUs, or build with MF_ASM=0).
+ * FA_MF_ASM is defined by the Makefile only for x86-64 encoder objects that
+ * link the assembly. Arguments are passed as one argument block so that the
+ * same assembly entry works for both ABIs. */
+#if defined(FA_MF_ASM) && !(defined(__x86_64__) || defined(_M_X64))
+#  undef FA_MF_ASM
+#endif
+#ifdef FA_MF_ASM
+typedef struct
+{
+  const Byte *cur;          /*  0 */
+  CLzRef     *son;          /*  8 */
+  UInt32     *distances;    /* 16 */
+  UInt32      lenLimit;     /* 24 */
+  UInt32      curMatch;     /* 28 */
+  UInt32      pos;          /* 32 */
+  UInt32      cyclicBufferPos;  /* 36 */
+  UInt32      cyclicBufferSize; /* 40 */
+  UInt32      cutValue;     /* 44 */
+  UInt32      maxLen;       /* 48 */
+} LzfBtArgs;
+typedef struct
+{
+  CLzRef     *row;          /*  0  first entry of the hash row */
+  const Byte *cur;          /*  8 */
+  UInt32     *distances;    /* 16 */
+  UInt32      n;            /* 24  cutValue (row length), >= 1 */
+  UInt32      tag;          /* 28 */
+  UInt32      tagMask;      /* 32 */
+  UInt32      newEntry;     /* 36  saveMatch(pos,tag) */
+  UInt32      cyclicBufferSize; /* 40 */
+  UInt32      lenLimit;     /* 44 */
+  UInt32      maxLen;       /* 48 */
+} LzfHtArgs;
+#ifndef LZF_ASM_ABI      /* bench/mf_bench_build.sh sets __attribute__((ms_abi)) to test the Win64 entry on Linux */
+#define LZF_ASM_ABI
+#endif
+#ifdef __cplusplus
+extern "C" {
+#endif
+LZF_ASM_ABI UInt32 *lzf_bt_getmatches (const LzfBtArgs *a);
+LZF_ASM_ABI void    lzf_bt_skip       (const LzfBtArgs *a);
+LZF_ASM_ABI UInt32 *lzf_ht_getmatches (const LzfHtArgs *a);
+LZF_ASM_ABI void    fa_x86_64_cpu_init (void);
+#ifdef __cplusplus
+}
+#endif
+#if defined(__cplusplus) && __cplusplus >= 201103L
+#include <stddef.h>
+static_assert (offsetof(LzfBtArgs, distances) == 16 && offsetof(LzfBtArgs, maxLen) == 48, "LzfBtArgs layout (LzFind_x86_64.S)");
+static_assert (offsetof(LzfHtArgs, n) == 24 && offsetof(LzfHtArgs, maxLen) == 48, "LzfHtArgs layout (LzFind_x86_64.S)");
+#endif
+#endif
+
 #define kEmptyHashValue 0
 #define kNormalizeStepMin (64*mb)
 #define kMaxPossibleValForNormalize ((UInt32)-1)
@@ -152,6 +211,9 @@ void MatchFinder_Construct(CMatchFinder *p)
   p->hash = 0;
   p->son = 0;
   MatchFinder_SetDefaultSettings(p);
+#ifdef FA_MF_ASM
+  fa_x86_64_cpu_init();
+#endif
 
   for (i = 0; i < 256; i++)
   {
@@ -422,6 +484,21 @@ static UInt32 * Ht_GetMatchesSpec(CMatchFinder *p, UInt32 lenLimit, UInt32 *curM
     UInt32 _cyclicBufferPos, UInt32 _cyclicBufferSize, UInt32 cutValue,
     UInt32 *distances, UInt32 maxLen)
 {
+#ifdef FA_MF_ASM
+  /* Long rows only. Measured on the match finder alone (bench/mf_bench, paired runs):
+     mc8 +10%, mc32 +3% (the inlined C code wins: no call/setup, and its 4-byte row
+     stores forward better), mc64 -4%, mc128 -9%, mc256 -8% (the 32-entry tag scan and the
+     vector row shift win). The default bit-exact profiles (mc4/mc8/mc32) therefore keep the C code. */
+  if (cutValue >= 64)
+  {
+    LzfHtArgs a;
+    a.row = curMatchPtr;  a.cur = cur;  a.distances = distances;  a.n = cutValue;
+    a.tag = computeTag(p,cur);  a.tagMask = p->TagMask;  a.newEntry = saveMatch(pos,a.tag);
+    a.cyclicBufferSize = _cyclicBufferSize;  a.lenLimit = lenLimit;  a.maxLen = maxLen;
+    (void)son;  (void)_cyclicBufferPos;
+    return lzf_ht_getmatches (&a);
+  }
+#endif
   if (cutValue <= HT_SIMD_MIN_ROW)
   {
     /* short rows (e.g. mc4 in -m3): original loop, memmove call would have higher overhead */
@@ -498,6 +575,15 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
     UInt32 _cyclicBufferPos, UInt32 _cyclicBufferSize, UInt32 cutValue,
     UInt32 *distances, UInt32 maxLen)
 {
+#ifdef FA_MF_ASM
+  {
+    LzfBtArgs a;
+    a.cur = cur;  a.son = son;  a.distances = distances;  a.lenLimit = lenLimit;  a.curMatch = curMatch;
+    a.pos = pos;  a.cyclicBufferPos = _cyclicBufferPos;  a.cyclicBufferSize = _cyclicBufferSize;
+    a.cutValue = cutValue;  a.maxLen = maxLen;
+    return lzf_bt_getmatches (&a);
+  }
+#endif
   CLzRef *ptr0 = son + ((size_t)_cyclicBufferPos << 1) + 1;
   CLzRef *ptr1 = son + ((size_t)_cyclicBufferPos << 1);
   UInt32 len0 = 0, len1 = 0;
@@ -551,6 +637,16 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
 static void SkipMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byte *cur, CLzRef *son,
     UInt32 _cyclicBufferPos, UInt32 _cyclicBufferSize, UInt32 cutValue)
 {
+#ifdef FA_MF_ASM
+  {
+    LzfBtArgs a;
+    a.cur = cur;  a.son = son;  a.distances = 0;  a.lenLimit = lenLimit;  a.curMatch = curMatch;
+    a.pos = pos;  a.cyclicBufferPos = _cyclicBufferPos;  a.cyclicBufferSize = _cyclicBufferSize;
+    a.cutValue = cutValue;  a.maxLen = 0;
+    lzf_bt_skip (&a);
+    return;
+  }
+#endif
   CLzRef *ptr0 = son + ((size_t)_cyclicBufferPos << 1) + 1;
   CLzRef *ptr1 = son + ((size_t)_cyclicBufferPos << 1);
   UInt32 len0 = 0, len1 = 0;
@@ -676,12 +772,52 @@ static UInt32 Bt3_MatchFinder_GetMatches(CMatchFinder *p, UInt32 *distances)
   GET_MATCHES_FOOTER(offset, maxLen)
 }
 
+/* PERF (FA_MF_ASM): software-pipelined prefetching for the BT4 tree walk. The walk itself is
+ * a chain of dependent cache misses that cannot be prefetched, but its STARTING points can:
+ * at position pos we prefetch the hash4 head of pos+2, and - using the (already prefetched)
+ * head of pos+1 - the son[] pair and the data of the root candidate of pos+1. These are pure
+ * memory hints computed with plain reads (a stale head only makes a hint useless), so the
+ * output is unchanged. Measured: -20% match finder time for BT4 on 6-12 MB inputs.
+ * Only bytes inside lenLimit (i.e. available input) are read. */
+#if (defined(FA_MF_ASM) || defined(LZF_PREFETCH_AHEAD)) && !defined(LZF_NO_PREFETCH_AHEAD)
+#define LZF_PF_DIST 2
+static inline void Bt4_PrefetchAhead (const CMatchFinder *p, const Byte *cur, UInt32 lenLimit)
+{
+  if (lenLimit >= 4 + LZF_PF_DIST)
+  {
+    {
+      const Byte *c = cur + LZF_PF_DIST;
+      UInt32 t = p->crc[c[0]] ^ c[1];
+      UInt32 hv = (t ^ ((UInt32)c[2] << 8) ^ (p->crc[c[3]] << 5)) & p->hashMask;
+      prefetch (p->hash[kFix4HashSize + hv]);
+    }
+    {
+      const Byte *c = cur + 1;
+      UInt32 t = p->crc[c[0]] ^ c[1];
+      UInt32 hv = (t ^ ((UInt32)c[2] << 8) ^ (p->crc[c[3]] << 5)) & p->hashMask;
+      UInt32 cm = p->hash[kFix4HashSize + hv];
+      UInt32 delta = p->pos + 1 - cm;
+      if (delta < p->cyclicBufferSize)
+      {
+        UInt32 cbp = p->cyclicBufferPos + 1;
+        size_t index = (cbp - delta + ((delta > cbp) ? p->cyclicBufferSize : 0));
+        prefetch (p->son[index << 1]);
+        prefetch (*(c - delta));
+      }
+    }
+  }
+}
+#else
+#define Bt4_PrefetchAhead(p,cur,lenLimit)
+#endif
+
 static UInt32 Bt4_MatchFinder_GetMatches(CMatchFinder *p, UInt32 *distances)
 {
   UInt32 hash2Value, hash3Value, delta2, delta3, maxLen, offset;
   GET_MATCHES_HEADER(4)
 
   HASH4_CALC;
+  Bt4_PrefetchAhead (p, cur, lenLimit);
 
   delta2 = p->pos - p->hash[                hash2Value];
   delta3 = p->pos - p->hash[kFix3HashSize + hash3Value];
@@ -905,6 +1041,7 @@ static void Bt4_MatchFinder_Skip(CMatchFinder *p, UInt32 num)
     UInt32 hash2Value, hash3Value;
     SKIP_HEADER(4)
     HASH4_CALC;
+    Bt4_PrefetchAhead (p, cur, lenLimit);
     curMatch = p->hash[kFix4HashSize + hashValue];
     p->hash[                hash2Value] =
     p->hash[kFix3HashSize + hash3Value] = p->pos;

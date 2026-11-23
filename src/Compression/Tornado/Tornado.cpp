@@ -319,6 +319,9 @@ int tor_compress_cmf (PackMethod m, CALLBACK_FUNC *callback, void *auxdata)
 // Compress data using compression method m and callback for i/o
 int tor_compress (PackMethod m, CALLBACK_FUNC *callback, void *auxdata)
 {
+#ifdef FA_MF_ASM
+    fa_x86_64_cpu_init();
+#endif
 // When FULL_COMPILE is defined, we compile all the 4*8*3*2=192 possible compressor variants
 // Otherwise, we compile only 8 variants actually used by -0..-11 predefined modes
 #ifdef FULL_COMPILE
