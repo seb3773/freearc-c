@@ -1328,7 +1328,8 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
   std::string etor_c3 = mt ? "4x4:tor:c3" : "tor:c3";
   // -nobitexact text back-end: PPMd restarts its model whenever its 256 MB are exhausted, so
   // cutting the (dict+lzp preprocessed) text stream into independent 32 MB 4x4 jobs costs no
-  // ratio while letting the PPMd encoders (thread-local state, no global lock) run in parallel.
+  // ratio. Encoder and decoder keep per-thread state (no global lock) and reuse the arena
+  // across blocks, so the 4x4 workers actually run at the same time.
   std::string text_ppmd_nbx = mt ? "4x4:b32m:ppmd:16:256m" : "ppmd:16:256m";
   std::string bmp = "mm+grzip:m1:l2048:a";
   std::string bin1 = mt ? "4x4:tor:3:8mb" : "tor:4";

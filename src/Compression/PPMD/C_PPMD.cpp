@@ -13,16 +13,16 @@ extern "C" {
 #include "C_PPMD.h"
 }
 #include "PPMdType.h"
-#include "../MultiThreading.h"
 
 /*-------------------------------------------------*/
 /* Ðåàëèçàöèÿ ppmd_compress                        */
 /*-------------------------------------------------*/
-#ifndef FREEARC_DECOMPRESS_ONLY
 
-// The encoder model lives in thread-local storage, so independent PPMd encoders
-// (4x4 jobs, concurrently compressed solid blocks) run in parallel without any lock.
+// Encoder and decoder models both live in thread-local storage, so independent
+// PPMd jobs (4x4 workers, concurrently compressed solid blocks) never share state.
 #define PPMD_TLS FA_THREAD_LOCAL
+
+#ifndef FREEARC_DECOMPRESS_ONLY
 
 namespace PPMD_compression {
 
@@ -43,7 +43,7 @@ int ppmd_compress (int order, MemSize mem, int MRMethod, CALLBACK_FUNC *callback
   if (_PPMD_ERROR_CODE(fpOut)<0)  ErrCode = _PPMD_ERROR_CODE (fpOut);
   delete fpOut;
   delete fpIn;
-  StopSubAllocator();
+  // Arena stays on this thread: the next block reuses it when it fits.
   return ErrCode;
 }
 } // extern "C"
@@ -62,12 +62,6 @@ void _STDCALL PrintInfo (_PPMD_FILE* DecodedFile, _PPMD_FILE* EncodedFile)
 /* Ðåàëèçàöèÿ ppmd_decompress                      */
 /*-------------------------------------------------*/
 
-static NWindows::NSynchronization::CCriticalSection ppmd_decomp_cs;
-
-// The decoder keeps plain globals guarded by a lock (unchanged)
-#undef  PPMD_TLS
-#define PPMD_TLS
-
 namespace PPMD_decompression {
 
 #include "Model.cpp"
@@ -75,7 +69,6 @@ namespace PPMD_decompression {
 extern "C" {
 int ppmd_decompress (int order, MemSize mem, int MRMethod, CALLBACK_FUNC *callback, void *auxdata)
 {
-  NWindows::NSynchronization::CCriticalSectionLock lock(ppmd_decomp_cs);
   if ( !StartSubAllocator(mem) ) {
     return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
   }
@@ -88,7 +81,7 @@ int ppmd_decompress (int order, MemSize mem, int MRMethod, CALLBACK_FUNC *callba
   if (_PPMD_ERROR_CODE(fpOut)<0)  ErrCode = _PPMD_ERROR_CODE (fpOut);
   delete fpOut;
   delete fpIn;
-  StopSubAllocator();
+  // Arena stays on this thread: the next 4x4 block reuses it when it fits.
   return ErrCode;
 }
 } // extern "C"
@@ -98,6 +91,16 @@ void _STDCALL PrintInfo(_PPMD_FILE* DecodedFile,_PPMD_FILE* EncodedFile)
 }
 
 } // namespace PPMD_decompression
+
+// Called when a worker finishes. Stop is idempotent, so the thread_local
+// destructor may run it again as the thread exits.
+void ppmd_release_thread_arenas(void)
+{
+#ifndef FREEARC_DECOMPRESS_ONLY
+  PPMD_compression::StopSubAllocator();
+#endif
+  PPMD_decompression::StopSubAllocator();
+}
 
 
 /*-------------------------------------------------*/

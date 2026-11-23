@@ -377,6 +377,7 @@ static DWORD WINAPI multi_decompress_thread (void *paramPtr)
   if (param->thread_num == param->threads_total-1)
     param->SetExitCode(0);
   //printf("\nfinished %d    ", param->thread_num);
+  ppmd_release_thread_arenas();
   return 0;
 }
 
@@ -573,6 +574,7 @@ static DWORD WINAPI multi_compress_thread (void *paramPtr)
     param[+1].read.Release();
   if (param->thread_num == param->threads_total-1)
     param->SetExitCode(0);
+  ppmd_release_thread_arenas();
   return 0;
 }
 

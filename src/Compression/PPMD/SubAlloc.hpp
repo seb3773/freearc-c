@@ -60,6 +60,13 @@ typedef char ppmd_blk_node_size_check[sizeof(BLK_NODE)==8 ? 1 : -1];
 
 static BYTE Indx2Units[N_INDEXES], Units2Indx[128];
 static PPMD_TLS DWORD GlueCount, SubAllocatorSize=0;
+/* Bytes actually reserved for HeapStart. May be larger than SubAllocatorSize when a
+   thread reuses its arena for a smaller model. SubAllocatorSize stays the logical
+   model size (it changes the restart point and must match the encoder). */
+static PPMD_TLS UINT HeapCapacity=0;
+#ifdef PPMD_HEAP_MMAP
+static PPMD_TLS int HeapViaMmap=0;
+#endif
 static PPMD_TLS BYTE * pText, * UnitsStart, * LoUnit, * HiUnit;
 
 inline void PrefetchData(void* Addr)
@@ -92,28 +99,71 @@ DWORD _STDCALL GetUsedMemory()
     return RetVal;
 }
 void _STDCALL StopSubAllocator() {
-    if ( SubAllocatorSize ) {
+    if ( HeapCapacity ) {
 #ifdef PPMD_HEAP_MMAP
-        ::munmap(HeapStart, SubAllocatorSize);
-#else
-        BigFree(HeapStart);
+        if (HeapViaMmap)
+            ::munmap(HeapStart, HeapCapacity);
+        else
 #endif
-        SubAllocatorSize=0;                 HeapStart=NULL;
+            BigFree(HeapStart);
+        HeapCapacity=0;                     SubAllocatorSize=0;
+        HeapStart=NULL;
+#ifdef PPMD_HEAP_MMAP
+        HeapViaMmap=0;
+#endif
     }
 }
+
+/* Freed when the worker thread exits, including threads that never reach an
+   explicit ppmd_release_thread_arenas() call. */
+struct PPMDThreadArenaGuard {
+    int alive;
+    PPMDThreadArenaGuard() : alive(1) {}
+    ~PPMDThreadArenaGuard() { StopSubAllocator(); }
+};
+static thread_local PPMDThreadArenaGuard ppmd_thread_arena_guard;
+
+/* A reused arena still holds Stamp=~0 markers from the previous block. A fresh
+   OS mapping is zero-filled, and mid-stream MRM_RESTART (InitSubAllocator only)
+   depends on leftovers from the current block, so the wipe is done here — once
+   per block — and not inside InitSubAllocator. The pages stay resident, which
+   keeps the following random model walk off the fault path. */
+static void WipeReusedArena(UINT t)
+{
+    memset(HeapStart, 0, t);
+}
+
 BOOL _STDCALL StartSubAllocator(UINT t)
 {
-    if (SubAllocatorSize == t)              return TRUE;
+    (void) ppmd_thread_arena_guard.alive;
+    if (HeapStart != NULL && t != 0 && HeapCapacity >= t) {
+        SubAllocatorSize = t;
+        WipeReusedArena(t);
+        return TRUE;
+    }
     StopSubAllocator();
+    int os_zeroed = 0;
 #ifdef PPMD_HEAP_MMAP
-    HeapStart = (BYTE*) ::mmap(NULL, t, PROT_READ|PROT_WRITE,
-                             MAP_PRIVATE|MAP_ANONYMOUS|MAP_32BIT, -1, 0);
-    if (HeapStart == MAP_FAILED)            HeapStart = NULL;
+    if (t) {
+        HeapStart = (BYTE*) ::mmap(NULL, t, PROT_READ|PROT_WRITE,
+                                 MAP_PRIVATE|MAP_ANONYMOUS|MAP_32BIT, -1, 0);
+        if (HeapStart == MAP_FAILED)        HeapStart = NULL;
+        else {
+            HeapViaMmap = 1;
+            os_zeroed = 1;
+        }
+    }
 #endif
-    if (HeapStart == NULL)
-            HeapStart = (BYTE*) BigAlloc(t);
+    if (HeapStart == NULL) {
+        HeapStart = (BYTE*) BigAlloc(t);
+#ifdef FREEARC_WIN
+        if (HeapStart)                      os_zeroed = 1;   /* VirtualAlloc */
+#endif
+    }
     if (HeapStart == NULL)                  return FALSE;
-    SubAllocatorSize=t;                     return TRUE;
+    if (!os_zeroed && t)                    memset(HeapStart, 0, t);
+    HeapCapacity=t;                         SubAllocatorSize=t;
+    return TRUE;
 }
 static inline void InitSubAllocator()
 {

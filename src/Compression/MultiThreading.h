@@ -1,6 +1,9 @@
 #include "LZMA/Windows/Thread.h"
 #include "LZMA/Windows/Synchronization.h"
 
+// Drop PPMd arenas kept on this thread (no-op if this thread never ran PPMd).
+void ppmd_release_thread_arenas(void);
+
 using namespace NWindows;
 using namespace NWindows::NSynchronization;
 
@@ -214,6 +217,7 @@ struct WorkerThread
             OperationFinished.Signal();               // signal to Writer thread
         }
         done();
+        ppmd_release_thread_arenas();             // free this worker's PPMd arena before the next solid block
         Finished.Signal();
     }
     virtual ~WorkerThread() {};
