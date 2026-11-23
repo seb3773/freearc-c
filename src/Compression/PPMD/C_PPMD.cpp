@@ -13,6 +13,7 @@ extern "C" {
 #include "C_PPMD.h"
 }
 #include "PPMdType.h"
+#include <stdint.h>
 
 /*-------------------------------------------------*/
 /* Ðåàëèçàöèÿ ppmd_compress                        */
@@ -21,6 +22,24 @@ extern "C" {
 // Encoder and decoder models both live in thread-local storage, so independent
 // PPMd jobs (4x4 workers, concurrently compressed solid blocks) never share state.
 #define PPMD_TLS FA_THREAD_LOCAL
+
+/* floor(n/d) for every n in 0..2^32-1 and every d in 1..65535.
+   magic(d) = ceil(2^48 / d). The added error is strictly smaller than the gap
+   from n/d up to the next integer, so the shift matches unsigned division.
+   One copy, shared by the compressor and decompressor models in this TU. */
+struct PpmdDivMagic {
+    alignas(64) uint64_t v[65536];
+    constexpr PpmdDivMagic() : v() {
+        for (uint32_t d = 1; d < 65536; ++d)
+            v[d] = (((uint64_t)1 << 48) + d - 1) / d;
+    }
+};
+static constexpr PpmdDivMagic ppmd_div_magic_table{};
+static inline __attribute__((always_inline)) UINT ppmd_div_u32_small(UINT n, UINT d)
+{
+    unsigned __int128 prod = (unsigned __int128)n * ppmd_div_magic_table.v[d];
+    return (UINT)(prod >> 48);
+}
 
 #ifndef FREEARC_DECOMPRESS_ONLY
 

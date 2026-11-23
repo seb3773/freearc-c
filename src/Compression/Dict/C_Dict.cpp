@@ -1,6 +1,42 @@
 extern "C" {
 #include "C_Dict.h"
 }
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
+
+/* In/Out of dict_decompress, kept on the worker thread instead of mmap/munmap
+   of a 64 MB pair on every block. Freed when the thread exits. */
+static void dict_hint_hugepage(void *p, size_t n)
+{
+#if defined(__linux__) && defined(MADV_HUGEPAGE)
+    if (p && n >= (size_t)(2u << 20))
+        (void)madvise(p, n, MADV_HUGEPAGE);
+#else
+    (void)p; (void)n;
+#endif
+}
+struct DictTlsBuf {
+    BYTE *p;
+    size_t cap;
+    DictTlsBuf() : p(0), cap(0) {}
+    ~DictTlsBuf() { BigFree(p); p = NULL; cap = 0; }
+    BYTE *acquire(size_t need) {
+        if (need == 0) return NULL;
+        if (p && cap >= need) return p;
+        BYTE *np = (BYTE *)BigAlloc(need);
+        if (!np) return NULL;
+        BigFree(p);
+        p = np;
+        cap = need;
+        dict_hint_hugepage(p, cap);
+        return p;
+    }
+};
+struct DictTls {
+    DictTlsBuf in, out;
+};
+static thread_local DictTls dict_tls;
 
 #define DICT_LIBRARY
 #include "dict.cpp"
@@ -42,35 +78,30 @@ finished:
 
 int dict_decompress (MemSize BlockSize, int MinCompression, int MinWeakChars, int MinLargeCnt, int MinMediumCnt, int MinSmallCnt, int MinRatio, CALLBACK_FUNC *callback, void *auxdata)
 {
-  BYTE* In = NULL;  // ��������� �� ������� ������
-  BYTE* Out= NULL;  // ��������� �� �������� ������
-  int x;            // ��� ������������ ������
+  int x;
   for(;;) {
-    int InSize; unsigned OutSize;   // ���������� ���� �� ������� � �������� ������, ��������������
+    int InSize; unsigned OutSize;
     checked_eof_read (&InSize, sizeof(InSize));
     if (InSize<0) {
-        // ��������� ������������� ������
-        In = (BYTE*) BigAlloc(-InSize);
+        BYTE *In = dict_tls.in.acquire((size_t)(-InSize));
+        if ((-InSize) && !In) { x = FREEARC_ERRCODE_NOT_ENOUGH_MEMORY; goto finished; }
         checked_read  (In, -InSize);
         checked_write (In, -InSize);
-        BigFreeAndNil(In);
     } else {
-        // ���������� ������������� � �������� ������ �������� ������
-        In  = (BYTE*) BigAlloc(InSize);
-        Out = (BYTE*) BigAlloc(BlockSize);
+        BYTE *In  = dict_tls.in.acquire((size_t)InSize);
+        BYTE *Out = dict_tls.out.acquire((size_t)BlockSize);
+        if ((InSize && !In) || (BlockSize && !Out)) {
+            x = FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+            goto finished;
+        }
         checked_read  (In, InSize);
         x = DictDecode (In, InSize, Out, &OutSize);
-        //x = DictDecode (InSize, callback, auxdata);   // ��� ������ � ������������� ������ ������
         if (x) break;
-        BigFreeAndNil(In);
-        //Out = (BYTE*) realloc (Out, OutSize);  -- impossible since we used BigAlloc
         checked_write (Out, OutSize);
-        BigFreeAndNil(Out);
     }
   }
 finished:
-  BigFreeAndNil(In); BigFreeAndNil(Out);
-  return x<=0? x : FREEARC_ERRCODE_GENERAL;  // 0, ���� �� � �������, � ��� ������ �����
+  return x<=0? x : FREEARC_ERRCODE_GENERAL;
 }
 
 

@@ -121,8 +121,23 @@ inline void ariDecNormalize(_PPMD_FILE *stream)
     }
 }
 #define ARI_DEC_NORMALIZE(stream) ariDecNormalize(stream)
+/* range := floor(range / SubRange.scale), bit-identical to the hardware
+   division. scale is a frequency total; values above 65535 fall back to it.
+   ppmd_div_u32_small() is the reciprocal multiply defined in C_PPMD.cpp. */
+inline void ariScaleRangeDown()
+{
+    UINT d = SubRange.scale;
+    if (__builtin_expect(d - 1u < 65535u, 1))
+        range = ::ppmd_div_u32_small(range, d);
+    else
+        range /= d;
+}
 inline UINT ariGetCurrentCount() {
-    return (code-low)/(range /= SubRange.scale);
+    ariScaleRangeDown();
+    /* (code-low)/range stays a hardware division: after the scale step the
+       divisor is an arbitrary 32-bit range, and the quotient is needed in full.
+       decodeSymbol1 avoids it when the first symbol matches. */
+    return (code-low)/range;
 }
 inline UINT ariGetCurrentShiftCount(UINT SHIFT) {
     return (code-low)/(range >>= SHIFT);

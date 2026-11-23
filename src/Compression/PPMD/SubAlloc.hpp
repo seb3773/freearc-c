@@ -153,7 +153,9 @@ static thread_local PPMDThreadArenaGuard ppmd_thread_arena_guard;
 /* Zero only the ranges the previous block actually wrote. A fresh mapping is
    already zero, and a mid-stream MRM_RESTART must keep the leftovers of the
    current block, so this runs once per block and not from InitSubAllocator.
-   Watermarks only grow: a later smaller block still clears the older footprint. */
+   The watermarks are cleared after the wipe. The next block records only what
+   it writes, so one block that filled the arena cannot force every later block
+   on this thread to memset the whole heap. */
 static void ZeroSpan(BYTE *b, BYTE *e)
 {
     if (!HeapStart || !b || !e || e <= b) return;
@@ -173,6 +175,7 @@ static void WipeReusedArena()
         ZeroSpan(LowLo, LowHi);
         ZeroSpan(HighLo, HighHi);
     }
+    LowLo = LowHi = HighLo = HighHi = NULL;
 }
 
 BOOL _STDCALL StartSubAllocator(UINT t)

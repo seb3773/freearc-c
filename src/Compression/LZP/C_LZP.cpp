@@ -8,6 +8,42 @@
 extern "C" {
 #include "C_LZP.h"
 }
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
+
+/* Buffers kept on the worker thread. lzp_decompress used to mmap and munmap
+   the input, the output and the hash table on every block. */
+static void lzp_hint_hugepage(void *p, size_t n)
+{
+#if defined(__linux__) && defined(MADV_HUGEPAGE)
+    if (p && n >= (size_t)(2u << 20))
+        (void)madvise(p, n, MADV_HUGEPAGE);
+#else
+    (void)p; (void)n;
+#endif
+}
+struct LzpTlsBuf {
+    BYTE *p;
+    size_t cap;
+    LzpTlsBuf() : p(0), cap(0) {}
+    ~LzpTlsBuf() { BigFree(p); p = NULL; cap = 0; }
+    BYTE *acquire(size_t need) {
+        if (need == 0) return NULL;
+        if (p && cap >= need) return p;
+        BYTE *np = (BYTE *)BigAlloc(need);
+        if (!np) return NULL;
+        BigFree(p);
+        p = np;
+        cap = need;
+        lzp_hint_hugepage(p, cap);
+        return p;
+    }
+};
+struct LzpTls {
+    LzpTlsBuf in, out, ht;
+};
+static thread_local LzpTls lzp_tls;
 
 
 /* 32-bit Rotates */
@@ -208,7 +244,13 @@ MATCH_NOT_FOUND:
 
 int LZPDecode(BYTE* In,UINT Size,BYTE* Out,int MinLen,int HashSize,int Barrier,int SmallestLen)
 {
-    LZP_INIT(HashSize,Out);
+    UINT i, k, n1=1, n=1, HashMask=HashSize-1;
+    BYTE *p, *InEnd=In+Size, *OutStart=Out;
+    BYTE **HTable = (BYTE**) lzp_tls.ht.acquire((size_t)HashSize * sizeof(BYTE*));
+    if (HTable==NULL)  return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+    for (i=0;i < (UINT)HashSize;i++)        HTable[i]=Out+5;
+    lzpC(Out+4)=lzpC(In+4);                 lzpC(Out+8)=lzpC(In+8);
+    i=lzpC(Out += 12)=lzpC(In += 12);       k=lzpH(i,Out,HashMask);
     do {
         p=HTable[k];
         if ( !--n )  { HTable[k]=Out;       n=n1; }
@@ -226,7 +268,6 @@ int LZPDecode(BYTE* In,UINT Size,BYTE* Out,int MinLen,int HashSize,int Barrier,i
         }
         k=lzpH(i=lzpC(Out),Out,HashMask);
     } while (In < InEnd);
-    BigFree(HTable);
     return (Out-OutStart);
 }
 
@@ -276,32 +317,33 @@ finished:
 int lzp_decompress (MemSize BlockSize, int MinCompression, int MinMatchLen, int HashSizeLog, int Barrier, int SmallestLen, CALLBACK_FUNC *callback, void *auxdata)
 {
     int errcode = FREEARC_OK;   // Error code returned by last operation or FREEARC_OK
-    BYTE* In = NULL;  // ��������� �� ������� ������
-    BYTE* Out= NULL;  // ��������� �� �������� ������
+    // In/Out live in lzp_tls and are reused across blocks and 4x4 chunks.
+    // They are released when this worker thread exits.
     for(;;) {
-        int InSize, OutSize;     // ���������� ���� �� ������� � �������� ������, ��������������
+        int InSize, OutSize;
+        BYTE *In = NULL;
+        BYTE *Out = NULL;
         READ4_OR_EOF (InSize);
         if (InSize<0) {
-            // ��������� ������������� ������
             InSize = -InSize;
-            BIGALLOC (BYTE, In, InSize);
+            In = lzp_tls.in.acquire((size_t)InSize);
+            if (InSize && !In) { errcode = FREEARC_ERRCODE_NOT_ENOUGH_MEMORY; goto finished; }
             READ  (In, InSize);
             WRITE (In, InSize);
-            BigFreeAndNil(In);
         } else {
-            // ���������� ������������� � �������� ������ �������� ������
-            BIGALLOC (BYTE, In,  InSize);
-            BIGALLOC (BYTE, Out, BlockSize);
+            In  = lzp_tls.in.acquire((size_t)InSize);
+            Out = lzp_tls.out.acquire((size_t)BlockSize);
+            if ((InSize && !In) || (BlockSize && !Out)) {
+                errcode = FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+                goto finished;
+            }
             READ  (In, InSize);
             OutSize = LZPDecode (In, InSize, Out, MinMatchLen, 1<<HashSizeLog, Barrier, SmallestLen);
-            BigFreeAndNil(In);
-            //Out = (BYTE*) realloc (Out, OutSize);   -- impossible since we used BigAlloc
+            if (OutSize < 0) { errcode = OutSize; goto finished; }
             WRITE (Out, OutSize);
-            BigFreeAndNil(Out);
         }
     }
 finished:
-    BigFreeAndNil(In); BigFreeAndNil(Out);
     return errcode;
 }
 

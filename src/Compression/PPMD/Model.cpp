@@ -521,16 +521,21 @@ inline void PPM_CONTEXT::decodeSymbol1()
     if (Suffix)   PrefetchData(Suffix.get());
     UINT i, count, HiCnt=Stats->Freq;
     STATE* p=Stats;                         SubRange.scale=SummFreq;
-    if ((count=ariGetCurrentCount()) < HiCnt) {
+    ariScaleRangeDown();
+    UINT n = code - low;
+    /* count < HiCnt  <=>  n < HiCnt*range. HiCnt is a byte, so the product
+       fits in 64 bits and the test is exact. The hit path never reads count. */
+    if (__builtin_expect((uint64_t)n < (uint64_t)HiCnt * (uint64_t)range, 1)) {
         PrevSuccess=(2*(SubRange.HighCount=HiCnt) >= SubRange.scale);
         (FoundState=p)->Freq=(HiCnt += 4);  SummFreq += 4;
         RunLength += PrevSuccess;
-        if (HiCnt > MAX_FREQ)               rescale();
+        if (__builtin_expect(HiCnt > MAX_FREQ, 0)) rescale();
         SubRange.LowCount=0;                return;
     }
+    count = n / range;
     i=NumStats;                             PrevSuccess=0;
     while ((HiCnt += (++p)->Freq) <= count)
-        if (--i == 0) {
+        if (__builtin_expect(--i == 0, 0)) {
             if ( Suffix )                   PrefetchData(Suffix);
             SubRange.LowCount=HiCnt;        CharMask[p->Symbol]=EscCount;
             i=NumMasked=NumStats;           FoundState=NULL;
@@ -605,16 +610,29 @@ inline void PPM_CONTEXT::decodeSymbol2()
     SEE2_CONTEXT* psee2c=makeEscFreq2();
     STATE* p=Stats, * pe=p+NumStats;
     const BYTE Esc=EscCount;
-    // Unrolled with independent accumulators to break the add dependency chain
-    // (contexts with many states, e.g. order-0/1 on binary data, dominate this loop).
-    UINT Tot=0, Tot1=0, Tot2=0, Tot3=0;
+    /* Masked-frequency sum. AVX2 gather and SSSE3 shuffle-extract were slower
+       than scalar ILP on this 6-byte STATE: CharMask[] is a 256-byte L1 table,
+       and a gather costs more than independent byte loads (about 1.4 ns/state
+       vs 0.53). Long contexts (order-0/1) use 8 independent accumulators;
+       shorter ones stay on the 4-wide loop, which is the fastest there. */
+    UINT Tot=0, Tot1=0, Tot2=0, Tot3=0, extra=0;
     #define PPMD_MASKED_FREQ(q) ((q)->Freq & (UINT)-(UINT)(CharMask[(q)->Symbol] != Esc))
+    if (__builtin_expect(pe - p >= 63, 0)) {
+        UINT Tot4=0, Tot5=0, Tot6=0, Tot7=0;
+        for (; p+7 <= pe; p += 8) {
+            Tot  += PPMD_MASKED_FREQ(p);    Tot1 += PPMD_MASKED_FREQ(p+1);
+            Tot2 += PPMD_MASKED_FREQ(p+2);  Tot3 += PPMD_MASKED_FREQ(p+3);
+            Tot4 += PPMD_MASKED_FREQ(p+4);  Tot5 += PPMD_MASKED_FREQ(p+5);
+            Tot6 += PPMD_MASKED_FREQ(p+6);  Tot7 += PPMD_MASKED_FREQ(p+7);
+        }
+        extra = (Tot4 + Tot5) + (Tot6 + Tot7);
+    }
     for (; p+3 <= pe; p += 4) {
         Tot  += PPMD_MASKED_FREQ(p);        Tot1 += PPMD_MASKED_FREQ(p+1);
         Tot2 += PPMD_MASKED_FREQ(p+2);      Tot3 += PPMD_MASKED_FREQ(p+3);
     }
     for (; p <= pe; p++)  Tot += PPMD_MASKED_FREQ(p);
-    Tot += Tot1 + Tot2 + Tot3;
+    Tot += Tot1 + Tot2 + Tot3 + extra;
     SubRange.scale += Tot;
     UINT count=ariGetCurrentCount();
     if (count < Tot) {
