@@ -16,6 +16,9 @@ UINT tor_ext4 (const BYTE*, const BYTE*, const void*, UINT);            UINT ms_
 void *lzf_bt_getmatches (void*), *ms_lzf_bt_getmatches (void*);
 void  lzf_bt_skip (void*), ms_lzf_bt_skip (void*);
 void *lzf_ht_getmatches (void*), *ms_lzf_ht_getmatches (void*);
+void *lzf25_bt_getmatches (void*), *ms_lzf25_bt_getmatches (void*);
+void  lzf25_bt_skip (void*), ms_lzf25_bt_skip (void*);
+void *lzf25_bt_getmatches_n (void*), *ms_lzf25_bt_getmatches_n (void*);
 
 static UINT ref_fml (const BYTE *p, const BYTE *q, const void *bufend, UINT len)
 { const BYTE *end = bufend; while (p + len + 8 <= end) { u64 a, b; memcpy(&a,p+len,8); memcpy(&b,q+len,8); if (a^b) return len + (__builtin_ctzll(a^b)>>3); len += 8; }
@@ -34,6 +37,8 @@ static void check_regs (const char *what, const u64 *o, int ms)
 }
 typedef struct { const BYTE *cur; uint32_t *son; uint32_t *dist; uint32_t lenLimit, curMatch, pos, cbp, cbsize, cut, maxLen; } BtArgs;
 typedef struct { uint32_t *row; const BYTE *cur; uint32_t *dist; uint32_t n, tag, tagMask, newEntry, cbsize, lenLimit, maxLen; } HtArgs;
+typedef struct { const BYTE *lenLimit, *cur; uint32_t *son, *d; const uint32_t *hash, *limit, *size;
+                 size_t pos, cbp, maxLen; uint32_t cut, cbsize; uint32_t *posRes; } NArgs;   /* Lzf25NArgs */
 
 int main (void)
 {
@@ -77,6 +82,19 @@ int main (void)
       for (int i = 0; i < 64; i++) row[i] = 2900 + i;
       HtArgs h = { row, buf + 3000, dist, 40, 0, 0xFC000000u, 3000, 4096, 32, 3 };
       abi_call4 (ms ? (void*)ms_lzf_ht_getmatches : (void*)lzf_ht_getmatches, (u64)&h, 0, 0, 0, o, ms);  check_regs ("lzf_ht_getmatches", o, ms);
+      /* LZMA SDK 25.01 kernels (-nobitexact): single-thread walk, skip, batched MT walk */
+      memset (son, 0, sizeof son);
+      abi_call4 (ms ? (void*)ms_lzf25_bt_getmatches : (void*)lzf25_bt_getmatches, (u64)&b, 0, 0, 0, o, ms);  check_regs ("lzf25_bt_getmatches", o, ms);
+      abi_call4 (ms ? (void*)ms_lzf25_bt_skip : (void*)lzf25_bt_skip, (u64)&b, 0, 0, 0, o, ms);              check_regs ("lzf25_bt_skip", o, ms);
+      {
+        static uint32_t hash[16];  uint32_t posRes = 0;
+        for (int i = 0; i < 16; i++) hash[i] = (i & 1) ? 7 : 14;
+        memset (son, 0, sizeof son);
+        NArgs n = { buf + 3000 + 32 - 1, buf + 3000, son, dist, hash, dist + 500, hash + 16, 3000, 500, 1, 8, 1024, &posRes };
+        void *r = (void*) abi_call4 (ms ? (void*)ms_lzf25_bt_getmatches_n : (void*)lzf25_bt_getmatches_n, (u64)&n, 0, 0, 0, o, ms);
+        check_regs ("lzf25_bt_getmatches_n", o, ms);
+        if (r == NULL || posRes != 3016) { printf ("FAIL lzf25_bt_getmatches_n (%s): r=%p posRes=%u\n", ms ? "ms" : "sysv", r, posRes); fails++; }
+      }
     }
   }
   printf (fails ? "ABI check: %d FAILURES\n" : "ABI check: all OK (SysV + Microsoft x64 conventions, SSE2 + AVX2 paths)\n", fails);

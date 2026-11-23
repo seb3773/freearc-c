@@ -5,6 +5,7 @@
 
 #include "CpuArch.h"
 #include "LzFind.h"
+#include "LzFindAsm.h"  /* FreeArc-c: x86-64 assembly GetMatchesSpecN_2 (FA_MF_ASM) */
 
 // #include "LzFindMt.h"
 
@@ -225,6 +226,15 @@ UInt32 * Z7_FASTCALL GetMatchesSpecN_2(const Byte *lenLimit, size_t pos, const B
     size_t _cyclicBufferPos, UInt32 _cyclicBufferSize,
     UInt32 *posRes)
 {
+#ifdef FA_MF_ASM
+  {
+    Lzf25NArgs a;   /* on the stack: no heap allocation in the BT thread */
+    a.lenLimit = lenLimit;  a.cur = cur;  a.son = son;  a.d = d;  a.hash = hash;  a.limit = limit;  a.size = size;
+    a.pos = pos;  a.cyclicBufferPos = _cyclicBufferPos;  a.maxLen = _maxLen;  a.cutValue = _cutValue;
+    a.cyclicBufferSize = _cyclicBufferSize;  a.posRes = posRes;
+    return lzf25_bt_getmatches_n (&a);
+  }
+#else
   do // while (hash != size)
   {
     UInt32 delta;
@@ -397,6 +407,7 @@ else
   while (d < limit);
   *posRes = (UInt32)pos;
   return d;
+#endif /* FA_MF_ASM */
 }
 
 

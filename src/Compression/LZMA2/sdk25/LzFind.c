@@ -9,6 +9,7 @@
 #include "CpuArch.h"
 #include "LzFind.h"
 #include "LzHash.h"
+#include "LzFindAsm.h"  /* FreeArc-c: x86-64 assembly BT kernels (FA_MF_ASM) */
 
 #define kBlockMoveAlign       (1 << 7)    // alignment for memmove()
 #define kBlockSizeAlign       (1 << 16)   // alignment for block allocation
@@ -244,6 +245,9 @@ void MatchFinder_Construct(CMatchFinder *p)
   p->hash = NULL;
   p->expectedDataSize = (UInt64)(Int64)-1;
   MatchFinder_SetDefaultSettings(p);
+#ifdef FA_MF_ASM
+  fa_x86_64_cpu_init();  /* AVX2 detection for LZEXT (idempotent) */
+#endif
 
   for (i = 0; i < 256; i++)
   {
@@ -963,6 +967,15 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
     size_t _cyclicBufferPos, UInt32 _cyclicBufferSize, UInt32 cutValue,
     UInt32 *d, UInt32 maxLen)
 {
+#ifdef FA_MF_ASM
+  {
+    Lzf25BtArgs a;
+    a.cur = cur;  a.son = son;  a.distances = d;  a.lenLimit = lenLimit;  a.curMatch = curMatch;
+    a.pos = pos;  a.cyclicBufferPos = (UInt32)_cyclicBufferPos;  a.cyclicBufferSize = _cyclicBufferSize;
+    a.cutValue = cutValue;  a.maxLen = maxLen;
+    return lzf25_bt_getmatches (&a);
+  }
+#else
   CLzRef *ptr0 = son + ((size_t)_cyclicBufferPos << 1) + 1;
   CLzRef *ptr1 = son + ((size_t)_cyclicBufferPos << 1);
   unsigned len0 = 0, len1 = 0;
@@ -1026,12 +1039,22 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
 
   *ptr0 = *ptr1 = kEmptyHashValue;
   return d;
+#endif /* FA_MF_ASM */
 }
 
 
 static void SkipMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byte *cur, CLzRef *son,
     size_t _cyclicBufferPos, UInt32 _cyclicBufferSize, UInt32 cutValue)
 {
+#ifdef FA_MF_ASM
+  {
+    Lzf25BtArgs a;
+    a.cur = cur;  a.son = son;  a.distances = NULL;  a.lenLimit = lenLimit;  a.curMatch = curMatch;
+    a.pos = pos;  a.cyclicBufferPos = (UInt32)_cyclicBufferPos;  a.cyclicBufferSize = _cyclicBufferSize;
+    a.cutValue = cutValue;  a.maxLen = 0;
+    lzf25_bt_skip (&a);
+  }
+#else
   CLzRef *ptr0 = son + ((size_t)_cyclicBufferPos << 1) + 1;
   CLzRef *ptr1 = son + ((size_t)_cyclicBufferPos << 1);
   unsigned len0 = 0, len1 = 0;
@@ -1085,6 +1108,7 @@ static void SkipMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const 
   
   *ptr0 = *ptr1 = kEmptyHashValue;
   return;
+#endif /* FA_MF_ASM */
 }
 
 
@@ -1216,6 +1240,46 @@ static UInt32* Bt3_MatchFinder_GetMatches(void *_p, UInt32 *distances)
 }
 
 
+/* FreeArc-c PERF (FA_MF_ASM): software-pipelined prefetching for the single-thread BT4 walk.
+   The tree walk is a chain of dependent cache misses that cannot be prefetched, but its
+   STARTING points can: at position pos we prefetch the hash4 head of pos+2 and - using the
+   (already prefetched) head of pos+1 - the son[] pair and the first data byte of the root
+   candidate of pos+1. These are pure memory hints computed with plain reads (a stale head
+   only makes a hint useless), so matches and son[] are unchanged. Only available input bytes
+   are read. The batched MT walk (LzFindOpt.c) does the same from its hash[] deltas. */
+#if defined(FA_MF_ASM) && defined(__GNUC__)
+#define LZF25_PF_AHEAD 2
+Z7_FORCE_INLINE
+static void Bt4_PrefetchAhead(const CMatchFinder *p, const Byte *cur)
+{
+  if (GET_AVAIL_BYTES(p) >= 4 + LZF25_PF_AHEAD)
+  {
+    {
+      const Byte *c = cur + LZF25_PF_AHEAD;
+      const UInt32 t = p->crc[c[0]] ^ c[1] ^ ((UInt32)c[2] << 8);
+      const UInt32 h = (t ^ (p->crc[c[3]] << kLzHash_CrcShift_1)) & p->hashMask;
+      __builtin_prefetch(p->hash + kFix4HashSize + h);
+    }
+    {
+      const Byte *c = cur + 1;
+      const UInt32 t = p->crc[c[0]] ^ c[1] ^ ((UInt32)c[2] << 8);
+      const UInt32 h = (t ^ (p->crc[c[3]] << kLzHash_CrcShift_1)) & p->hashMask;
+      const UInt32 delta = p->pos + 1 - p->hash[kFix4HashSize + h];
+      if (delta < p->cyclicBufferSize)
+      {
+        UInt32 cbp = p->cyclicBufferPos + 1;
+        if (cbp == p->cyclicBufferSize)
+          cbp = 0;
+        __builtin_prefetch(p->son + ((size_t)(cbp - delta + (cbp < delta ? p->cyclicBufferSize : 0)) << 1));
+        __builtin_prefetch(c - delta);
+      }
+    }
+  }
+}
+#else
+#define Bt4_PrefetchAhead(p, cur)
+#endif
+
 static UInt32* Bt4_MatchFinder_GetMatches(void *_p, UInt32 *distances)
 {
   CMatchFinder *p = (CMatchFinder *)_p;
@@ -1226,6 +1290,7 @@ static UInt32* Bt4_MatchFinder_GetMatches(void *_p, UInt32 *distances)
   GET_MATCHES_HEADER(4)
 
   HASH4_CALC
+  Bt4_PrefetchAhead(p, cur);
 
   hash = p->hash;
   pos = p->pos;
@@ -1559,6 +1624,7 @@ static void Bt4_MatchFinder_Skip(void *_p, UInt32 num)
     UInt32 h2, h3;
     UInt32 *hash;
     HASH4_CALC
+    Bt4_PrefetchAhead(p, cur);
     hash = p->hash;
     curMatch = (hash + kFix4HashSize)[hv];
     hash                  [h2] =

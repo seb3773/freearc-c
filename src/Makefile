@@ -15,14 +15,16 @@ ifeq ($(LZMA_ASM),1)
   LZMA_ASM_ENC = $(ENC_OBJDIR)/LzmaDecOpt.o
 endif
 # x86-64 assembly match finders for the ENCODER (bit-exact LZMA BT/HT match finder in
-# LzFind.c and Tornado match length kernels): see Compression/LZMA2/asm/LzFind_x86_64.S,
+# LzFind.c, the LZMA SDK 25.01 BT match finder of the -nobitexact encoder - single-thread
+# GetMatchesSpec1/SkipMatchesSpec and the batched MT GetMatchesSpecN_2 - and Tornado match
+# length kernels): see Compression/LZMA2/asm/LzFind_x86_64.S, LzFind25_x86_64.S,
 # Compression/Tornado/asm/tor_match_x86_64.S and Compression/asm/. Output is bit-identical
 # to the C code. Enabled by default on x86-64 hosts (and always for the Win64 cross build);
 # MF_ASM=0 / MF_ASM_WIN64=0 force the portable C code. ARM64 never uses it.
 MF_ASM ?= $(if $(filter x86_64 amd64,$(shell uname -m)),1,0)
 MF_ASM_WIN64 ?= 1
 MF_ASM_INC = Compression/asm/fa_x86_64.h
-MF_ASM_NAMES = fa_cpu_x86_64.o LzFind_x86_64.o tor_match_x86_64.o
+MF_ASM_NAMES = fa_cpu_x86_64.o LzFind_x86_64.o LzFind25_x86_64.o tor_match_x86_64.o
 ifeq ($(MF_ASM),1)
   MF_ASM_DEFS = -DFA_MF_ASM
   MF_ASM_ENC  = $(addprefix $(ENC_OBJDIR)/,$(MF_ASM_NAMES))
@@ -497,7 +499,7 @@ $(DEC_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(DEC_OBJDIR)
 $(ENC_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(ENC_OBJDIR)
 	$(CC) -c -w $(MODE_CFLAGS) $(FASTDEC_DEFS) -o $@ $(FASTDEC_SRC)
 $(ENC_OBJDIR)/lzma_fastenc.o: $(FASTENC_DEPS) | $(ENC_OBJDIR)
-	$(CC) -c -w $(MODE_CFLAGS) -o $@ $(FASTENC_SRC)
+	$(CC) -c -w $(MODE_CFLAGS) $(MF_ASM_DEFS) -o $@ $(FASTENC_SRC)
 $(DEC_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(DEC_OBJDIR)
 	$(CC) -c -o $@ $<
 $(ENC_OBJDIR)/LzmaDecOpt.o: Compression/LZMA2/sdk25/asm/LzmaDecOpt.S | $(ENC_OBJDIR)
@@ -507,17 +509,21 @@ $(DEC_WIN64_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(DEC_WIN64_OBJDIR)
 $(ENC_WIN64_OBJDIR)/lzma_fastdec.o: $(FASTDEC_DEPS) | $(ENC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -w -O3 -DZ7_LZMA_DEC_OPT -o $@ $(FASTDEC_SRC)
 $(ENC_WIN64_OBJDIR)/lzma_fastenc.o: $(FASTENC_DEPS) | $(ENC_WIN64_OBJDIR)
-	$(CC_WIN64) -c -w -O3 -o $@ $(FASTENC_SRC)
+	$(CC_WIN64) -c -w -O3 $(MF_ASM_WIN64_DEFS) -o $@ $(FASTENC_SRC)
 # --- x86-64 assembly match finders (encoder only) ---
 $(ENC_OBJDIR)/fa_cpu_x86_64.o: Compression/asm/fa_cpu_x86_64.S $(MF_ASM_INC) | $(ENC_OBJDIR)
 	$(CC) -c -o $@ $<
 $(ENC_OBJDIR)/LzFind_x86_64.o: Compression/LZMA2/asm/LzFind_x86_64.S $(MF_ASM_INC) | $(ENC_OBJDIR)
+	$(CC) -c -o $@ $<
+$(ENC_OBJDIR)/LzFind25_x86_64.o: Compression/LZMA2/asm/LzFind25_x86_64.S $(MF_ASM_INC) | $(ENC_OBJDIR)
 	$(CC) -c -o $@ $<
 $(ENC_OBJDIR)/tor_match_x86_64.o: Compression/Tornado/asm/tor_match_x86_64.S $(MF_ASM_INC) | $(ENC_OBJDIR)
 	$(CC) -c -o $@ $<
 $(ENC_WIN64_OBJDIR)/fa_cpu_x86_64.o: Compression/asm/fa_cpu_x86_64.S $(MF_ASM_INC) | $(ENC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -o $@ $<
 $(ENC_WIN64_OBJDIR)/LzFind_x86_64.o: Compression/LZMA2/asm/LzFind_x86_64.S $(MF_ASM_INC) | $(ENC_WIN64_OBJDIR)
+	$(CC_WIN64) -c -o $@ $<
+$(ENC_WIN64_OBJDIR)/LzFind25_x86_64.o: Compression/LZMA2/asm/LzFind25_x86_64.S $(MF_ASM_INC) | $(ENC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -o $@ $<
 $(ENC_WIN64_OBJDIR)/tor_match_x86_64.o: Compression/Tornado/asm/tor_match_x86_64.S $(MF_ASM_INC) | $(ENC_WIN64_OBJDIR)
 	$(CC_WIN64) -c -o $@ $<
