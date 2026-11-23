@@ -278,6 +278,7 @@ void MTCompressor<Job>::WriterThread()
         // Make thread available for next compression job
         FreeJobs.Put(job);
     }
+    FreeJobs.Put(NULL);
     Finished.Signal();
 }
 

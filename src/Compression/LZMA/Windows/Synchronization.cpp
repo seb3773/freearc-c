@@ -98,13 +98,10 @@ bool CSemaphore::Release(LONG releaseCount)
   ::pthread_mutex_lock(&_mtx);
   LONG newCount = this->u.sema.count + releaseCount;
   if (newCount > this->u.sema.maxCount)
-  {
-    ::pthread_mutex_unlock(&_mtx);
-    return false;
-  }
-  this->u.sema.count = newCount;
-  if (releaseCount == 1)  ::pthread_cond_signal(&_cnd);
-  else                    ::pthread_cond_broadcast(&_cnd);
+    this->u.sema.count = this->u.sema.maxCount;
+  else
+    this->u.sema.count = newCount;
+  ::pthread_cond_broadcast(&_cnd);
   ::pthread_mutex_unlock(&_mtx);
   return true;
 }

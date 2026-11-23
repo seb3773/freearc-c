@@ -368,7 +368,6 @@ int lzma_decompress( int dictionarySize,
                      void *auxdata )
 {
   int errcode = FREEARC_OK;
-  bool first_read = TRUE;
   UInt32 _inPos = 0, _inSize = 0, _inBufferSize = RangeDecoderBufferSize(dictionarySize);
   Byte  *_inBuf = (Byte*) MyAlloc(_inBufferSize);
   if (_inBuf == NULL)  return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
@@ -379,10 +378,9 @@ int lzma_decompress( int dictionarySize,
   {
     if (_inPos == _inSize)
     {
-      _inSize = errcode = first_read || !compress_all_at_once? callback ("read", _inBuf, _inBufferSize, auxdata) : 0;
+      _inSize = errcode = callback ("read", _inBuf, _inBufferSize, auxdata);
       if (errcode < 0)  break;
       _inPos = 0;
-      first_read = FALSE;
     }
     size_t oldDicPos = lzfd_dicPos (d);
     size_t curSize   = mymin (lzfd_dicBufSize (d) - oldDicPos, (size_t)LARGE_BUFFER_SIZE);
