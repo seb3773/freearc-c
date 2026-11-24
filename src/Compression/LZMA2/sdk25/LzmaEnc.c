@@ -20,6 +20,95 @@ Igor Pavlov : Public domain */
 #include "LzFindMt.h"
 #endif
 
+#if defined(MY_CPU_SSE2)
+#include <emmintrin.h>
+#endif
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
+/*
+ * Modern SIMD / 64-bit vectorized match extension routine for Optimal Parser (GetOptimum).
+ * Replaces byte-by-byte scalar loops while strictly respecting caller-specified limits
+ * (guaranteeing zero out-of-bounds reads and preserving 100% bit-exact equivalence).
+ */
+Z7_FORCE_INLINE
+static unsigned LzmaEnc_FindMatchLen(const Byte *data, const Byte *data2, unsigned len, unsigned limit)
+{
+#if defined(__AVX2__)
+  while (len + 32 <= limit)
+  {
+    __m256i v1 = _mm256_loadu_si256((const __m256i *)(const void *)(data + len));
+    __m256i v2 = _mm256_loadu_si256((const __m256i *)(const void *)(data2 + len));
+    __m256i cmp = _mm256_cmpeq_epi8(v1, v2);
+    unsigned mask = (unsigned)_mm256_movemask_epi8(cmp);
+    if (mask != 0xFFFFFFFFU)
+    {
+#if defined(__GNUC__) || defined(__clang__)
+      return len + (unsigned)__builtin_ctz(~mask);
+#elif defined(_MSC_VER)
+      unsigned long index;
+      _BitScanForward(&index, ~mask);
+      return len + (unsigned)index;
+#else
+      break;
+#endif
+    }
+    len += 32;
+  }
+#endif
+
+#if defined(MY_CPU_SSE2)
+  while (len + 16 <= limit)
+  {
+    __m128i v1 = _mm_loadu_si128((const __m128i *)(const void *)(data + len));
+    __m128i v2 = _mm_loadu_si128((const __m128i *)(const void *)(data2 + len));
+    __m128i cmp = _mm_cmpeq_epi8(v1, v2);
+    unsigned mask = (unsigned)_mm_movemask_epi8(cmp);
+    if (mask != 0xFFFF)
+    {
+#if defined(__GNUC__) || defined(__clang__)
+      return len + (unsigned)__builtin_ctz((~mask) & 0xFFFF);
+#elif defined(_MSC_VER)
+      unsigned long index;
+      _BitScanForward(&index, (~mask) & 0xFFFF);
+      return len + (unsigned)index;
+#else
+      break;
+#endif
+    }
+    len += 16;
+  }
+#endif
+
+#if defined(MY_CPU_LE_UNALIGN_64)
+  while (len + 8 <= limit)
+  {
+    UInt64 diff = GetUi64(data + len) ^ GetUi64(data2 + len);
+    if (diff != 0)
+    {
+#if defined(__GNUC__) || defined(__clang__)
+      return len + ((unsigned)__builtin_ctzll(diff) >> 3);
+#elif defined(_MSC_VER)
+      unsigned long index;
+      _BitScanForward64(&index, diff);
+      return len + ((unsigned)index >> 3);
+#else
+      break;
+#endif
+    }
+    len += 8;
+  }
+#endif
+
+  while (len < limit && data[len] == data2[len])
+    len++;
+  return len;
+}
+
 /* the following LzmaEnc_* declarations is internal LZMA interface for LZMA2 encoder */
 
 SRes LzmaEnc_PrepareForLzma2(CLzmaEncHandle p, ISeqInStreamPtr inStream, UInt32 keepWindowSize,
@@ -1269,8 +1358,7 @@ static unsigned GetOptimum(CLzmaEnc *p, UInt32 position)
         repLens[i] = 0;
         continue;
       }
-      for (len = 2; len < numAvail && data[len] == data2[len]; len++)
-      {}
+      len = LzmaEnc_FindMatchLen(data, data2, 2, numAvail);
       repLens[i] = len;
       if (len > repLens[repMaxIndex])
         repMaxIndex = i;
@@ -1684,8 +1772,7 @@ static unsigned GetOptimum(CLzmaEnc *p, UInt32 position)
         unsigned limit = p->numFastBytes + 1;
         if (limit > numAvailFull)
           limit = numAvailFull;
-        for (len = 3; len < limit && data[len] == data2[len]; len++)
-        {}
+        len = LzmaEnc_FindMatchLen(data, data2, 3, limit);
         
         {
           unsigned state2 = kLiteralNextStates[state];
@@ -1735,8 +1822,7 @@ static unsigned GetOptimum(CLzmaEnc *p, UInt32 position)
         if (data[0] != data2[0] || data[1] != data2[1])
           continue;
         
-        for (len = 2; len < numAvail && data[len] == data2[len]; len++)
-        {}
+        len = LzmaEnc_FindMatchLen(data, data2, 2, numAvail);
         
         // if (len < startLen) continue; // 18.new: speed optimization
 
@@ -1795,8 +1881,7 @@ static unsigned GetOptimum(CLzmaEnc *p, UInt32 position)
 
             price += GetPrice_Rep_0(p, state2, posState2);
 
-          for (; len2 < limit && data[len2] == data2[len2]; len2++)
-          {}
+          len2 = LzmaEnc_FindMatchLen(data, data2, len2, limit);
           
           len2 -= len;
           // if (len2 >= 3)
@@ -1903,8 +1988,7 @@ static unsigned GetOptimum(CLzmaEnc *p, UInt32 position)
           if (data[len2 - 2] == data2[len2 - 2])
           if (data[len2 - 1] == data2[len2 - 1])
           {
-          for (; len2 < limit && data[len2] == data2[len2]; len2++)
-          {}
+          len2 = LzmaEnc_FindMatchLen(data, data2, len2, limit);
           
           len2 -= len;
           
@@ -2003,8 +2087,7 @@ static unsigned GetOptimumFast(CLzmaEnc *p)
     const Byte *data2 = data - p->reps[i];
     if (data[0] != data2[0] || data[1] != data2[1])
       continue;
-    for (len = 2; len < numAvail && data[len] == data2[len]; len++)
-    {}
+    len = LzmaEnc_FindMatchLen(data, data2, 2, numAvail);
     if (len >= p->numFastBytes)
     {
       p->backRes = (UInt32)i;
@@ -2083,13 +2166,9 @@ static unsigned GetOptimumFast(CLzmaEnc *p)
     if (data[0] != data2[0] || data[1] != data2[1])
       continue;
     limit = mainLen - 1;
-    for (len = 2;; len++)
-    {
-      if (len >= limit)
-        return 1;
-      if (data[len] != data2[len])
-        break;
-    }
+    len = LzmaEnc_FindMatchLen(data, data2, 2, limit);
+    if (len >= limit)
+      return 1;
   }
   
   p->backRes = mainDist + LZMA_NUM_REPS;
