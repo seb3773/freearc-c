@@ -25,6 +25,8 @@ template<class T>
 struct P32 {
     DWORD o;
     T* get() const { return o ? (T*)(HeapStart + (o - 1)) : (T*)0; }
+    inline T* get_at(const BYTE *hs) const { return o ? (T*)(hs + (o - 1)) : (T*)0; }
+    inline T* get_nn(const BYTE *hs) const { return (T*)(hs + (o - 1)); }
     T* operator->() const { return get(); }
     operator T*() const { return get(); }
     T& operator[](int i) const { return get()[i]; }
@@ -188,12 +190,25 @@ BOOL _STDCALL StartSubAllocator(UINT t)
     }
     StopSubAllocator();
     int os_zeroed = 0;
+    size_t cap_t = t;
 #ifdef PPMD_HEAP_MMAP
     if (t) {
-        HeapStart = (BYTE*) ::mmap(NULL, t, PROT_READ|PROT_WRITE,
-                                 MAP_PRIVATE|MAP_ANONYMOUS|MAP_32BIT, -1, 0);
-        if (HeapStart == MAP_FAILED)        HeapStart = NULL;
+        const size_t page_sz = 4096u;
+        const size_t align = (t >= (2u << 20)) ? (2u << 20) : page_sz;
+        size_t map_t = ((size_t)t + page_sz - 1) & ~(page_sz - 1);
+        size_t req = map_t + (align > page_sz ? align : 0);
+        void *raw = ::mmap(NULL, req, PROT_READ|PROT_WRITE,
+                           MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+        if (raw == MAP_FAILED)        HeapStart = NULL;
         else {
+            uintptr_t addr = (uintptr_t)raw;
+            uintptr_t aligned = (addr + align - 1) & ~(uintptr_t)(align - 1);
+            size_t prefix = (size_t)(aligned - addr);
+            size_t suffix = req - prefix - map_t;
+            if (prefix) ::munmap((void *)addr, prefix);
+            if (suffix) ::munmap((void *)(aligned + map_t), suffix);
+            HeapStart = (BYTE *)aligned;
+            cap_t = map_t;
             HeapViaMmap = 1;
             os_zeroed = 1;
         }
@@ -207,7 +222,7 @@ BOOL _STDCALL StartSubAllocator(UINT t)
     }
     if (HeapStart == NULL)                  return FALSE;
     if (!os_zeroed && t)                    memset(HeapStart, 0, t);
-    HeapCapacity=t;                         SubAllocatorSize=t;
+    HeapCapacity=(UINT)cap_t;               SubAllocatorSize=t;
     LowLo=LowHi=HighLo=HighHi=NULL;
 #if defined(PPMD_HEAP_MMAP) && defined(MADV_HUGEPAGE)
     /* 256 MB in 4 KB pages overflows the L2 TLB. 2 MB pages bring it down to 128 entries. */

@@ -97,60 +97,63 @@ inline void ariShiftEncodeSymbol(UINT SHIFT)
    BOT and the high byte stable) returns immediately. When a shift is needed and
    range cannot overflow 32 bits, the shift count comes from the leading zeros
    of (low XOR low+range) instead of re-testing the condition each byte. */
-inline void ariDecNormalize(_PPMD_FILE *stream)
+inline void ariDecNormalizeLocal(DWORD &l_low, DWORD &l_code, DWORD &l_range, _PPMD_FILE *stream)
 {
-    if (range >= (DWORD)BOT && range < (DWORD)TOP) {
-        DWORD diff = low ^ (low + range);
+    if (l_range >= (DWORD)BOT && l_range < (DWORD)TOP) {
+        DWORD diff = l_low ^ (l_low + l_range);
         if (diff >= (DWORD)TOP)
             return;
         if (diff != 0) {
             unsigned k = (unsigned)__builtin_clz(diff) >> 3;
-            if (k > 0 && range < (1u << (32 - 8*k))) {
-                /* k is 1, 2 or 3. When those bytes are already buffered, fold the
-                   shifts into one update. A short buffer still falls back to get(),
-                   which refills, so the bytes consumed stay identical. */
+            if (k > 0 && l_range < (1u << (32 - 8*k))) {
                 if (__builtin_expect(k == 1, 1)) {
                     DWORD b;
                     if (__builtin_expect(stream->readByte(b), 1)) {
-                        code = (code << 8) | b;
-                        range <<= 8;        low <<= 8;
+                        l_code = (l_code << 8) | b;
+                        l_range <<= 8;        l_low <<= 8;
                         return;
                     }
                 } else {
                     DWORD packed;
                     if (stream->readPacked(k, packed)) {
                         unsigned sh = k << 3;
-                        code = (code << sh) | packed;
-                        range <<= sh;      low <<= sh;
+                        l_code = (l_code << sh) | packed;
+                        l_range <<= sh;      l_low <<= sh;
                         return;
                     }
                 }
                 do {
-                    code=(code << 8) | _PPMD_D_GETC(stream);
-                    range <<= 8;            low <<= 8;
+                    l_code=(l_code << 8) | _PPMD_D_GETC(stream);
+                    l_range <<= 8;            l_low <<= 8;
                 } while (--k);
                 return;
             }
         }
     }
-    while ((low ^ (low+range)) < TOP || range < BOT &&
-            ((range= -low & (BOT-1)),1)) {
-        code=(code << 8) | _PPMD_D_GETC(stream);
-        range <<= 8;                        low <<= 8;
+    while ((l_low ^ (l_low+l_range)) < TOP || l_range < BOT &&
+            ((l_range= -l_low & (BOT-1)),1)) {
+        l_code=(l_code << 8) | _PPMD_D_GETC(stream);
+        l_range <<= 8;                        l_low <<= 8;
     }
 }
+inline void ariScaleRangeDownLocal(DWORD &l_range, DWORD scale)
+{
+    if (__builtin_expect(scale - 1u < 65535u, 1))
+        l_range = ::ppmd_div_u32_small(l_range, scale);
+    else
+        l_range /= scale;
+}
+inline void ariRemoveSubrangeLocal(DWORD &l_low, DWORD &l_range, const SUBRANGE &sr)
+{
+    l_low += l_range*sr.LowCount;
+    l_range *= sr.HighCount-sr.LowCount;
+}
+inline void ariDecNormalize(_PPMD_FILE *stream) { ariDecNormalizeLocal(low, code, range, stream); }
 #define ARI_DEC_NORMALIZE(stream) ariDecNormalize(stream)
 /* range := floor(range / SubRange.scale), bit-identical to the hardware
    division. scale is a frequency total; values above 65535 fall back to it.
    ppmd_div_u32_small() is the reciprocal multiply defined in C_PPMD.cpp. */
-inline void ariScaleRangeDown()
-{
-    UINT d = SubRange.scale;
-    if (__builtin_expect(d - 1u < 65535u, 1))
-        range = ::ppmd_div_u32_small(range, d);
-    else
-        range /= d;
-}
+inline void ariScaleRangeDown() { ariScaleRangeDownLocal(range, SubRange.scale); }
 inline UINT ariGetCurrentCount() {
     ariScaleRangeDown();
     /* (code-low)/range stays a hardware division: after the scale step the
@@ -161,8 +164,4 @@ inline UINT ariGetCurrentCount() {
 inline UINT ariGetCurrentShiftCount(UINT SHIFT) {
     return (code-low)/(range >>= SHIFT);
 }
-inline void ariRemoveSubrange()
-{
-    low += range*SubRange.LowCount;
-    range *= SubRange.HighCount-SubRange.LowCount;
-}
+inline void ariRemoveSubrange() { ariRemoveSubrangeLocal(low, range, SubRange); }

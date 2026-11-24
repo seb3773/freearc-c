@@ -1326,13 +1326,14 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     bin3 = mt ? "4x4:lzma:96m:normal:32:mc16" : "lzma:96m:normal:32:mc16";
   }
   std::string etor_c3 = mt ? "4x4:tor:c3" : "tor:c3";
-  // -nobitexact text back-end: PPMd restarts its model whenever its 256 MB are exhausted, so
-  // cutting the (dict preprocessed) text stream into independent 64 MB 4x4 jobs for LZP+PPMd
-  // costs no ratio. Encoder and decoder keep per-thread state (no global lock) and reuse the arena
-  // across blocks, so the 4x4 workers actually run at the same time.
-  std::string text_ppmd_nbx = mt ? "4x4:b32m:ppmd:16:256m" : "ppmd:16:256m";
+  // -nobitexact text/DNA back-ends:
+  // - $text: split the dict+lzp preprocessed stream into independent 32 MB 4x4 jobs for
+  //   PPMd so both compression and decompression run in parallel across all threads.
+  // - $dna: order-7 / 16 MB fits L3 cache and beats order-16 / 256 MB in both ratio and
+  //   speed (~5x faster compression & extraction, 16x less RAM per worker).
+  std::string dna_ppmd_nbx = mt ? "4x4:b32m:ppmd:7:16m" : "ppmd:7:16m";
   std::string text_chain_nbx = mt
-    ? "dict:p:64m:80%+4x4:b64m:lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m"
+    ? "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+4x4:b32m:ppmd:16:256m"
     : "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m";
   std::string bmp = "mm+grzip:m1:l2048:a";
   std::string bin1 = mt ? "4x4:tor:3:8mb" : "tor:4";
@@ -1381,7 +1382,7 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string("$wav"), "tta"));
     out.push_back(std::make_pair(std::string("$bmp"), bmp));
     if (g_opt_nobitexact) {
-      out.push_back(std::make_pair(std::string("$dna"), text_ppmd_nbx));
+      out.push_back(std::make_pair(std::string("$dna"), dna_ppmd_nbx));
     }
   } else if (strequ(name, "4x")) {
     out.push_back(std::make_pair(std::string(""), std::string("exe+delta+") + lzma4));
@@ -1391,7 +1392,7 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string("$bmp"), std::string("mm+") + lzma4));
     out.push_back(std::make_pair(std::string("$compressed"), mt ? "4x4:tor:8m:c3" : "tor:8m:c3"));
     if (g_opt_nobitexact) {
-      out.push_back(std::make_pair(std::string("$dna"), text_ppmd_nbx));
+      out.push_back(std::make_pair(std::string("$dna"), dna_ppmd_nbx));
     }
   } else if (strequ(name, "5")) {
     std::string rep_m5 = g_opt_nobitexact ? "rep:256m+" : "rep:96m+";
@@ -1404,7 +1405,7 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string("$wav"), "tta"));
     out.push_back(std::make_pair(std::string("$bmp"), bmp));
     if (g_opt_nobitexact) {
-      out.push_back(std::make_pair(std::string("$dna"), text_ppmd_nbx));
+      out.push_back(std::make_pair(std::string("$dna"), dna_ppmd_nbx));
     }
   } else if (strequ(name, "5x") || strequ(name, "x") || strequ(name, "mx") || strequ(name, "max") || strequ(name, "ultra")) {
     std::string prefix = g_opt_nobitexact ? "rep:256m+" : "";
@@ -1417,7 +1418,7 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
     out.push_back(std::make_pair(std::string("$bmp"), std::string("mm+") + lzma5));
     if (g_opt_nobitexact) {
-      out.push_back(std::make_pair(std::string("$dna"), text_ppmd_nbx));
+      out.push_back(std::make_pair(std::string("$dna"), dna_ppmd_nbx));
     }
   }
   return out;
