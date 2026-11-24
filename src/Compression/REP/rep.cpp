@@ -223,6 +223,12 @@ rep:512 (ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½) ï¿½ rep:4096? ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿
 
 // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ************************************************************************
 #include "../Compression.h"
+#include <stddef.h>
+#include <stdint.h>
+
+#if defined(__SSE2__) || defined(__x86_64__) || defined(_M_X64)
+#include <emmintrin.h>
+#endif
 
 
 #ifdef REP_LIBRARY
@@ -269,14 +275,94 @@ inline static unsigned sqrtb (unsigned n, unsigned base = 2)
 // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½, ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ *p ï¿½ *q
 static inline byte* find_match_start (byte* p, byte* q, byte* start)
 {
-    while (q>start)   if (*--p != *--q)  return q+1;
+#if defined(__SSE2__) || defined(__x86_64__) || defined(_M_X64)
+    while (q >= start + 16) {
+        __m128i vp = _mm_loadu_si128((const __m128i*)(p - 16));
+        __m128i vq = _mm_loadu_si128((const __m128i*)(q - 16));
+        __m128i cmp = _mm_cmpeq_epi8(vp, vq);
+        unsigned mask = (unsigned)_mm_movemask_epi8(cmp);
+        if (mask != 0xffff) {
+            unsigned diff_mask = (~mask) & 0xffff;
+            int match_bytes = __builtin_clz(diff_mask) - 16;
+            return q - match_bytes;
+        }
+        p -= 16;
+        q -= 16;
+    }
+    if (q >= start + 8) {
+        uint64 vp, vq;
+        memcpy(&vp, p - 8, 8);
+        memcpy(&vq, q - 8, 8);
+        uint64 diff = vp ^ vq;
+        if (diff != 0) {
+            return q - (__builtin_clzll(diff) >> 3);
+        }
+        p -= 8;
+        q -= 8;
+    }
+#elif (defined(__aarch64__) || defined(_M_ARM64))
+    while (q >= start + 8) {
+        uint64 vp, vq;
+        memcpy(&vp, p - 8, 8);
+        memcpy(&vq, q - 8, 8);
+        uint64 diff = vp ^ vq;
+        if (diff != 0) {
+            return q - (__builtin_clzll(diff) >> 3);
+        }
+        p -= 8;
+        q -= 8;
+    }
+#endif
+    while (q > start) {
+        if (*--p != *--q) return q + 1;
+    }
     return q;
 }
 
 // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½, ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ *p ï¿½ *q
 static inline byte* find_match_end (byte* p, byte* q, byte* end)
 {
-    while (q<end && *p==*q) p++,q++;
+#if defined(__SSE2__) || defined(__x86_64__) || defined(_M_X64)
+    while (q + 16 <= end) {
+        __m128i vp = _mm_loadu_si128((const __m128i*)p);
+        __m128i vq = _mm_loadu_si128((const __m128i*)q);
+        __m128i cmp = _mm_cmpeq_epi8(vp, vq);
+        unsigned mask = (unsigned)_mm_movemask_epi8(cmp);
+        if (mask != 0xffff) {
+            int match_bytes = __builtin_ctz(~mask & 0xffff);
+            return q + match_bytes;
+        }
+        p += 16;
+        q += 16;
+    }
+    if (q + 8 <= end) {
+        uint64 vp, vq;
+        memcpy(&vp, p, 8);
+        memcpy(&vq, q, 8);
+        uint64 diff = vp ^ vq;
+        if (diff != 0) {
+            return q + (__builtin_ctzll(diff) >> 3);
+        }
+        p += 8;
+        q += 8;
+    }
+#elif (defined(__aarch64__) || defined(_M_ARM64))
+    while (q + 8 <= end) {
+        uint64 vp, vq;
+        memcpy(&vp, p, 8);
+        memcpy(&vq, q, 8);
+        uint64 diff = vp ^ vq;
+        if (diff != 0) {
+            return q + (__builtin_ctzll(diff) >> 3);
+        }
+        p += 8;
+        q += 8;
+    }
+#endif
+    while (q < end && *p == *q) {
+        p++;
+        q++;
+    }
     return q;
 }
 
@@ -285,9 +371,33 @@ static inline byte* find_match_end (byte* p, byte* q, byte* end)
 // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½)
 static inline void memcpy_lz_match (byte* p, byte* q, unsigned len)
 {
-    if (len)
-    do *p++ = *q++;
-    while (--len);
+    if (len == 0) return;
+
+    // Non-overlapping buffers: use fast standard memcpy
+    if (p >= q + len || q >= p + len) {
+        memcpy(p, q, len);
+        return;
+    }
+
+    // Overlapping (LZ match with offset = p - q):
+    ptrdiff_t offset = p - q;
+    if (offset == 1) {
+        memset(p, *q, len);
+        return;
+    }
+
+    if (offset >= 8) {
+        while (len >= 8) {
+            memcpy(p, q, 8);
+            p += 8;
+            q += 8;
+            len -= 8;
+        }
+    }
+
+    while (len--) {
+        *p++ = *q++;
+    }
 }
 
 
