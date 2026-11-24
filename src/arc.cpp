@@ -1327,10 +1327,13 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
   }
   std::string etor_c3 = mt ? "4x4:tor:c3" : "tor:c3";
   // -nobitexact text back-end: PPMd restarts its model whenever its 256 MB are exhausted, so
-  // cutting the (dict+lzp preprocessed) text stream into independent 32 MB 4x4 jobs costs no
-  // ratio. Encoder and decoder keep per-thread state (no global lock) and reuse the arena
+  // cutting the (dict preprocessed) text stream into independent 64 MB 4x4 jobs for LZP+PPMd
+  // costs no ratio. Encoder and decoder keep per-thread state (no global lock) and reuse the arena
   // across blocks, so the 4x4 workers actually run at the same time.
   std::string text_ppmd_nbx = mt ? "4x4:b32m:ppmd:16:256m" : "ppmd:16:256m";
+  std::string text_chain_nbx = mt
+    ? "dict:p:64m:80%+4x4:b64m:lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m"
+    : "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m";
   std::string bmp = "mm+grzip:m1:l2048:a";
   std::string bin1 = mt ? "4x4:tor:3:8mb" : "tor:4";
   std::string bin2 = mt ? "4x4:tor:5" : "tor:6";
@@ -1395,7 +1398,7 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string(""), rep_m5 + "exe+delta+" + lzma5));
     out.push_back(std::make_pair(std::string("$obj"), rep_m5 + "delta+" + lzma5));
     std::string text_m5 = g_opt_nobitexact
-      ? std::string("dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+") + text_ppmd_nbx
+      ? text_chain_nbx
       : "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:12:192m";
     out.push_back(std::make_pair(std::string("$text"), text_m5));
     out.push_back(std::make_pair(std::string("$wav"), "tta"));
@@ -1408,7 +1411,7 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     out.push_back(std::make_pair(std::string(""), prefix + "exe+delta+" + lzma5));
     out.push_back(std::make_pair(std::string("$obj"), prefix + "delta+" + lzma5));
     std::string text_mx = g_opt_nobitexact
-      ? std::string("dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+") + text_ppmd_nbx
+      ? text_chain_nbx
       : (std::string("dict:128m:75%+") + lzma5);
     out.push_back(std::make_pair(std::string("$text"), text_mx));
     out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
@@ -2918,11 +2921,11 @@ static std::string nbx_balance_4x4_lzma(const std::string &chain, uint64 insize,
  * Safety rules:
  *  - a memory budget (3/4 of physical RAM) caps the sum of the estimated compression memory of
  *    the running blocks (a block that alone exceeds the budget still runs, but alone);
- *  - codecs that keep process-global state (DICT, MM/TTA) never run in two blocks at once.
+ *  - codecs that keep process-global state (MM/TTA) never run in two blocks at once (DICT state
+ *    is now thread-local via dict_enc_tls and can run concurrently).
  */
 enum {
-  CB_TAG_DICT = 1,   // DICT keeps its dictionary in globals
-  CB_TAG_MM   = 2    // MM / TTA keep per-stream state in globals
+  CB_TAG_MM   = 1    // MM / TTA keep per-stream state in globals
 };
 
 static unsigned concurrent_block_tags(const std::string &chain) {
@@ -2931,8 +2934,7 @@ static unsigned concurrent_block_tags(const std::string &chain) {
   for (size_t i = 0; i <= chain.size(); i++) {
     char c = i < chain.size() ? chain[i] : '+';
     if (c == '+' || c == ':') {
-      if (tok == "dict") tags |= CB_TAG_DICT;
-      else if (tok == "mm" || tok == "tta") tags |= CB_TAG_MM;
+      if (tok == "mm" || tok == "tta") tags |= CB_TAG_MM;
       tok.clear();
     } else {
       tok += c;

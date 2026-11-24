@@ -235,7 +235,48 @@ int use_plain_dictionary = 0;
 
 
 // СТРУКТУРЫ ДАННЫХ **********************************************************************
-count_t char_counts[UCHAR_MAX+1];   // Счётчики встречаемости отдельных сисмволов в исходном тексте
+struct Word;
+struct stats;
+struct CodeWord;
+
+struct DictEncTls {
+    Word *FirstWord;
+    Word *NextWord;
+    Word *LastWord;
+    stats *scan_hash;
+    CodeWord *codewords_hash;
+    ushort *hashbits;
+    byte *words_text;
+    byte first2_filter[(UCHAR_MAX+1)*(UCHAR_MAX+1)/8];
+    count_t char_counts[UCHAR_MAX+1];
+    unsigned hashsize, hashmask;
+    byte PREFIX_FOR_WEAK_CHARS;
+    void init() {
+        FirstWord = NextWord = LastWord = NULL;
+        scan_hash = NULL;
+        codewords_hash = NULL;
+        hashbits = NULL;
+        words_text = NULL;
+        memset(first2_filter, 0, sizeof(first2_filter));
+        memset(char_counts, 0, sizeof(char_counts));
+        hashsize = hashmask = 0;
+        PREFIX_FOR_WEAK_CHARS = 0;
+    }
+};
+static thread_local DictEncTls dict_enc_tls;
+
+#define FirstWord               (dict_enc_tls.FirstWord)
+#define NextWord                (dict_enc_tls.NextWord)
+#define LastWord                (dict_enc_tls.LastWord)
+#define scan_hash               (dict_enc_tls.scan_hash)
+#define codewords_hash          (dict_enc_tls.codewords_hash)
+#define hashbits                (dict_enc_tls.hashbits)
+#define words_text              (dict_enc_tls.words_text)
+#define first2_filter           (dict_enc_tls.first2_filter)
+#define char_counts             (dict_enc_tls.char_counts)
+#define hashsize                (dict_enc_tls.hashsize)
+#define hashmask                (dict_enc_tls.hashmask)
+#define PREFIX_FOR_WEAK_CHARS   (dict_enc_tls.PREFIX_FOR_WEAK_CHARS)   // Счётчики встречаемости отдельных сисмволов в исходном тексте
 
 // Разбить все символы на несколько классов. Слово должно состоять из символов только одного класса
 char char_class_table[UCHAR_MAX+1] = {
@@ -311,13 +352,7 @@ struct {              // Эти значения используются после очистки словаря:
 };
 
 // Массив слов, найденных в тексте
-Word *FirstWord;
-
-// Адрес первого свободного элемента в FirstWord
-Word *NextWord;
-
-// Адрес конца словаря. На следующих шагах алгоритма отражает конец используемой части таблицы
-Word *LastWord;
+// (FirstWord, NextWord, LastWord managed by dict_enc_tls)
 
 // Добавить очередное слово в словарь
 inline void AddWord (byte *ptr, unsigned len, unsigned hash, unsigned hash0)
@@ -356,7 +391,7 @@ int lexicographical_order (const Word *a, const Word *b)
 
 
 // Этот байт используется как префикс для тех символов, которые стали жертвой слов
-byte PREFIX_FOR_WEAK_CHARS;
+// PREFIX_FOR_WEAK_CHARS managed by dict_enc_tls
 
 
 
@@ -389,10 +424,10 @@ inline unsigned rehash (unsigned hash, byte c)
 
 // Хеш-таблица, используемая при построении словаря
 struct stats {
-    scnt_t  count;   // счётчик частоты
-    hash0_t hash0;   // хеш родительского слова
-}
-*scan_hash;
+    scnt_t  count;
+    hash0_t hash0;
+};
+// (scan_hash managed by dict_enc_tls)
 
 // Найти слот в хеш-массиве, хранящий информацию о слове hash c родителем phash
 #define SEARCH_IN_HASH(hash,phash,c,x,on_found,on_long_hash_chain)                                                       \
@@ -465,6 +500,7 @@ static void add_byte_histogram (const byte *p, const byte *end)
 // Отключение спекулятивности поиска (WORD_STEP = 1) чуть-чуть улучшит сжатие ценой скорости
 int phase1 (byte *buf, unsigned bufsize)
 {
+    dict_enc_tls.init();
     // Максимально допустимое количество слов - 1/32 от объёма входных данных
     unsigned max_words = roundup_to_power_of (mymax(bufsize/32,32768), 2);
     FirstWord = (Word*) BigAlloc (max_words * sizeof (Word));
@@ -936,18 +972,8 @@ union {
 #endif
 };
 
-unsigned  hashsize;
-unsigned  hashmask;
-// Bit (a<<8|b) is set if some dictionary word starts with the bytes a,b (or is 1 byte long and
-// starts with a). FindWord() can only return a word that equals the input at p0, so when the
-// bit of p0[0],p0[1] is clear FindWord() returns NULL and the lookup can be skipped.
-// (A second, hashed 3-byte filter was measured: it removes ~40% of the remaining FindWord
-// calls on text but gave no measurable speed-up, so it is not used.)
-byte      first2_filter[(UCHAR_MAX+1)*(UCHAR_MAX+1)/8];
+// (hashsize, hashmask, first2_filter, codewords_hash, hashbits, words_text managed by dict_enc_tls)
 #define FIRST2_TEST(p)  (first2_filter[((p)[0]<<5) | ((p)[1]>>3)] & (1 << ((p)[1]&7)))
-CodeWord *codewords_hash;
-ushort   *hashbits;
-byte     *words_text;
 
 // Строим небольшой хеш для всех используемых слов и их частичных начал.
 // Этот хеш должен позволить нам просканировать текст до конца слова и определить его код.
@@ -1010,7 +1036,7 @@ int phase6 ()
             unsigned hash0 = hash;
             hash = update_hash (hash, c);  int n=13;
             while (hashbits [hash & hashmask]  &&  hashbits[hash&hashmask] != (ushort)hash0) {
-                if (--n == 0)  goto NextWord;  // Защита от зацикливания
+                if (--n == 0)  goto skip_word;
                 hash = rehash (hash, c);
             }
             hashbits [hash & hashmask] = hash0;
@@ -1037,7 +1063,7 @@ int phase6 ()
             debug (newp->orig_word = p);
             debug (verbose>2 && printf( "RecordWord hash=%d len=%d '%.*s'\n", hash & hashmask, p->len, p->len, p->ptr));
         }
-NextWord: ;
+skip_word: ;
     }
     return 0;  // All right
 }
