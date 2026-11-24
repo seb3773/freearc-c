@@ -280,6 +280,7 @@ else
   UInt32 cutValue = _cutValue;
   const Byte *len0 = cur, *len1 = cur;
   const Byte *maxLen = cur + _maxLen;
+  UInt32 stagnation = 0;
 
   // if (cutValue == 0) { *ptr0 = *ptr1 = kEmptyHashValue; } else
   for (LOG_ITER(g_NumIters_Tree++);;)
@@ -309,9 +310,11 @@ else
           }
         if (maxLen < len)
         {
+          const size_t curMatchLen = (size_t)(len - cur);
           maxLen = len;
-          *d++ = (UInt32)(len - cur);
+          *d++ = (UInt32)curMatchLen;
           *d++ = delta - 1;
+          stagnation = 0;
           
           if (len == lenLimit)
           {
@@ -366,8 +369,17 @@ else
 
             break; // break from TREE iterations
           }
+
+          if (BT_IS_GOOD_MATCH(curMatchLen, delta))
+          {
+            if (cutValue > BT_GOOD_MATCH_CUT)
+              cutValue = BT_GOOD_MATCH_CUT;
+          }
+          goto match_updated_n;
         }
       }
+      stagnation++;
+match_updated_n:
       {
         const UInt32 curMatch = (UInt32)pos - delta; // (UInt32)(pos + diff);
         if (len[diff] < len[0])
@@ -390,7 +402,7 @@ else
         }
         delta = (UInt32)pos - delta;
  
-        if (--cutValue == 0 || delta >= cbs)
+        if (--cutValue == 0 || delta >= cbs || stagnation >= BT_STAGNATION_LIMIT)
         {
           *ptr0 = *ptr1 = kEmptyHashValue;
           _distances[-1] = (UInt32)(d - _distances);

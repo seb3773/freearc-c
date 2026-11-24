@@ -42,6 +42,14 @@
 #define LZF25_PF_DIST 2
 #endif
 
+#ifndef BT_STAGNATION_LIMIT
+#define BT_STAGNATION_LIMIT 48
+#endif
+
+#ifndef BT_GOOD_MATCH_CUT
+#define BT_GOOD_MATCH_CUT 16
+#endif
+
 /* Lzf25BtArgs layout (must match sdk25/LzFindAsm.h) */
 #define BT_CUR      0
 #define BT_SON      8
@@ -59,6 +67,7 @@
 #define F_MAXLEN    8
 #define F_CUT       12
 #define F_CMCHECK   16
+#define F_STAG      20
 #define F_SIZE      24
 
 /*
@@ -96,6 +105,7 @@
         lea     r8, [r9 + 4]                    /* ptr0 = son + 2*cbp + 1 */
         xor     r10d, r10d
         xor     r11d, r11d
+        mov     dword ptr [rsp + F_STAG], 0
         .endm
 
         .macro B25_EPILOGUE
@@ -151,7 +161,7 @@ FA_FUNC(lzf25_bt_getmatches)
         B25_NODE
         movzx   eax, byte ptr [rbx + rdx]
         cmp     al, byte ptr [rdi + rdx]
-        jne     .Lg_descend                     /* pb[len] != cur[len] */
+        jne     .Lg_no_prog                     /* pb[len] != cur[len] */
         inc     edx
         cmp     edx, ebp
         je      .Lg_max                         /* ++len == lenLimit */
@@ -162,8 +172,9 @@ FA_FUNC(lzf25_bt_getmatches)
         LZEXT   rbx, rdi, edx, rdx, ebp, rbp    /* len = LzExt(pb, cur, len+1, lenLimit) */
 .Lg_max:
         cmp     edx, dword ptr [rsp + F_MAXLEN]
-        jbe     .Lg_descend
+        jbe     .Lg_no_prog
         mov     dword ptr [rsp + F_MAXLEN], edx /* maxLen = len */
+        mov     dword ptr [rsp + F_STAG], 0     /* progress: reset stagnation */
         mov     rax, qword ptr [rsp + F_DIST]
         mov     dword ptr [rax], edx            /* *d++ = len */
         not     ecx
@@ -175,10 +186,31 @@ FA_FUNC(lzf25_bt_getmatches)
         mov     qword ptr [rsp + F_DIST], rax
         cmp     edx, ebp
         je      .Lg_full
+
+        /* Good match cutoff */
+        cmp     edx, 96
+        jb      .Lg_descend
+        mov     eax, r12d
+        sub     eax, ecx                        /* delta = pos - curMatch */
+        cmp     eax, 65536
+        jb      .Lg_good_match
+        cmp     edx, 160
+        jb      .Lg_descend
+.Lg_good_match:
+        cmp     dword ptr [rsp + F_CUT], BT_GOOD_MATCH_CUT
+        jbe     .Lg_descend
+        mov     dword ptr [rsp + F_CUT], BT_GOOD_MATCH_CUT
+        jmp     .Lg_descend
+
+.Lg_no_prog:
+        add     dword ptr [rsp + F_STAG], 1
+
 .Lg_descend:
         B25_DESCEND
         sub     dword ptr [rsp + F_CUT], 1      /* while (--cutValue ... */
         jz      .Lg_empty
+        cmp     dword ptr [rsp + F_STAG], BT_STAGNATION_LIMIT
+        jae     .Lg_empty
         cmp     ecx, dword ptr [rsp + F_CMCHECK]
         ja      .Lg_loop                        /*        ... && cmCheck < curMatch) */
 .Lg_empty:
@@ -205,15 +237,38 @@ FA_FUNC(lzf25_bt_skip)
         B25_NODE
         movzx   eax, byte ptr [rbx + rdx]
         cmp     al, byte ptr [rdi + rdx]
-        jne     .Ls_descend
+        jne     .Ls_no_prog
         inc     edx
         LZEXT   rbx, rdi, edx, rdx, ebp, rbp    /* len = LzExt(pb, cur, len+1, lenLimit) */
         cmp     edx, ebp
         je      .Ls_full
+        cmp     edx, dword ptr [rsp + F_MAXLEN]
+        jbe     .Ls_no_prog
+        mov     dword ptr [rsp + F_MAXLEN], edx
+        mov     dword ptr [rsp + F_STAG], 0
+        cmp     edx, 96
+        jb      .Ls_descend
+        mov     eax, r12d
+        sub     eax, ecx                        /* delta = pos - curMatch */
+        cmp     eax, 65536
+        jb      .Ls_good_match
+        cmp     edx, 160
+        jb      .Ls_descend
+.Ls_good_match:
+        cmp     dword ptr [rsp + F_CUT], BT_GOOD_MATCH_CUT
+        jbe     .Ls_descend
+        mov     dword ptr [rsp + F_CUT], BT_GOOD_MATCH_CUT
+        jmp     .Ls_descend
+
+.Ls_no_prog:
+        add     dword ptr [rsp + F_STAG], 1
+
 .Ls_descend:
         B25_DESCEND
         sub     dword ptr [rsp + F_CUT], 1
         jz      .Ls_empty
+        cmp     dword ptr [rsp + F_STAG], BT_STAGNATION_LIMIT
+        jae     .Ls_empty
         cmp     ecx, dword ptr [rsp + F_CMCHECK]
         ja      .Ls_loop
 .Ls_empty:
@@ -258,6 +313,7 @@ FA_ENDFUNC(lzf25_bt_skip)
 #define G_CUT0      56      /* _cutValue                   */
 #define G_MAXLEN0   60      /* _maxLen                     */
 #define G_CBS0      64      /* _cyclicBufferSize           */
+#define G_STAG      68      /* stagnation counter          */
 #define G_SIZE      72
 
 /*
@@ -343,6 +399,7 @@ FA_FUNC(lzf25_bt_getmatches_n)
         mov     dword ptr [rsp + G_CUT], eax
         mov     eax, dword ptr [rsp + G_MAXLEN0]
         mov     dword ptr [rsp + G_MAXLEN], eax
+        mov     dword ptr [rsp + G_STAG], 0
         xor     r10d, r10d
         xor     r11d, r11d
         mov     eax, ecx                        /* eax = delta */
@@ -364,7 +421,7 @@ FA_FUNC(lzf25_bt_getmatches_n)
         cmova   edx, r11d                       /* len = min(len0, len1) */
         movzx   eax, byte ptr [rbx + rdx]
         cmp     al, byte ptr [rdi + rdx]
-        jne     .Ln_descend
+        jne     .Ln_no_prog
         inc     edx
         cmp     edx, ebp
         je      .Ln_max                         /* ++len == lenLimit */
@@ -375,19 +432,39 @@ FA_FUNC(lzf25_bt_getmatches_n)
         LZEXT   rbx, rdi, edx, rdx, ebp, rbp
 .Ln_max:
         cmp     edx, dword ptr [rsp + G_MAXLEN]
-        jbe     .Ln_descend                     /* if (maxLen < len) */
+        jbe     .Ln_no_prog                     /* if (maxLen < len) */
         mov     dword ptr [rsp + G_MAXLEN], edx
+        mov     dword ptr [rsp + G_STAG], 0     /* progress: reset stagnation */
         mov     rax, qword ptr [rsp + G_D]
         mov     dword ptr [rax], edx            /* *d++ = len */
         not     ecx
         add     ecx, r12d                       /* delta - 1 */
         mov     dword ptr [rax + 4], ecx        /* *d++ = delta - 1 */
         sub     ecx, r12d
-        not     ecx
+        not     ecx                             /* ecx = curMatch restored */
         add     rax, 8
         mov     qword ptr [rsp + G_D], rax
         cmp     edx, ebp
         je      .Ln_full
+
+        /* Good match cutoff */
+        cmp     edx, 96
+        jb      .Ln_descend
+        mov     eax, r12d
+        sub     eax, ecx                        /* delta = pos - curMatch */
+        cmp     eax, 65536
+        jb      .Ln_good_match
+        cmp     edx, 160
+        jb      .Ln_descend
+.Ln_good_match:
+        cmp     dword ptr [rsp + G_CUT], BT_GOOD_MATCH_CUT
+        jbe     .Ln_descend
+        mov     dword ptr [rsp + G_CUT], BT_GOOD_MATCH_CUT
+        jmp     .Ln_descend
+
+.Ln_no_prog:
+        add     dword ptr [rsp + G_STAG], 1
+
 .Ln_descend:
         movzx   eax, byte ptr [rbx + rdx]
         cmp     al, byte ptr [rdi + rdx]        /* CF = len[diff] < len[0] */
@@ -408,6 +485,8 @@ FA_FUNC(lzf25_bt_getmatches_n)
         sub     eax, ebx                        /* delta = pos - next */
         sub     dword ptr [rsp + G_CUT], 1
         jz      .Ln_endtree                     /* --cutValue == 0 */
+        cmp     dword ptr [rsp + G_STAG], BT_STAGNATION_LIMIT
+        jae     .Ln_endtree
         cmp     eax, r14d
         jb      .Ln_tree                        /* delta < cbs */
 .Ln_endtree:

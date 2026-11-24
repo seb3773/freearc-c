@@ -6,6 +6,17 @@
 
 #include "7zTypes.h"
 
+/* FreeArc-c adaptive BT4 pruning parameters for -nobitexact mode */
+#ifndef BT_STAGNATION_LIMIT
+#define BT_STAGNATION_LIMIT 48
+#endif
+
+#ifndef BT_GOOD_MATCH_CUT
+#define BT_GOOD_MATCH_CUT 16
+#endif
+
+#define BT_IS_GOOD_MATCH(len, delta) (((len) >= 96 && (delta) < (1<<16)) || ((len) >= 160))
+
 EXTERN_C_BEGIN
 
 typedef UInt32 CLzRef;

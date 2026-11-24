@@ -979,6 +979,7 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
   CLzRef *ptr0 = son + ((size_t)_cyclicBufferPos << 1) + 1;
   CLzRef *ptr1 = son + ((size_t)_cyclicBufferPos << 1);
   unsigned len0 = 0, len1 = 0;
+  UInt32 stagnation = 0;
 
   UInt32 cmCheck;
 
@@ -1008,14 +1009,23 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
           maxLen = (UInt32)len;
           *d++ = (UInt32)len;
           *d++ = delta - 1;
+          stagnation = 0;
           if (len == lenLimit)
           {
             *ptr1 = pair0;
             *ptr0 = pair[1];
             return d;
           }
+          if (BT_IS_GOOD_MATCH(len, delta))
+          {
+            if (cutValue > BT_GOOD_MATCH_CUT)
+              cutValue = BT_GOOD_MATCH_CUT;
+          }
+          goto match_updated_1;
         }
       }
+      stagnation++;
+match_updated_1:
       if (pb[len] < cur[len])
       {
         *ptr1 = curMatch;
@@ -1033,6 +1043,8 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
         ptr0 = pair;
         len0 = len;
       }
+      if (stagnation >= BT_STAGNATION_LIMIT)
+        break;
     }
   }
   while(--cutValue && cmCheck < curMatch);
@@ -1058,6 +1070,8 @@ static void SkipMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const 
   CLzRef *ptr0 = son + ((size_t)_cyclicBufferPos << 1) + 1;
   CLzRef *ptr1 = son + ((size_t)_cyclicBufferPos << 1);
   unsigned len0 = 0, len1 = 0;
+  UInt32 maxLen = 0;
+  UInt32 stagnation = 0;
 
   UInt32 cmCheck;
 
@@ -1079,15 +1093,26 @@ static void SkipMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const 
         while (++len != lenLimit)
           if (pb[len] != cur[len])
             break;
+        if (len == lenLimit)
         {
-          if (len == lenLimit)
+          *ptr1 = pair[0];
+          *ptr0 = pair[1];
+          return;
+        }
+        if (maxLen < len)
+        {
+          maxLen = (UInt32)len;
+          stagnation = 0;
+          if (BT_IS_GOOD_MATCH(len, delta))
           {
-            *ptr1 = pair[0];
-            *ptr0 = pair[1];
-            return;
+            if (cutValue > BT_GOOD_MATCH_CUT)
+              cutValue = BT_GOOD_MATCH_CUT;
           }
+          goto match_updated_skip;
         }
       }
+      stagnation++;
+match_updated_skip:
       if (pb[len] < cur[len])
       {
         *ptr1 = curMatch;
@@ -1102,6 +1127,8 @@ static void SkipMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const 
         ptr0 = pair;
         len0 = len;
       }
+      if (stagnation >= BT_STAGNATION_LIMIT)
+        break;
     }
   }
   while(--cutValue && cmCheck < curMatch);
