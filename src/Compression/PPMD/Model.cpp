@@ -468,7 +468,12 @@ inline void PPM_CONTEXT::decodeBinSymbol()
     BYTE indx=NS2BSIndx[Suffix->NumStats]+PrevSuccess+Flags;
     STATE& rs=oneState();
     WORD& bs=BinSumm[QTable[rs.Freq-1]][indx+((RunLength >> 26) & 0x20)];
-    if (ariGetCurrentShiftCount(TOT_BITS) < bs) {
+    /* floor((code-low)/range) < bs  <=>  (code-low) < bs*range once range has
+       been shifted by TOT_BITS. bs fits in 16 bits and the shifted range in
+       32, so the product is exact in 64 bits. The quotient is never used.
+       range is updated exactly as ariGetCurrentShiftCount did, for ariRemoveSubrange. */
+    range >>= TOT_BITS;
+    if (__builtin_expect((uint64_t)(code - low) < (uint64_t)bs * (uint64_t)range, 1)) {
         FoundState=&rs;                     rs.Freq += (rs.Freq < 196);
         SubRange.LowCount=0;                SubRange.HighCount=bs;
         bs += INTERVAL-GET_MEAN(bs,PERIOD_BITS,2);

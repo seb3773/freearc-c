@@ -1202,8 +1202,15 @@ struct dict_entry
 {
     unsigned len;     // длина слова
     byte *ptr;        // начало слова
-}
-dict[UCHAR_MAX+1];
+};
+#ifdef DICT_LIBRARY
+/* One table per decoder thread. Each call overwrites all 256 lengths from
+   the block header and every pointer it later follows, so the table is
+   reused across blocks and not cleared. */
+static thread_local dict_entry dict[UCHAR_MAX+1];
+#else
+static dict_entry dict[UCHAR_MAX+1];
+#endif
 
 #define get_byte()       (*ptr++)
 #define put_byte(c)      (*outptr++ = (c))
@@ -1215,10 +1222,28 @@ int DictDecode (byte *buf, unsigned bufsize, byte *outbuf, unsigned *outsize)
     int retcode = 0;
     byte *ptr = buf,
          *end = buf+bufsize,
-         *outptr = outbuf;     // текущий указатель в выходном буфере
+         *outptr = outbuf;
+    dict_entry *dict2_var = NULL;
+    byte *words = NULL;
+    byte *wordptr = NULL;
+    int dictsize = 0, words2 = 0;
 
-    // Словарь-матрица, используемый для декодирования 2-байтовых слов
-    dict_entry *dict2_var = (dict_entry*) calloc ((UCHAR_MAX+1)*(UCHAR_MAX+1), sizeof (dict_entry));
+#ifdef DICT_LIBRARY
+    {
+        /* 256*256 entries, kept for the life of this worker. A fresh
+           allocation is cleared once; later blocks overwrite every slot
+           they read (row length, then pointer and final length). */
+        const size_t dict2_bytes = (size_t)(UCHAR_MAX + 1) * (UCHAR_MAX + 1) * sizeof(dict_entry);
+        void *prev = dict_tls.dict2.p;
+        dict2_var = (dict_entry *) dict_tls.dict2.acquire(dict2_bytes);
+        if (!dict2_var) { retcode = FREEARC_ERRCODE_NOT_ENOUGH_MEMORY; goto done; }
+        if ((void *)dict2_var != prev)
+            memset(dict2_var, 0, dict2_bytes);
+    }
+#else
+    dict2_var = (dict_entry *) calloc((UCHAR_MAX + 1) * (UCHAR_MAX + 1), sizeof(dict_entry));
+    if (!dict2_var) { retcode = FREEARC_ERRCODE_NOT_ENOUGH_MEMORY; goto done; }
+#endif
 
     stat1 ("ЧТЕНИЕ СЛОВАРЯ");
     // Состоит из 5 циклов:
@@ -1229,7 +1254,6 @@ int DictDecode (byte *buf, unsigned bufsize, byte *outbuf, unsigned *outsize)
     //   3. Прочесть текст всех однобайтовых слов
     //   4. Прочесть текст всех двухбайтовых слов
     //   5. Создать псевдо-слова для декодирования тех символов, которые отдали свои коды словам
-    int dictsize = 0, words2 = 0;
     for( int i=0; i<=UCHAR_MAX; i++ ) {
         dictsize += dict[i].len = get_byte();
     }
@@ -1242,7 +1266,16 @@ int DictDecode (byte *buf, unsigned bufsize, byte *outbuf, unsigned *outsize)
         }
     }
     // Буфер для хранения текста слов (память для него сейчас выделяется на авось, но с большим запасом :)
-    byte *words = (byte*) malloc (dictsize+UCHAR_MAX+1+words2*20+100000), *wordptr = words;
+    {
+        size_t words_need = (size_t)(dictsize + UCHAR_MAX + 1 + words2 * 20 + 100000);
+#ifdef DICT_LIBRARY
+        words = dict_tls.words.acquire(words_need);
+#else
+        words = (byte *) malloc(words_need);
+#endif
+        if (!words) { retcode = FREEARC_ERRCODE_NOT_ENOUGH_MEMORY; goto done; }
+        wordptr = words;
+    }
     for( int i=0; i<=UCHAR_MAX; i++ ) {
         if (dict[i].len == USE_DICT2)  continue;
         dict[i].ptr = wordptr;
@@ -1306,8 +1339,10 @@ int DictDecode (byte *buf, unsigned bufsize, byte *outbuf, unsigned *outsize)
     }
     }
 done:
+#ifndef DICT_LIBRARY
     FreeAndNil (words);
     FreeAndNil (dict2_var);
+#endif
 
     // Записать длину декодированного текста и вернуть код (без)успешного завершения
     *outsize = outptr-outbuf;

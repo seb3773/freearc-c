@@ -106,6 +106,25 @@ inline void ariDecNormalize(_PPMD_FILE *stream)
         if (diff != 0) {
             unsigned k = (unsigned)__builtin_clz(diff) >> 3;
             if (k > 0 && range < (1u << (32 - 8*k))) {
+                /* k is 1, 2 or 3. When those bytes are already buffered, fold the
+                   shifts into one update. A short buffer still falls back to get(),
+                   which refills, so the bytes consumed stay identical. */
+                if (__builtin_expect(k == 1, 1)) {
+                    DWORD b;
+                    if (__builtin_expect(stream->readByte(b), 1)) {
+                        code = (code << 8) | b;
+                        range <<= 8;        low <<= 8;
+                        return;
+                    }
+                } else {
+                    DWORD packed;
+                    if (stream->readPacked(k, packed)) {
+                        unsigned sh = k << 3;
+                        code = (code << sh) | packed;
+                        range <<= sh;      low <<= sh;
+                        return;
+                    }
+                }
                 do {
                     code=(code << 8) | _PPMD_D_GETC(stream);
                     range <<= 8;            low <<= 8;

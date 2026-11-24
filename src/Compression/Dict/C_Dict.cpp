@@ -35,6 +35,9 @@ struct DictTlsBuf {
 };
 struct DictTls {
     DictTlsBuf in, out;
+    /* dict2 is the 256*256 decode matrix (~1 MB). words holds the dictionary
+       text. Both stay on this thread and grow to the largest block seen. */
+    DictTlsBuf dict2, words;
 };
 static thread_local DictTls dict_tls;
 

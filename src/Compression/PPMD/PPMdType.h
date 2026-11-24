@@ -51,6 +51,26 @@ public:
     }
     int  get(     ) { return (--Count >= 0)?(*p++    ):( fill( )); }
     int  put(int c) { return (--Count >= 0)?(*p++ = c):(flush(),put(c)); }
+    /* One byte already sitting in Buf. Same p/Count update as a successful get(). */
+    bool readByte(DWORD &b) {
+        if (Count <= 0) return false;
+        b = *p++;
+        --Count;
+        return true;
+    }
+    /* k = 1..3 bytes already in Buf, packed big-endian (first byte is the MSB).
+       Same p/Count updates as k successful get() calls. A refill is not attempted. */
+    bool readPacked(unsigned k, DWORD &be) {
+        if (k - 1u > 2u || Count < (int)k) return false;
+        const BYTE *s = p;
+        DWORD v = s[0];
+        if (k > 1) v = (v << 8) | s[1];
+        if (k > 2) v = (v << 8) | s[2];
+        p += k;
+        Count -= (int)k;
+        be = v;
+        return true;
+    }
     int  getErr() const { return Error; }
     int    tell() const { return StrPos+(p-Buf); }
     BOOL  atEOS() const { return (Count < 0); }

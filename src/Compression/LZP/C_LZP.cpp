@@ -242,6 +242,99 @@ MATCH_NOT_FOUND:
 }
 #endif  // !defined (FREEARC_DECOMPRESS_ONLY)
 
+#if defined(__GNUC__) || defined(__clang__)
+#define LZP_DEC_PREFETCH_R(addr) __builtin_prefetch((addr), 0, 3)
+#define LZP_DEC_PREFETCH_W(addr) __builtin_prefetch((addr), 1, 3)
+#else
+#define LZP_DEC_PREFETCH_R(addr) ((void)0)
+#define LZP_DEC_PREFETCH_W(addr) ((void)0)
+#endif
+
+/* Copy len bytes from p to Out and apply the same HTable stores as the
+   original byte loop. Updates sit at 0-based offsets period, 2*period, ...
+   with period = 2*n1+1 (the countdown starts at period+1 and then reloads
+   period). A store reads only bytes before its position, which the copy has
+   already finalized, so every hash is identical if it is applied afterwards
+   in increasing order. Wide copies are used only when the match distance
+   keeps each chunk from overlapping its source. */
+static inline void lzpApplyHashUpdates(BYTE *base, UINT len, UINT n1, BYTE **HTable, UINT HashMask)
+{
+    const UINT period = 2u * n1 + 1u;
+    if (len >= 5)
+        LZP_DEC_PREFETCH_R(&HTable[lzpH(lzpC(base + len), base + len, HashMask)]);
+    if (period >= len) return;
+    enum { PIPE = 4 };
+    UINT hs[PIPE] = {0, 0, 0, 0};
+    BYTE *ps[PIPE] = {0, 0, 0, 0};
+    int n = 0;
+    UINT u = period;
+    for (; n < PIPE && u < len; ++n, u += period) {
+        ps[n] = base + u;
+        hs[n] = lzpH(lzpC(ps[n]), ps[n], HashMask);
+        LZP_DEC_PREFETCH_W(&HTable[hs[n]]);
+    }
+    if (n < PIPE) {
+        for (int i = 0; i < n; i++) HTable[hs[i]] = ps[i];
+        return;
+    }
+    int rd = 0;
+    while (u < len) {
+        HTable[hs[rd]] = ps[rd];
+        BYTE *at = base + u;
+        UINT h = lzpH(lzpC(at), at, HashMask);
+        LZP_DEC_PREFETCH_W(&HTable[h]);
+        hs[rd] = h;
+        ps[rd] = at;
+        rd = (rd + 1) & (PIPE - 1);
+        u += period;
+    }
+    for (int i = 0; i < PIPE; i++) {
+        HTable[hs[rd]] = ps[rd];
+        rd = (rd + 1) & (PIPE - 1);
+    }
+}
+
+static inline void lzpDecodeMatch(BYTE *&Out, BYTE *&p, UINT len, UINT n1, BYTE **HTable, UINT HashMask)
+{
+    size_t dist = (p < Out) ? (size_t)(Out - p) : 0;
+    if (dist < 4 || len < 8) {
+        UINT k = 2u * n1 + 2u;
+        UINT i = len;
+        do {
+            if ( !--k ) { k = 2u * n1 + 1u; HTable[lzpH(lzpC(Out), Out, HashMask)] = Out; }
+            *Out++ = *p++;
+        } while ( --i );
+        return;
+    }
+    if (dist >= len)
+        LZP_DEC_PREFETCH_R(&HTable[lzpH(lzpC(p + len), p + len, HashMask)]);
+    BYTE *base = Out;
+    UINT done = 0;
+    if (dist >= 8) {
+        while (done < len) {
+            size_t left = (size_t)(len - done);
+            size_t ncopy = dist < left ? dist : left;
+            memcpy(Out, p, ncopy);
+            Out += ncopy;
+            p += ncopy;
+            done += (UINT)ncopy;
+        }
+    } else {
+        /* Distance 4..7: four-byte chunks never reach back into the bytes
+           just written. The tail is shorter than a word. */
+        while (len - done >= 4) {
+            uint32_t w;
+            memcpy(&w, p, 4);
+            memcpy(Out, &w, 4);
+            Out += 4;
+            p += 4;
+            done += 4;
+        }
+        while (done < len) { *Out++ = *p++; done++; }
+    }
+    lzpApplyHashUpdates(base, len, n1, HTable, HashMask);
+}
+
 int LZPDecode(BYTE* In,UINT Size,BYTE* Out,int MinLen,int HashSize,int Barrier,int SmallestLen)
 {
     UINT i, k, n1=1, n=1, HashMask=HashSize-1;
@@ -260,11 +353,8 @@ int LZPDecode(BYTE* In,UINT Size,BYTE* Out,int MinLen,int HashSize,int Barrier,i
             HTable[k]=Out;                  n1 += (Out-p > (n1+1)*HashSize && n1 < 7);
             for (i=(Out-p>Barrier? SmallestLen:MinLen)-1;*InEnd == 0;InEnd--)
                     i += 254;
-            i += *InEnd;                    k=2*n1+2;
-            do {
-                if ( !--k ) { k=2*n1+1;     HTable[lzpH(lzpC(Out),Out,HashMask)]=Out; }
-                *Out++ = *p++;
-            } while ( --i );
+            i += *InEnd;
+            lzpDecodeMatch(Out, p, i, n1, HTable, HashMask);
         }
         k=lzpH(i=lzpC(Out),Out,HashMask);
     } while (In < InEnd);
