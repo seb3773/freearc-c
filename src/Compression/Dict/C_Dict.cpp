@@ -45,6 +45,65 @@ static thread_local DictTls dict_tls;
 #include "dict.cpp"
 
 #ifndef FREEARC_DECOMPRESS_ONLY
+// Fast heuristic to determine if a data block has compressible structure for DICT.
+// Checks 4 distributed 16KB slices across the block.
+// Returns true if any slice shows text-like, structured, or sparse byte distribution.
+// Returns false only if all sampled slices are densely uniform (compressed/random/encrypted).
+static bool dict_can_compress (const BYTE *buf, unsigned bufsize)
+{
+    const unsigned SLICE_SIZE = 16384;
+    if (bufsize < SLICE_SIZE * 4) {
+        return true;  // Too small to reliably sample, let DictEncode handle it
+    }
+
+    const unsigned offsets[4] = {
+        0,
+        bufsize / 4,
+        bufsize / 2,
+        (bufsize / 4) * 3
+    };
+
+    for (int s = 0; s < 4; s++) {
+        const BYTE *p = buf + offsets[s];
+        unsigned counts[256];
+        memset(counts, 0, sizeof(counts));
+
+        // Fast 4-way histogram over 16KB
+        for (unsigned i = 0; i < SLICE_SIZE; i += 4) {
+            counts[p[i]]++;
+            counts[p[i+1]]++;
+            counts[p[i+2]]++;
+            counts[p[i+3]]++;
+        }
+
+        // Count rare bytes (<= 5 occurrences in 16KB; expected is 64 for uniform)
+        // and zero-frequency bytes
+        unsigned rare_bytes = 0;
+        unsigned zero_bytes = 0;
+        for (int c = 0; c < 256; c++) {
+            if (counts[c] == 0) zero_bytes++;
+            if (counts[c] <= 5) rare_bytes++;
+        }
+
+        // Check delimiters: space (0x20), newlines (0x0A, 0x0D), nulls (0x00)
+        // 1.5% of 16384 is ~246 bytes; 5.0% is ~819 bytes
+        unsigned spaces = counts[0x20];
+        unsigned newlines = counts[0x0A] + counts[0x0D];
+        unsigned nulls = counts[0x00];
+
+        // If this slice has structured or text characteristics:
+        if (rare_bytes >= 8 || zero_bytes >= 3) {
+            return true;
+        }
+        if (spaces >= 246 || newlines >= 246 || nulls >= 819) {
+            return true;
+        }
+    }
+
+    // All 4 slices across the block are completely uniform with no text/binary delimiters
+    return false;
+}
+
 int dict_compress (MemSize BlockSize, int MinCompression, int MinWeakChars, int MinLargeCnt, int MinMediumCnt, int MinSmallCnt, int MinRatio, CALLBACK_FUNC *callback, void *auxdata)
 {
     BYTE* In = NULL;  // ��������� �� ������� ������
@@ -54,6 +113,13 @@ int dict_compress (MemSize BlockSize, int MinCompression, int MinWeakChars, int 
     {
         unsigned InSize, OutSize;     // ���������� ���� �� ������� � �������� ������, ��������������
         InSize=x;                     // impossible: In = (BYTE*) realloc(In,InSize=x);
+        if (InSize >= 64 * 1024 && !dict_can_compress(In, InSize)) {
+            int WrSize = -(int)InSize;
+            checked_write (&WrSize, sizeof(WrSize));
+            checked_write (In, InSize);
+            BigFreeAndNil(In);
+            continue;
+        }
         x = DictEncode(In,InSize,&Out,&OutSize,MinWeakChars,MinLargeCnt,MinMediumCnt,MinSmallCnt,MinRatio);
         if (x  ||  MinCompression>0 && OutSize>=(double(InSize)*MinCompression)/100) {
             // ��������� ������ [���������� ������] �� �������, ������� ������ ��� �������� ������
