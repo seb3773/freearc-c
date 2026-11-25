@@ -560,21 +560,36 @@ struct Job
 };
 
 
-int rep_compress (unsigned BlockSize, int MinCompression, int ChunkSize, int MinMatchLen, int Barrier, int SmallestLen, int HashBits, int Amplifier, CALLBACK_FUNC *callback, void *auxdata)
+struct RepSlot8 {
+    uint32 tag;
+    uint32 off_p1;
+};
+
+template <bool Assoc4>
+static int rep_compress_impl (unsigned BlockSize, int MinCompression, int ChunkSize, int MinMatchLen, int Barrier, int SmallestLen, int HashBits, int Amplifier, size_t AssocBuckets, CALLBACK_FUNC *callback, void *auxdata)
 {
     if (SmallestLen>MinMatchLen)  SmallestLen=MinMatchLen;
     int L;
     int HashSize = CalcHashSize (HashBits, BlockSize, SmallestLen, MinMatchLen, ChunkSize, Amplifier, &L);
     int HashMask = HashSize-1;
-    int *hasharr=NULL;  int errcode=FREEARC_OK;
-    int DataEnd=0, last_i=0, last_match=0;
+    size_t BucketMask = AssocBuckets ? (AssocBuckets - 1) : 0;
+    int *hasharr = NULL;
+    RepSlot8 *buckets = NULL;
+    int errcode = FREEARC_OK;
+    int DataEnd = 0, last_i = 0, last_match = 0;
 
     byte *buf = (byte*) BigAlloc(BlockSize);
     if (buf==NULL)  return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
 
-    hasharr  = (int *) BigAlloc (HashSize * sizeof(int));
-    if (HashSize && hasharr==NULL)  {BigFree(buf); return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;}
-    memset (hasharr, 0, HashSize * sizeof(int));
+    if (Assoc4) {
+        buckets = (RepSlot8 *) BigAlloc (AssocBuckets * 4 * sizeof(RepSlot8));
+        if (buckets == NULL) { BigFree(buf); return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY; }
+        memset (buckets, 0, AssocBuckets * 4 * sizeof(RepSlot8));
+    } else {
+        hasharr = (int *) BigAlloc (HashSize * sizeof(int));
+        if (HashSize && hasharr==NULL) { BigFree(buf); return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY; }
+        memset (hasharr, 0, HashSize * sizeof(int));
+    }
     debug (verbose>0 && MinMatchLen==SmallestLen && printf(" Buf %d mb, MinLen %d, Hash %d mb, Amplifier %d\n", ((BlockSize-1)/mb)+1, MinMatchLen, (HashSize*sizeof(int))>>20, Amplifier));
     debug (verbose>0 && MinMatchLen!=SmallestLen && printf(" Buf %d mb, MinLen %d, Barrier %d, Smallest Len %d, Hash %d mb, Amplifier %d\n", ((BlockSize-1)/mb)+1, MinMatchLen, Barrier, SmallestLen, (HashSize*sizeof(int))>>20, Amplifier));
 
@@ -638,28 +653,71 @@ int rep_compress (unsigned BlockSize, int MinCompression, int ChunkSize, int Min
             for ( ; last_i<next_fill; last_i+=L) {
                 int hash = *hashptr++;
                 int i    = *hashptr++ + last_i;
-                if (i >= last_match) {
-                    int match = hasharr[hash&HashMask];
-                    if (match) {
-                        if (match>=i && match<DataEnd)  goto no_match;
-                        int LowBound  = match<i? i-match : match-DataEnd>i? 0 : i - (match-DataEnd);
-                        int HighBound = BlockSize - match + i;
-                        int start = find_match_start (buf+match, buf+i, buf+mymax(last_match,LowBound)) - buf;
-                        int end   = find_match_end   (buf+match, buf+i, buf+mymin(DataEnd,HighBound)) - buf;
-                        if (end-start >= (i-match<Barrier? MinMatchLen : SmallestLen) ) {
-                            int offset = i-match;  if (offset<0)  offset+=BlockSize;
+                if (Assoc4) {
+                    uint32 htag = (uint32)hash;
+                    RepSlot8 *b = buckets + (((size_t)htag & BucketMask) * 4);
+                    if (i >= last_match) {
+                        int best_len = 0, best_start = 0, best_end = 0, best_offset = 0;
+                        for (int s = 0; s < 4; s++) {
+                            uint32 op1 = b[s].off_p1;
+                            if (op1 == 0) break;
+                            if (b[s].tag != htag) continue;
+                            int match = (int)(op1 - 1);
+                            if (match >= i && match < DataEnd) continue;
+                            int LowBound  = match<i? i-match : match-DataEnd>i? 0 : i - (match-DataEnd);
+                            int HighBound = BlockSize - match + i;
+                            int start = find_match_start (buf+match, buf+i, buf+mymax(last_match,LowBound)) - buf;
+                            int end   = find_match_end   (buf+match, buf+i, buf+mymin(DataEnd,HighBound)) - buf;
+                            int mlen  = end - start;
+                            int offset = i - match; if (offset < 0) offset += BlockSize;
+                            if (mlen >= (offset < Barrier ? MinMatchLen : SmallestLen) &&
+                                (mlen > best_len || (mlen == best_len && offset < best_offset))) {
+                                best_len = mlen; best_start = start; best_end = end; best_offset = offset;
+                            }
+                        }
+                        if (best_len > 0) {
                             dataOffsets.put32 (last_match);
-                               datalens.put32 (start-last_match);
-                                offsets.put32 (offset);
-                                   lens.put32 (end-start);
-                            debug ((match_cnt++, matches+=end-start));
-                            debug (verbose>1 && printf ("Match %d %d %d  (lit %d)\n", -offset, start, end-start, start-last_match));
-                            literals += start-last_match;  last_match=end;
+                               datalens.put32 (best_start-last_match);
+                                offsets.put32 (best_offset);
+                                   lens.put32 (best_len);
+                            debug ((match_cnt++, matches+=best_len));
+                            literals += best_start-last_match;  last_match=best_end;
                         }
                     }
+                    int same_cnt = 0, last_same = -1;
+                    for (int s = 0; s < 4; s++) {
+                        if (b[s].off_p1 == 0) { last_same = s; break; }
+                        if (b[s].tag == htag) { same_cnt++; last_same = s; }
+                    }
+                    int evict = (same_cnt >= 2 || (last_same >= 0 && b[last_same].off_p1 == 0))
+                                ? last_same : 3;
+                    for (int s = evict; s > 0; s--) b[s] = b[s - 1];
+                    b[0].tag = htag;
+                    b[0].off_p1 = (uint32)(i + 1);
+                } else {
+                    if (i >= last_match) {
+                        int match = hasharr[hash&HashMask];
+                        if (match) {
+                            if (match>=i && match<DataEnd)  goto no_match;
+                            int LowBound  = match<i? i-match : match-DataEnd>i? 0 : i - (match-DataEnd);
+                            int HighBound = BlockSize - match + i;
+                            int start = find_match_start (buf+match, buf+i, buf+mymax(last_match,LowBound)) - buf;
+                            int end   = find_match_end   (buf+match, buf+i, buf+mymin(DataEnd,HighBound)) - buf;
+                            if (end-start >= (i-match<Barrier? MinMatchLen : SmallestLen) ) {
+                                int offset = i-match;  if (offset<0)  offset+=BlockSize;
+                                dataOffsets.put32 (last_match);
+                                   datalens.put32 (start-last_match);
+                                    offsets.put32 (offset);
+                                       lens.put32 (end-start);
+                                debug ((match_cnt++, matches+=end-start));
+                                debug (verbose>1 && printf ("Match %d %d %d  (lit %d)\n", -offset, start, end-start, start-last_match));
+                                literals += start-last_match;  last_match=end;
+                            }
+                        }
+                    }
+        no_match:
+                    hasharr[hash&HashMask] = i;
                 }
-    no_match:
-                hasharr[hash&HashMask] = i;
             }
         }
 
@@ -701,6 +759,7 @@ int rep_compress (unsigned BlockSize, int MinCompression, int ChunkSize, int Min
     FWRITE4 (0);
 finished:
     FCLOSE();
+    BigFree(buckets);
     BigFree(hasharr);
     if (errcode>=0) {
         HashingThreads.finish();
@@ -708,6 +767,44 @@ finished:
     }
     BigFree(buf);
     return errcode>=0? 0 : errcode;
+}
+
+extern "C" uint64 GetPhysicalMemory (void);
+
+int rep_compress (unsigned BlockSize, int MinCompression, int ChunkSize, int MinMatchLen, int Barrier, int SmallestLen, int HashBits, int Amplifier, CALLBACK_FUNC *callback, void *auxdata)
+{
+    if (nobitexact_speed_mode) {
+        if (SmallestLen > MinMatchLen) SmallestLen = MinMatchLen;
+        int L = 0;
+        int BaseHashSize = CalcHashSize(HashBits, BlockSize, SmallestLen, MinMatchLen, ChunkSize, Amplifier, &L);
+        if (BaseHashSize >= 4096) {
+            // Use 2x legacy hasharr budget (BaseHashSize * 8 B) for 4-way tagged buckets when physical RAM comfortably allows it
+            size_t nb = (size_t)BaseHashSize / 4;
+            size_t p2 = 1;
+            while ((p2 << 1) <= nb) p2 <<= 1;
+            if (p2 >= 1024) {
+                uint64 phys = GetPhysicalMemory();
+                uint64 conc = (uint64)mymax(1, mymin(GetCompressionThreads(), 4));
+                uint64 buckets_2x = (uint64)p2 * 4ull * (uint64)sizeof(RepSlot8);
+                uint64 single_2x = (uint64)BlockSize + buckets_2x;
+                bool allow_2x = (phys >= 4ull * (uint64)gb &&
+                                 single_2x <= phys / 3ull &&
+                                 buckets_2x * conc <= phys / 6ull);
+                if (allow_2x) {
+                    int rc = rep_compress_impl<true>(BlockSize, MinCompression, ChunkSize, MinMatchLen, Barrier, SmallestLen, HashBits, Amplifier, p2, callback, auxdata);
+                    if (rc != FREEARC_ERRCODE_NOT_ENOUGH_MEMORY)
+                        return rc;
+                }
+                // Fallback to 1x legacy hasharr budget (half buckets)
+                if ((p2 >> 1) >= 1024) {
+                    int rc = rep_compress_impl<true>(BlockSize, MinCompression, ChunkSize, MinMatchLen, Barrier, SmallestLen, HashBits, Amplifier, p2 >> 1, callback, auxdata);
+                    if (rc != FREEARC_ERRCODE_NOT_ENOUGH_MEMORY)
+                        return rc;
+                }
+            }
+        }
+    }
+    return rep_compress_impl<false>(BlockSize, MinCompression, ChunkSize, MinMatchLen, Barrier, SmallestLen, HashBits, Amplifier, 0, callback, auxdata);
 }
 #endif // FREEARC_DECOMPRESS_ONLY
 

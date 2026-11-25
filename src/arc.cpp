@@ -153,9 +153,11 @@ struct FileRec {
   std::string datatype;
   uint64 content_sig;
   bool   has_sig;
+  uint64 simhash;
+  bool   has_simhash;
 
   FileRec() : size(0), mtime(0), isdir(0), crc(0), mode(0), is_symlink(false),
-              content_sig(0), has_sig(false) {}
+              content_sig(0), has_sig(false), simhash(0), has_simhash(false) {}
 };
 
 struct BlockInfo {
@@ -1569,7 +1571,15 @@ static std::string group_type_from_name(const std::string &name) {
   if (ext_in_list(name, bmp_exts)) return "$bmp";
   if (ext_in_list(name, obj_exts)) return "$obj";
   if (name_in_list(name, text_names) || ext_in_list(name, text_exts)) return "$text";
-  if (ext_in_list(name, comp_exts)) return "$compressed";
+  if (ext_in_list(name, comp_exts)) {
+    // Under -nobitexact, .pak containers may hold uncompressed/mixed game assets rather than ZIP streams;
+    // let content sampling decide whether a .pak is truly $compressed or compressible default data.
+    if (g_opt_nobitexact) {
+      static const char *ambig_pak[] = {"pak", NULL};
+      if (ext_in_list(name, ambig_pak)) return "";
+    }
+    return "$compressed";
+  }
   if (ext_in_list(name, exe_exts)) return "$exe";
   if (ext_in_list(name, iso_exts)) return "$iso";
   if (ext_in_list(name, precomp_exts)) {
@@ -1738,9 +1748,60 @@ static uint64 compute_content_sig(const BYTE *b, size_t n, bool is_dna) {
   return (sclass << 13) | (h0_q << 9) | morton;
 }
 
+static inline uint64 simhash_mix64(uint64 x) {
+  x += 0x9e3779b97f4a7c15ULL;
+  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+  return x ^ (x >> 31);
+}
+
+static inline int simhash_popcount64(uint64 x) {
+  x -= (x >> 1) & 0x5555555555555555ULL;
+  x = (x & 0x3333333333333333ULL) + ((x >> 2) & 0x3333333333333333ULL);
+  x = (x + (x >> 4)) & 0x0f0f0f0f0f0f0f0fULL;
+  return (int)((x * 0x0101010101010101ULL) >> 56);
+}
+
+static bool compute_simhash64(const BYTE *b, size_t n, uint64 &out_hash) {
+  out_hash = 0;
+  if (!b || n < 512) return false;
+  size_t start_off = (n >= 2048u) ? 512u : 0u; // Skip shared PE/ELF/HTML header boilerplates
+  size_t len = n < 32768u ? n : 32768u;
+  size_t step = ((len - start_off) <= 8192u) ? 1u : 2u;
+  unsigned char seen[1024];
+  memset(seen, 0, sizeof(seen));
+  int32 v[64];
+  memset(v, 0, sizeof(v));
+  size_t unique_cnt = 0;
+  for (size_t i = start_off; i + 4 <= len; i += step) {
+    BYTE b0 = b[i], b1 = b[i + 1], b2 = b[i + 2], b3 = b[i + 3];
+    if (b0 == b1 && b1 == b2 && b2 == b3) continue; // Ignore zero/padding/space fills
+    uint64 w = (uint64)b0 | ((uint64)b1 << 8) | ((uint64)b2 << 16) | ((uint64)b3 << 24);
+    uint64 h = simhash_mix64(w);
+    uint32 slot = (uint32)(h & 1023u);
+    if (seen[slot] >= 3) continue; // Cap boilerplate dominance
+    int wt = (seen[slot] == 0) ? 2 : 1;
+    if (seen[slot] == 0) unique_cnt++;
+    seen[slot]++;
+    uint64 tmp = h;
+    for (int bit = 0; bit < 64; bit++, tmp >>= 1) {
+      v[bit] += (tmp & 1ULL) ? wt : -wt;
+    }
+  }
+  if (unique_cnt < 32u) return false;
+  uint64 res = 0;
+  for (int bit = 0; bit < 64; bit++) {
+    if (v[bit] > 0) res |= (1ULL << bit);
+  }
+  out_hash = res;
+  return true;
+}
+
 static std::string detect_file_datatype(FileRec &f, int detect_level) {
   f.content_sig = 0;
   f.has_sig = false;
+  f.simhash = 0;
+  f.has_simhash = false;
   if (f.isdir || f.is_symlink || f.size == 0 || f.path.empty())
     return "default";
   std::string defaultType = group_type_from_name(f.name);
@@ -1801,6 +1862,7 @@ static std::string detect_file_datatype(FileRec &f, int detect_level) {
     if (i == 0 && g_opt_nobitexact) {
       f.content_sig = compute_content_sig((const BYTE *)&buf[0], got, false);
       f.has_sig = true;
+      f.has_simhash = compute_simhash64((const BYTE *)&buf[0], got, f.simhash);
       exec_magic = detect_x86_exec_magic((const BYTE *)&buf[0], got);
       if (defaultType == "$exe" && exec_magic == -1)
         defaultType.clear();
@@ -1986,6 +2048,139 @@ static bool file_sort_smart(const FileRec &a, const FileRec &b) {
   if (ea != eb) return ea < eb;
   if (a.name != b.name) return a.name < b.name;
   return a.size < b.size;
+}
+
+static void cluster_simhash_group(std::vector<FileRec> &grp) {
+  if (grp.size() < 4) return;
+  uint64 grp_bytes = 0;
+  for (size_t i = 0; i < grp.size(); i++) grp_bytes += grp[i].size;
+  if (grp_bytes < 240ull * mb) return;
+
+  // Bounded O(N) LSH similarity reordering within huge (>= 240 MB) contiguous (cluster, ext, datatype) runs.
+  // Preserves local (dir, stem) order; only pulls distant (>= 240 MB, near REP window limit) near-identical files together.
+  const int NBANDS = 8;
+  const int BBUCKETS = 4096;
+  const int BAND_SHIFTS[NBANDS] = { 0, 12, 24, 36, 48, 6, 18, 42 };
+  const int SIMHASH_MAX_DIST = 6;
+  const int MAX_BUCKET_SCAN = 32;
+  const uint64 MIN_FILE_SZ = 16384ull;
+  const uint64 MIN_SPAN_BYTES = 240ull * mb;
+
+  std::vector<int> band_head;
+  std::vector<int> band_next;
+  std::vector<uint64> cum_off;
+  std::vector<unsigned char> visited;
+  std::vector<FileRec> out;
+  out.reserve(grp.size());
+
+  size_t n = grp.size();
+  size_t pos = 0;
+  while (pos < n) {
+    if (grp[pos].isdir || grp[pos].is_symlink || grp[pos].size == 0) {
+      out.push_back(grp[pos++]);
+      continue;
+    }
+    std::string e0 = file_ext_lc(grp[pos].name);
+    int c0 = get_extension_cluster(e0);
+    const std::string &dt0 = grp[pos].datatype;
+    size_t end = pos + 1;
+    uint64 run_bytes = grp[pos].size;
+    size_t sig_count = (grp[pos].has_simhash && grp[pos].size >= MIN_FILE_SZ) ? 1 : 0;
+    while (end < n && !grp[end].isdir && !grp[end].is_symlink && grp[end].size > 0 &&
+           grp[end].datatype == dt0) {
+      std::string ek = file_ext_lc(grp[end].name);
+      if (get_extension_cluster(ek) != c0 || ek != e0) break;
+      run_bytes += grp[end].size;
+      if (grp[end].has_simhash && grp[end].size >= MIN_FILE_SZ) sig_count++;
+      end++;
+    }
+
+    size_t m = end - pos;
+    bool eligible = (c0 != 10 && c0 != 70 && c0 != 90 && c0 != 95 &&
+                     dt0 != "$compressed" && dt0 != "$precomp" && dt0 != "$dna" &&
+                     m >= 4 && sig_count >= 2 && run_bytes >= 240ull * mb);
+    if (!eligible) {
+      for (size_t k = pos; k < end; k++) out.push_back(grp[k]);
+      pos = end;
+      continue;
+    }
+
+    band_head.assign((size_t)NBANDS * (size_t)BBUCKETS, -1);
+    band_next.assign((size_t)NBANDS * m, -1);
+    cum_off.resize(m);
+    visited.assign(m, 0);
+
+    uint64 acc = 0;
+    for (size_t idx = 0; idx < m; idx++) {
+      cum_off[idx] = acc;
+      acc += grp[pos + idx].size;
+    }
+
+    // Insert backwards so heads reflect original (dir, stem) order
+    for (size_t ri = m; ri > 0; ri--) {
+      size_t idx = ri - 1;
+      const FileRec &f = grp[pos + idx];
+      if (!f.has_simhash || f.size < MIN_FILE_SZ) continue;
+      uint64 h = f.simhash;
+      for (int b = 0; b < NBANDS; b++) {
+        uint32 key = (uint32)((h >> BAND_SHIFTS[b]) & 0xFFFull);
+        int &hd = band_head[(size_t)b * (size_t)BBUCKETS + key];
+        band_next[(size_t)b * m + idx] = hd;
+        hd = (int)idx;
+      }
+    }
+
+    for (size_t start = 0; start < m; start++) {
+      if (visited[start]) continue;
+      int curr = (int)start;
+      while (curr >= 0) {
+        visited[curr] = 1;
+        out.push_back(grp[pos + (size_t)curr]);
+        const FileRec &cf = grp[pos + (size_t)curr];
+        if (!cf.has_simhash || cf.size < MIN_FILE_SZ) break;
+
+        uint64 ch = cf.simhash;
+        uint64 co = cum_off[curr];
+        uint64 csz = cf.size;
+        int best = -1;
+        int best_dist = SIMHASH_MAX_DIST + 1;
+        for (int b = 0; b < NBANDS; b++) {
+          uint32 key = (uint32)((ch >> BAND_SHIFTS[b]) & 0xFFFull);
+          size_t b_off = (size_t)b * (size_t)BBUCKETS + key;
+          int prev_p = -1;
+          int p = band_head[b_off];
+          int scanned = 0;
+          while (p >= 0 && scanned < MAX_BUCKET_SCAN) {
+            int nxt = band_next[(size_t)b * m + (size_t)p];
+            if (visited[p]) {
+              if (prev_p < 0) band_head[b_off] = nxt;
+              else band_next[(size_t)b * m + (size_t)prev_p] = nxt;
+              p = nxt;
+              continue;
+            }
+            scanned++;
+            const FileRec &pf = grp[pos + (size_t)p];
+            uint64 po = cum_off[p];
+            uint64 span = (po > co) ? (po - co) : (co - po);
+            uint64 psz = pf.size;
+            if (span >= MIN_SPAN_BYTES && psz * 4ull >= csz * 3ull && csz * 4ull >= psz * 3ull) {
+              int d = simhash_popcount64(ch ^ pf.simhash);
+              if (d < best_dist || (d == best_dist && p < best)) {
+                best_dist = d;
+                best = p;
+              }
+              if (d == 0) break;
+            }
+            prev_p = p;
+            p = nxt;
+          }
+        }
+        curr = best;
+      }
+    }
+    pos = end;
+  }
+  grp.swap(out);
 }
 
 static bool file_sort_epn(const FileRec &a, const FileRec &b) {
@@ -3355,6 +3550,7 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
     reordered.reserve(files.size());
     for (size_t i = 0; i < method_order.size(); i++) {
       std::vector<FileRec> &grp = by_method[method_order[i]];
+      if (sort_files && g_opt_nobitexact) cluster_simhash_group(grp);
       reordered.insert(reordered.end(), grp.begin(), grp.end());
     }
     files.swap(reordered);
@@ -3474,12 +3670,19 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
     static void sample_block(const FileRec *files, int start, int count, uint64 insize,
                              std::vector<BYTE> &out) {
       out.clear();
-      const size_t WIN = 2u * 1024u * 1024u;
-      const uint64 targets[2] = { insize / 4ull, (insize * 2ull) / 3ull };
-      out.reserve(WIN * 2u);
+      // Sample 4 x 1 MiB windows spread across the block so heterogeneous containers (.pak/tar)
+      // cannot fool probes by hitting a single local compressed/random chunk.
+      const size_t WIN = 1024u * 1024u;
+      const uint64 targets[4] = {
+        (insize * 15ull) / 100ull,
+        (insize * 38ull) / 100ull,
+        (insize * 62ull) / 100ull,
+        (insize * 85ull) / 100ull
+      };
+      out.reserve(WIN * 4u);
       uint64 cum = 0, cur_rem = WIN;
       int wi = 0;
-      for (int k = 0; k < count && wi < 2; k++) {
+      for (int k = 0; k < count && wi < 4; k++) {
         const FileRec &f = files[start + k];
         if (f.isdir || f.is_symlink || f.size == 0 || f.path.empty()) continue;
         uint64 fsz = f.size;
@@ -3502,10 +3705,60 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
         cum += fsz;
         if (cur_rem == 0) {
           wi++;
-          while (wi < 2 && cum > targets[wi]) wi++;
+          while (wi < 4 && cum > targets[wi]) wi++;
           cur_rem = WIN;
         }
       }
+    }
+    static void make_sub2m(const std::vector<BYTE> &in, std::vector<BYTE> &out) {
+      out.clear();
+      if (in.size() <= 2048u * 1024u) {
+        out = in;
+        return;
+      }
+      // Take up to 512 KiB from each quarter so 2 MiB still spans all 4 distributed windows.
+      const size_t q = in.size() / 4u;
+      const size_t take = std::min<size_t>(q, 512u * 1024u);
+      out.reserve(take * 4u);
+      for (int w = 0; w < 4; w++) {
+        size_t off = (size_t)w * q;
+        out.insert(out.end(), in.begin() + off, in.begin() + off + take);
+      }
+    }
+    static void set_lzma_props(std::string &chain, int lc, int lp, int pb) {
+      size_t p = 0;
+      std::string out;
+      while (p <= chain.size()) {
+        size_t plus = chain.find('+', p);
+        std::string stage = chain.substr(p, plus == std::string::npos ? std::string::npos : plus - p);
+        size_t lpos = stage.find("lzma:");
+        if (lpos != std::string::npos && (lpos == 0 || stage[lpos - 1] == ':')) {
+          std::string prefix = stage.substr(0, lpos);
+          std::string lrest = stage.substr(lpos);
+          std::string cleaned;
+          size_t sp = 0;
+          while (sp <= lrest.size()) {
+            size_t col = lrest.find(':', sp);
+            std::string tok = lrest.substr(sp, col == std::string::npos ? std::string::npos : col - sp);
+            bool is_lclppb = ((tok.compare(0, 2, "lc") == 0 || tok.compare(0, 2, "lp") == 0 || tok.compare(0, 2, "pb") == 0) &&
+                              tok.size() >= 3 && isdigit((unsigned char)tok[2]));
+            if (!is_lclppb) {
+              if (!cleaned.empty()) cleaned += ':';
+              cleaned += tok;
+            }
+            if (col == std::string::npos) break;
+            sp = col + 1;
+          }
+          char buf[32];
+          snprintf(buf, sizeof(buf), ":lc%d:lp%d:pb%d", lc, lp, pb);
+          stage = prefix + cleaned + buf;
+        }
+        if (!out.empty() || p > 0) out += '+';
+        out += stage;
+        if (plus == std::string::npos) break;
+        p = plus + 1;
+      }
+      chain.swap(out);
     }
   };
 
@@ -3518,33 +3771,112 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
                       (strequ(method, "5") || strequ(method, "5x") || strequ(method, "x") ||
                        strequ(method, "mx") || strequ(method, "max") || strequ(method, "ultra"));
   if (mdl_eligible && files_ptr) {
-    std::vector<BYTE> sample;
+    std::vector<BYTE> sample, sample2m;
     std::string comp_fallback = (threads >= 2) ? "rep:256m:l24:s12+4x4:tor:8m:c3" : "rep:256m:l24:s12+tor:8m:c3";
+    std::string ppmd_fallback = (threads >= 2) ? "rep:256m+4x4:b32m:ppmd:16:256m" : "rep:256m+ppmd:16:256m";
     for (size_t i = 0; i < tasks.size(); i++) {
       uint64 insize = 0;
       for (int k = 0; k < tasks[i].count; k++) insize += files[tasks[i].start + k].size;
       if (insize < 12ull * mb) continue;
       std::string &mth = tasks[i].method;
       bool is_def_delta = (mth.compare(0, 15, "rep:256m+delta+") == 0);
-      bool is_bmp_mm = (mth.find("+mm+") != std::string::npos);
-      if (!is_def_delta && !is_bmp_mm) continue;
+      bool is_bmp_mm    = (mth.find("+mm+") != std::string::npos);
+      bool probe_lclppb = (mth.find("lzma:") != std::string::npos && mth.find("+exe") == std::string::npos);
+      if (!is_def_delta && !is_bmp_mm && !probe_lclppb) continue;
+
       MdlHelper::sample_block(files_ptr, tasks[i].start, tasks[i].count, insize, sample);
       if (sample.size() < 512u * 1024u) continue;
-      uint64 s_tor = MdlHelper::probe(sample, "tor:8m:c3");
-      if (s_tor == (uint64)-1) continue;
-      if (is_def_delta) {
-        if ((double)s_tor >= (double)sample.size() * 0.94) {
-          mth = comp_fallback;
-        } else {
-          uint64 s_del = MdlHelper::probe(sample, "delta+lzma:4m:normal:64:mc32");
-          uint64 s_nod = MdlHelper::probe(sample, "lzma:4m:normal:64:mc32");
-          if (s_del != (uint64)-1 && s_nod != (uint64)-1 && s_nod * 1000ull < s_del * 997ull)
-            mth = std::string("rep:256m+") + mth.substr(15);
+
+      if (is_bmp_mm) {
+        uint64 s_tor = MdlHelper::probe(sample, "tor:8m:c3");
+        uint64 s_gr1 = MdlHelper::probe(sample, "mm+grzip:m1:l2048:a");
+        uint64 s_gr2 = MdlHelper::probe(sample, "mm+grzip:m2:l2048:a");
+        uint64 best_gr = s_gr1;
+        if (s_gr2 != (uint64)-1 && (best_gr == (uint64)-1 || s_gr2 * 1000ull < best_gr * 997ull)) {
+          best_gr = s_gr2;
+          size_t gpos = mth.find(":grzip:m1:");
+          if (gpos != std::string::npos) mth.replace(gpos, 10, ":grzip:m2:");
+          else {
+            gpos = mth.find("+grzip:m1:");
+            if (gpos != std::string::npos) mth.replace(gpos, 10, "+grzip:m2:");
+          }
         }
-      } else if (is_bmp_mm) {
-        uint64 s_gr = MdlHelper::probe(sample, "mm+grzip:m1:l2048:a");
-        if (s_gr != (uint64)-1 && s_tor * 1000ull < s_gr * 995ull)
+        if (s_tor != (uint64)-1 && best_gr != (uint64)-1 && s_tor * 1000ull < best_gr * 995ull)
           mth = comp_fallback;
+        continue;
+      }
+
+      MdlHelper::make_sub2m(sample, sample2m);
+      std::string lzma_probe_prefix;
+      uint64 def_base_sz = (uint64)-1;
+      if (is_def_delta) {
+        uint64 s_tor = MdlHelper::probe(sample, "tor:8m:c3");
+        if (s_tor == (uint64)-1) continue;
+        double r_tor = (double)s_tor / (double)sample.size();
+        if (r_tor >= 0.98) {
+          mth = comp_fallback;
+          continue;
+        }
+        uint64 s_del = MdlHelper::probe(sample2m, "delta+lzma:4m:fast:32:mc16:lc3:lp0:pb2");
+        uint64 s_nod = MdlHelper::probe(sample2m, "lzma:4m:fast:32:mc16:lc3:lp0:pb2");
+        if (s_del == (uint64)-1 && s_nod == (uint64)-1) continue;
+        uint64 s_lz_best = s_del;
+        bool use_delta = true;
+        if (s_nod != (uint64)-1 && (s_del == (uint64)-1 || s_nod * 1000ull < s_del * 997ull)) {
+          s_lz_best = s_nod;
+          use_delta = false;
+        }
+        double r_lz = (double)s_lz_best / (double)sample2m.size();
+        if (r_tor >= 0.85 && r_tor * 0.985 < r_lz) {
+          mth = comp_fallback;
+          continue;
+        }
+        if (!use_delta)
+          mth = std::string("rep:256m+") + mth.substr(15);
+        else
+          lzma_probe_prefix = "delta+";
+        def_base_sz = s_lz_best;
+
+        if (r_tor < 0.85) {
+          uint64 s_ppmd = MdlHelper::probe(sample2m, "ppmd:12:64m");
+          if (s_ppmd != (uint64)-1 && s_ppmd * 1000ull < s_lz_best * 980ull) {
+            mth = ppmd_fallback;
+            continue;
+          }
+        }
+      }
+
+      // Arbitrate LZMA (lc, lp, pb) on non-exe blocks using distributed 2 MiB slice (>= 1.0% win)
+      if (probe_lclppb && mth.find("lzma:") != std::string::npos) {
+        bool is_code = (mth.find(":lc4:lp0:pb0") != std::string::npos);
+        const int cands[4][3] = {
+          { is_code ? 4 : 3, 0, is_code ? 0 : 2 },
+          { is_code ? 3 : 4, 0, is_code ? 2 : 0 },
+          { 2, 1, 1 },
+          { 2, 2, 2 }
+        };
+        const uint64 thresh = 990ull;
+        uint64 best_sz = (!is_code && is_def_delta) ? def_base_sz : (uint64)-1;
+        int start_c = (best_sz != (uint64)-1) ? 1 : 0;
+        int best_idx = 0;
+        for (int c = start_c; c < 4; c++) {
+          char pbuf[128];
+          snprintf(pbuf, sizeof(pbuf), "%slzma:4m:fast:32:mc16:lc%d:lp%d:pb%d",
+                   lzma_probe_prefix.c_str(), cands[c][0], cands[c][1], cands[c][2]);
+          uint64 sz = MdlHelper::probe(sample2m, pbuf);
+          if (sz != (uint64)-1) {
+            if (c == 0) {
+              best_sz = sz;
+              best_idx = 0;
+            } else if (best_sz == (uint64)-1 || sz * 1000ull < best_sz * thresh) {
+              best_sz = sz;
+              best_idx = c;
+            }
+          }
+        }
+        if (best_idx > 0) {
+          MdlHelper::set_lzma_props(mth, cands[best_idx][0], cands[best_idx][1], cands[best_idx][2]);
+        }
       }
     }
   }
