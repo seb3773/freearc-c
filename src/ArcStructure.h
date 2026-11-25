@@ -20,6 +20,22 @@ static char *g_archive_password = NULL;
 static inline void SetArchivePassword (char *p) { g_archive_password = p; }
 static inline char *GetArchivePassword (void)   { return g_archive_password; }
 
+#ifdef FREEARC_LIBRARY
+extern int freearc_dll_ask_password(int attempt);
+static inline int ResolveArchiveBlockPassword (char *compressor, char *resolved)
+{
+  int attempt = 0;
+  for (;;) {
+    int prc = ApplyPasswordToCompressor (compressor, GetArchivePassword(), resolved);
+    if (prc != FREEARC_ERRCODE_GENERAL && prc != FREEARC_ERRCODE_BAD_COMPRESSED_DATA)
+      return prc;
+    int action = freearc_dll_ask_password (attempt++);
+    if (action == 'q') return FREEARC_ERRCODE_OPERATION_TERMINATED;
+    if (action != 'y') return prc;
+  }
+}
+#endif
+
 /******************************************************************************
 ** �����, ����������� �������, ������� ���� ������ :) *************************
 ******************************************************************************/
@@ -97,15 +113,36 @@ public:
       open (file, pos, compsize);
       char *origbuf = (char*) malloc (origsize+8);  // ������ 8 ���� ��� ������ ��� ���������� readInteger
       char resolved[MAX_METHOD_STRLEN];
+#ifdef FREEARC_LIBRARY
+      int prc = ResolveArchiveBlockPassword (compressor, resolved);
+      if (prc < 0) {
+        free(origbuf);
+        freearc_dll_set_errcode (prc == FREEARC_ERRCODE_BAD_COMPRESSED_DATA ? FREEARC_ERRCODE_BAD_COMPRESSED_DATA :
+                                 prc == FREEARC_ERRCODE_OPERATION_TERMINATED ? FREEARC_ERRCODE_OPERATION_TERMINATED :
+                                 prc == FREEARC_ERRCODE_GENERAL ? FREEARC_ERRCODE_GENERAL :
+                                 FREEARC_ERRCODE_INVALID_COMPRESSOR);
+      }
+      CHECK (prc!=FREEARC_ERRCODE_OPERATION_TERMINATED, (s,"ERROR: operation terminated by user"));
+#else
       int prc = ApplyPasswordToCompressor (compressor, GetArchivePassword(), resolved);
+#endif
       CHECK (prc!=FREEARC_ERRCODE_GENERAL, (s,"ERROR: archive is encrypted, use -pPassword"));
       CHECK (prc!=FREEARC_ERRCODE_BAD_COMPRESSED_DATA, (s,"ERROR: wrong password"));
       CHECK (prc>=0, (s,"ERROR: unsupported compression method \"%s\"", compressor));
       int result = DecompressMem (resolved, buf, compsize, origbuf, origsize);
+#ifdef FREEARC_LIBRARY
+      if (result != origsize) {
+        free(origbuf);
+        freearc_dll_set_errcode (result < 0 ? result : FREEARC_ERRCODE_BAD_COMPRESSED_DATA);
+      }
+#endif
       CHECK (result!=FREEARC_ERRCODE_INVALID_COMPRESSOR, (s,"ERROR: unsupported compression method \"%s\"", resolved));
       CHECK (result==origsize, (s,"ERROR: archive structure corrupted (decompression of control block failed)"));
       free(buf), p=buf=origbuf, bufend=buf+origsize;
       CRC crc = CalcCRC (buf, origsize);
+#ifdef FREEARC_LIBRARY
+      if (crc != right_crc) freearc_dll_set_errcode (FREEARC_ERRCODE_BAD_COMPRESSED_DATA);
+#endif
       CHECK (crc==right_crc, (s,"ERROR: archive structure corrupted (control block failed CRC check)"))
       return *this;
     }

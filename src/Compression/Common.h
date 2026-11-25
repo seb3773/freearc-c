@@ -224,35 +224,55 @@ static inline off_t myfilelength (int h)
 #define file_read(file, buf, size)              fread  (buf, 1, size, file)
 #define file_write(file, buf, size)             fwrite (buf, 1, size, file)
 
+#if defined(FREEARC_DLL) && defined(__cplusplus)
+extern "C++" {
+template <typename T, size_t N>
+struct DllLocalArray {
+  T *p;
+  DllLocalArray() : p((T*)malloc(N * sizeof(T))) {}
+  ~DllLocalArray() { free(p); }
+  operator T*() const { return p; }
+  static size_t cap() { return N; }
+};
+}
+#  define DLL_LOCAL_ARRAY(T, name, N) DllLocalArray<T, (N)> name
+#  define DLL_LOCAL_CAP(name, T, N)   (name).cap()
+#else
+#  define DLL_LOCAL_ARRAY(T, name, N) T name[N]
+#  define DLL_LOCAL_CAP(name, T, N)   sizeof(name)
+#endif
+
 #ifdef FREEARC_WIN
+
 static inline int create_dir (CFILENAME name) {
-  WCHAR wname[MY_FILENAME_MAX];
+  DLL_LOCAL_ARRAY(WCHAR, wname, MY_FILENAME_MAX);
   utf8_to_utf16(name, wname);
   return _wmkdir(wname);
 }
 static inline int remove_dir (CFILENAME name) {
-  WCHAR wname[MY_FILENAME_MAX];
+  DLL_LOCAL_ARRAY(WCHAR, wname, MY_FILENAME_MAX);
   utf8_to_utf16(name, wname);
   return _wrmdir(wname);
 }
 static inline int remove_file (CFILENAME name) {
-  WCHAR wname[MY_FILENAME_MAX];
+  DLL_LOCAL_ARRAY(WCHAR, wname, MY_FILENAME_MAX);
   utf8_to_utf16(name, wname);
   return _wremove(wname);
 }
 static inline int file_exists (CFILENAME name) {
-  WCHAR wname[MY_FILENAME_MAX];
+  DLL_LOCAL_ARRAY(WCHAR, wname, MY_FILENAME_MAX);
   utf8_to_utf16(name, wname);
   return _waccess(wname, 0) == 0;
 }
 static inline int rename_file (CFILENAME oldname, CFILENAME newname) {
-  WCHAR wold[MY_FILENAME_MAX], wnew[MY_FILENAME_MAX];
+  DLL_LOCAL_ARRAY(WCHAR, wold, MY_FILENAME_MAX);
+  DLL_LOCAL_ARRAY(WCHAR, wnew, MY_FILENAME_MAX);
   utf8_to_utf16(oldname, wold);
   utf8_to_utf16(newname, wnew);
   return _wrename(wold, wnew);
 }
 static inline int dir_exists (CFILENAME name) {
-  WCHAR wname[MY_FILENAME_MAX];
+  DLL_LOCAL_ARRAY(WCHAR, wname, MY_FILENAME_MAX);
   utf8_to_utf16(name, wname);
   struct _stat64 st;
   if (_wstat64(wname, &st) != 0) return 0;
@@ -459,14 +479,32 @@ static inline void setvalue64 (void *p, uint64 x)
 #define FREEARC_EXIT_ERROR 2
 
 // ����������, ������������ ��� ������������ �� ������� �� ������� �������� ��������
+#ifndef FA_THREAD_LOCAL
+#  if defined(_MSC_VER)
+#    define FA_THREAD_LOCAL __declspec(thread)
+#  else
+#    define FA_THREAD_LOCAL __thread
+#  endif
+#endif
+
+#ifdef FREEARC_DLL
+extern FA_THREAD_LOCAL int jmpready;
+extern FA_THREAD_LOCAL jmp_buf jumper;
+void freearc_dll_report_error(const char *msg);
+void freearc_dll_set_errcode(int code);
+void freearc_dll_on_check_fail(void);
+#else
 extern int jmpready;
 extern jmp_buf jumper;
+#endif
 
 // ��������� ��������� � ����������� ��������� ���������
 extern FILE *g_logfile;
 
 #ifndef CHECK
-#  if defined(FREEARC_WIN) && defined(FREEARC_GUI)
+#  ifdef FREEARC_DLL
+#    define CHECK(a,b)           {if (!(a))  {char *s=(char*)malloc(MY_FILENAME_MAX*4);  if (s) {sprintf b; freearc_dll_report_error(s); free(s);} else {freearc_dll_report_error("ERROR: out of memory");}  freearc_dll_on_check_fail();  if (jmpready) longjmp(jumper,1);  abort();}}
+#  elif defined(FREEARC_WIN) && defined(FREEARC_GUI)
 #    define CHECK(a,b)           {if (!(a))  {if (jmpready) longjmp(jumper,1);  char *s=(char*)malloc(MY_FILENAME_MAX*4);  WCHAR *utf16=(WCHAR*) malloc(MY_FILENAME_MAX*4);  sprintf b;  utf8_to_utf16(s,utf16);  MessageBoxW(NULL, utf16, L"Error encountered", MB_ICONERROR);  ON_CHECK_FAIL();  exit(FREEARC_EXIT_ERROR);}}
 #  elif defined(FREEARC_WIN)
 #    define CHECK(a,b)           {if (!(a))  {if (jmpready) longjmp(jumper,1);  char *s=(char*)malloc(MY_FILENAME_MAX*4),  *oem=(char*)malloc(MY_FILENAME_MAX*4);  sprintf b;  utf8_to_oem(s,oem);  printf("\n%s",oem);  if (g_logfile) {fprintf(g_logfile, "\n%s\n", s); fflush(g_logfile);}  ON_CHECK_FAIL();  exit(FREEARC_EXIT_ERROR);}}
@@ -763,11 +801,11 @@ struct MYFILE
     // 1. Check if fn ends with .NNN (e.g. .001)
     if (len > 4 && fn[len-4] == '.' && isdigit((unsigned char)fn[len-3]) &&
         isdigit((unsigned char)fn[len-2]) && isdigit((unsigned char)fn[len-1])) {
-      char prefix[MY_FILENAME_MAX * 4];
-      if (len - 4 >= sizeof(prefix)) return false;
+      DLL_LOCAL_ARRAY(char, prefix, MY_FILENAME_MAX * 4);
+      if (len - 4 >= DLL_LOCAL_CAP(prefix, char, MY_FILENAME_MAX * 4)) return false;
       memcpy(prefix, fn, len - 4);
       prefix[len - 4] = 0;
-      snprintf(pat_buf, pat_size, "%s.%%03d", prefix);
+      snprintf(pat_buf, pat_size, "%s.%%03d", (const char*)prefix);
       *start_num = atoi(fn + len - 3);
       return true;
     }
@@ -780,30 +818,30 @@ struct MYFILE
         long n = strtol(num_start, &endp, 10);
         if (endp && strcasecmp(endp, ".arc") == 0) {
           int digits = (int)(endp - num_start);
-          char prefix[MY_FILENAME_MAX * 4];
+          DLL_LOCAL_ARRAY(char, prefix, MY_FILENAME_MAX * 4);
           size_t prefix_len = (size_t)(part - fn);
-          if (prefix_len >= sizeof(prefix)) return false;
+          if (prefix_len >= DLL_LOCAL_CAP(prefix, char, MY_FILENAME_MAX * 4)) return false;
           memcpy(prefix, fn, prefix_len);
           prefix[prefix_len] = 0;
           if (digits >= 2 && num_start[0] == '0')
-            snprintf(pat_buf, pat_size, "%s.part%%02d.arc", prefix);
+            snprintf(pat_buf, pat_size, "%s.part%%02d.arc", (const char*)prefix);
           else
-            snprintf(pat_buf, pat_size, "%s.part%%d.arc", prefix);
+            snprintf(pat_buf, pat_size, "%s.part%%d.arc", (const char*)prefix);
           *start_num = (int)n;
           return true;
         }
       }
     }
     // 3. Check if fn doesn't have .001, but fn.001 exists
-    char test001[MY_FILENAME_MAX * 4];
-    snprintf(test001, sizeof(test001), "%s.001", fn);
+    DLL_LOCAL_ARRAY(char, test001, MY_FILENAME_MAX * 4);
+    snprintf(test001, DLL_LOCAL_CAP(test001, char, MY_FILENAME_MAX * 4), "%s.001", fn);
     if (file_exists(test001)) {
       snprintf(pat_buf, pat_size, "%s.%%03d", fn);
       *start_num = 1;
       return true;
     }
     // 4. Check if fn without .arc + .arc.001 exists
-    snprintf(test001, sizeof(test001), "%s.arc.001", fn);
+    snprintf(test001, DLL_LOCAL_CAP(test001, char, MY_FILENAME_MAX * 4), "%s.arc.001", fn);
     if (file_exists(test001)) {
       snprintf(pat_buf, pat_size, "%s.arc.%%03d", fn);
       *start_num = 1;
@@ -839,11 +877,11 @@ struct MYFILE
   virtual bool exists ()
   {
     if (file_exists(filename)) return true;
-    char pat_buf[MY_FILENAME_MAX * 4];
+    DLL_LOCAL_ARRAY(char, pat_buf, MY_FILENAME_MAX * 4);
     int start_num = 1;
-    if (detect_volume_pattern(filename, pat_buf, sizeof(pat_buf), &start_num)) {
-      char test_name[MY_FILENAME_MAX * 4];
-      snprintf(test_name, sizeof(test_name), pat_buf, start_num);
+    if (detect_volume_pattern(filename, pat_buf, DLL_LOCAL_CAP(pat_buf, char, MY_FILENAME_MAX * 4), &start_num)) {
+      DLL_LOCAL_ARRAY(char, test_name, MY_FILENAME_MAX * 4);
+      snprintf(test_name, DLL_LOCAL_CAP(test_name, char, MY_FILENAME_MAX * 4), (const char*)pat_buf, start_num);
       if (file_exists(test_name)) return true;
     }
     return false;
@@ -856,7 +894,7 @@ struct MYFILE
     if (mode==WRITE_MODE) {
       BuildPathTo (filename);
 #ifdef FREEARC_WIN
-      WCHAR wfn[MY_FILENAME_MAX];
+      DLL_LOCAL_ARRAY(WCHAR, wfn, MY_FILENAME_MAX);
       utf8_to_utf16 (filename, wfn);
       handle = ::_wopen (wfn, O_WRONLY|O_BINARY|O_CREAT|O_TRUNC, S_IREAD|S_IWRITE);
 #else
@@ -865,13 +903,13 @@ struct MYFILE
       return handle>=0;
     }
     // Multi-volume detection for READ_MODE
-    char pat_buf[MY_FILENAME_MAX * 4];
+    DLL_LOCAL_ARRAY(char, pat_buf, MY_FILENAME_MAX * 4);
     int start_num = 1;
-    if (detect_volume_pattern(filename, pat_buf, sizeof(pat_buf), &start_num)) {
-      char test_name[MY_FILENAME_MAX * 4];
+    if (detect_volume_pattern(filename, pat_buf, DLL_LOCAL_CAP(pat_buf, char, MY_FILENAME_MAX * 4), &start_num)) {
+      DLL_LOCAL_ARRAY(char, test_name, MY_FILENAME_MAX * 4);
       int count = 0;
       while (true) {
-        snprintf(test_name, sizeof(test_name), pat_buf, start_num + count);
+        snprintf(test_name, DLL_LOCAL_CAP(test_name, char, MY_FILENAME_MAX * 4), (const char*)pat_buf, start_num + count);
         if (!file_exists(test_name))
           break;
         count++;
@@ -881,10 +919,10 @@ struct MYFILE
         vols = (VolumeEntry*) malloc(num_vols * sizeof(VolumeEntry));
         FILESIZE cur_start = 0;
         for (int i = 0; i < num_vols; i++) {
-          snprintf(test_name, sizeof(test_name), pat_buf, start_num + i);
+          snprintf(test_name, DLL_LOCAL_CAP(test_name, char, MY_FILENAME_MAX * 4), (const char*)pat_buf, start_num + i);
           vols[i].name = strdup(test_name);
 #ifdef FREEARC_WIN
-          WCHAR wvol[MY_FILENAME_MAX];
+          DLL_LOCAL_ARRAY(WCHAR, wvol, MY_FILENAME_MAX);
           utf8_to_utf16 (vols[i].name, wvol);
           int vh = ::_wopen (wvol, O_RDONLY|O_BINARY);
           if (vh >= 0) {
@@ -909,7 +947,7 @@ struct MYFILE
         virt_pos = 0;
         cur_vol_idx = 0;
 #ifdef FREEARC_WIN
-        WCHAR wvol0[MY_FILENAME_MAX];
+        DLL_LOCAL_ARRAY(WCHAR, wvol0, MY_FILENAME_MAX);
         utf8_to_utf16 (vols[0].name, wvol0);
         handle = ::_wopen (wvol0, O_RDONLY|O_BINARY);
 #else
@@ -919,7 +957,7 @@ struct MYFILE
       }
     }
 #ifdef FREEARC_WIN
-    WCHAR wfn[MY_FILENAME_MAX];
+    DLL_LOCAL_ARRAY(WCHAR, wfn, MY_FILENAME_MAX);
     utf8_to_utf16 (filename, wfn);
     handle = ::_wopen (wfn, O_RDONLY|O_BINARY, S_IREAD|S_IWRITE);
 #else
@@ -977,7 +1015,7 @@ struct MYFILE
       }
       if (cur_vol_idx != target) {
         if (handle >= 0) ::close(handle);
-        WCHAR wvol[MY_FILENAME_MAX];
+        DLL_LOCAL_ARRAY(WCHAR, wvol, MY_FILENAME_MAX);
         utf8_to_utf16 (vols[target].name, wvol);
         handle = ::_wopen(wvol, O_RDONLY|O_BINARY);
         CHECK(handle >= 0, (s,"ERROR: can't open volume %s", vols[target].name));

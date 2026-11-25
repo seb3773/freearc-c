@@ -41,6 +41,10 @@ public:
   virtual bool ProgressFile  (bool isdir, const char *operation, MYFILENAME filename, uint64 filesize)  {return TRUE;}
   virtual void EndProgress(COMMAND*) {}
   virtual char AskOverwrite (MYFILENAME filename, uint64 size, time_t modified) {return 'n';}
+#ifdef FREEARC_LIBRARY
+  virtual int  AskPassword (char *buf, int bufsize, int attempt) {return 'n';}
+  virtual void ListItem (const char *path, uint64 size, uint32 crc, bool isdir) {}
+#endif
   virtual void ListHeader (COMMAND &) {}
   virtual void ListFooter (COMMAND &) {}
   virtual void ListFiles (DIRECTORY_BLOCK*, COMMAND &) {}
@@ -290,6 +294,12 @@ public:
   uint64 limit_comp_mem;
   int    custom_threads;
   std::string logfile_path;
+#ifdef FREEARC_LIBRARY
+  std::vector<char*> dll_alloc_argv;
+  ~COMMAND() {
+    for (size_t i = 0; i < dll_alloc_argv.size(); i++) free(dll_alloc_argv[i]);
+  }
+#endif
 
   COMMAND (int argc, char *argv[]);
   void Prepare();
@@ -329,8 +339,15 @@ void RegisterExternalCompressors (char *progname)
 static void read_patterns_file(const char *filename, std::vector<std::string> &list) {
   FILE *f = fopen(filename, "r");
   if (!f) return;
+#ifdef FREEARC_LIBRARY
+  std::vector<char> line_buf(MY_FILENAME_MAX * 4);
+  char *line = &line_buf[0];
+  int line_cap = (int)line_buf.size();
+#else
   char line[MY_FILENAME_MAX * 4];
-  while (fgets(line, sizeof(line), f)) {
+  int line_cap = (int)sizeof(line);
+#endif
+  while (fgets(line, line_cap, f)) {
     char *p = line;
     while (*p == ' ' || *p == '\t') p++;
     char *e = p + strlen(p);
@@ -372,11 +389,17 @@ COMMAND::COMMAND (int argc, char *argv[])
   // Scan for config options
   ArcIni::ConfigScanResult cfg_scan = ArcIni::scan_config_options(argc, argv);
   if (cfg_scan.print_config) {
+#ifdef FREEARC_LIBRARY
+    is_help = TRUE;
+    ok = FALSE;
+    return;
+#else
     ArcIni ini;
     std::string ini_path = ArcIni::find_arc_ini(argv[0], cfg_scan.custom_cfg, cfg_scan.cfg_disabled);
     if (!ini_path.empty()) ini.load(ini_path);
     ini.print_config(stdout);
     exit(0);
+#endif
   }
 
   // Load arc.ini and register external compressors
@@ -411,14 +434,23 @@ COMMAND::COMMAND (int argc, char *argv[])
     std::vector<char*> expanded_argv;
     expanded_argv.push_back(argv[0]);
     for (size_t di = 0; di < def_opts.size(); di++) {
-      expanded_argv.push_back(strdup(def_opts[di].c_str()));
+      char *s = strdup(def_opts[di].c_str());
+#ifdef FREEARC_LIBRARY
+      dll_alloc_argv.push_back(s);
+#endif
+      expanded_argv.push_back(s);
     }
     for (int ai = 1; ai < argc; ai++) {
       expanded_argv.push_back(argv[ai]);
     }
     expanded_argv.push_back(NULL);
     argc = (int)expanded_argv.size() - 1;
+#ifdef FREEARC_LIBRARY
+    dll_alloc_argv.push_back((char*)malloc((argc + 1) * sizeof(char*)));
+    argv = (char**)dll_alloc_argv.back();
+#else
     argv = (char**) malloc((argc + 1) * sizeof(char*));
+#endif
     for (int ai = 0; ai <= argc; ai++)
       argv[ai] = expanded_argv[ai];
   }
@@ -639,7 +671,11 @@ COMMAND::COMMAND (int argc, char *argv[])
     to_stdout = FALSE;
     for (ok=TRUE; ok && *++argv; )
     {
+#ifdef FREEARC_LIBRARY
+      if (!nooptions && argv[0][0]=='-')
+#else
       if (argv[0][0]=='-')
+#endif
       {
         std::string dp_val;
         bool dp_next = false;
@@ -743,6 +779,7 @@ COMMAND::COMMAND (int argc, char *argv[])
     }
     return;
   }
+#ifndef FREEARC_LIBRARY
   printf(HEADER2
          "Usage: unarc command [options] archive[.arc] [filenames...]\n"
          "Available commands:\n"
@@ -768,6 +805,7 @@ COMMAND::COMMAND (int argc, char *argv[])
          "  --no-config - disable reading configuration file\n"
          "  --print-config - display definitions of compression methods\n"
          "  --          - no more options\n");
+#endif
 #endif
 }
 
@@ -829,7 +867,12 @@ static bool match_one_pattern(const std::string &pat, const char *full, const ch
 // Accept file matching
 BOOL COMMAND::accept_file (DIRECTORY_BLOCK *dirblock, int i)
 {
+#ifdef FREEARC_LIBRARY
+  std::vector<char> fullname_vec(MY_FILENAME_MAX * 4);
+  char *fullname_buf = &fullname_vec[0];
+#else
   char fullname_buf[MY_FILENAME_MAX * 4];
+#endif
   const char *full = dirblock->fullname(i, fullname_buf);
   const char *base = dirblock->name[i];
 

@@ -265,7 +265,19 @@ static int _4x4_process_job (_4x4Job *job)
     memcpy (OutBuf, InBuf, InSize);
     return InSize;
   }
+#ifdef FREEARC_DLL
+  int rc;
+  if (!jmpready && setjmp(jumper) != 0) {
+    jmpready = FALSE;
+    rc = FREEARC_ERRCODE_BAD_COMPRESSED_DATA;
+  } else {
+    jmpready = TRUE;
+    rc = decompress_mem_local (compressor->Method, InBuf, InSize, OutBuf, (int) job->orig_size);
+    jmpready = FALSE;
+  }
+#else
   int rc = decompress_mem_local (compressor->Method, InBuf, InSize, OutBuf, (int) job->orig_size);
+#endif
   if (rc < 0) return rc;
   if (rc != (int) job->orig_size) return FREEARC_ERRCODE_BAD_COMPRESSED_DATA;
   return rc;

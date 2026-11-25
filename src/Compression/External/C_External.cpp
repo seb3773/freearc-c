@@ -43,11 +43,15 @@ int external_program (bool IsCompressing, CALLBACK_FUNC *callback, void *auxdata
     outfile.remove();
     if (*cmd && runCmd) {
     	char temp[30];
+#ifndef FREEARC_DLL
         printf ("\n%s %s bytes with %s\n", IsCompressing? "Compressing":"Unpacking", show3(bytes,temp), cmd);
+#endif
         MYFILE _tcmd(cmd); // utf8->utf16 conversion
         double time0 = GetGlobalTime();
         ExitCode = RunCommand (_tcmd.filename, t.filename, TRUE);
+#ifndef FREEARC_DLL
         printf ("\nErrorlevel=%d\n", ExitCode);
+#endif
         if (addtime)  *addtime += GetGlobalTime() - time0;
     } else {
         infile.rename (outfile);

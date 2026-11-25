@@ -15,8 +15,13 @@ FA_THREAD_LOCAL int compress_all_at_once = 0;
 int nobitexact_speed_mode = 0;
 
 // Для обработки ошибок во вложенных процедурах - longjmp сигнализирует процедуре верхнего уровня о произошедшей ошибке
+#ifdef FREEARC_DLL
+FA_THREAD_LOCAL int jmpready = FALSE;
+FA_THREAD_LOCAL jmp_buf jumper;
+#else
 int jmpready = FALSE;
 jmp_buf jumper;
+#endif
 
 #ifndef FREEARC_STANDALONE_TORNADO
 
@@ -355,7 +360,7 @@ CFILENAME GetTempDir (void)
 
 void SetFileDateTime (const CFILENAME Filename, time_t mtime)
 {
-  WCHAR wname[MY_FILENAME_MAX];
+  DLL_LOCAL_ARRAY(WCHAR, wname, MY_FILENAME_MAX);
   utf8_to_utf16 (Filename, wname);
   struct _stat64 st;
   _wstat64 (wname, &st);
@@ -468,10 +473,10 @@ void RunFile (const CFILENAME filename, const CFILENAME curdir, int wait_finish)
 void BuildPathTo (CFILENAME name)
 {
   if (!name || !*name) return;
-  char buf[MY_FILENAME_MAX];
-  snprintf(buf, sizeof(buf), "%s", name);
+  DLL_LOCAL_ARRAY(char, buf, MY_FILENAME_MAX);
+  snprintf(buf, DLL_LOCAL_CAP(buf, char, MY_FILENAME_MAX), "%s", name);
   char *path_ptr = NULL;
-  for (char *p = _tcschr(buf,0); --p >= buf;)
+  for (char *p = _tcschr(buf,0); --p >= (char*)buf;)
     if (_tcschr (_T(DIRECTORY_DELIMITERS), *p))
       {path_ptr=p; break;}
   if (path_ptr==NULL)  return;
@@ -518,6 +523,9 @@ void removeTemporaryFiles (void)
   for(int i=TemporaryFilesCount-1; i>=0; i--)
     TemporaryFiles[i]->tryClose(),
     TemporaryFiles[i]->remove();
+#ifdef FREEARC_DLL
+  TemporaryFilesCount = 0;
+#endif
 }
 
 

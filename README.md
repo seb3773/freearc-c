@@ -94,6 +94,9 @@ Binaries are stripped production builds organized cleanly by target platform (`v
 | `build/linux/arc` | 1.42 MiB (`1,486,360 B`) | Full archiver and archive manager (create, update, freshen, delete, move, SFX conversion) |
 | `build/linux/unarc` | 837 KiB (`857,240 B`) | Standalone unpacker, lister, and integrity tester |
 | `build/linux/arc.sfx` | 833 KiB (`853,144 B`) | Standalone Linux ELF stub for self-extracting packages (`.sfx` / `.run`) |
+| `build/linux/libunarc.so` | 868 KiB (`889,320 B`) | Shared C/C++ decoder library (`dlopen` / `-lunarc`) |
+| `build/linux/libunarc.a` | 1.34 MiB (`1,403,378 B`) | Static C/C++ decoder archive (link with `-lstdc++ -lpthread -lm`) |
+| `build/linux/unarc.h` | 5.4 KiB (`5,550 B`) | Public C header (legacy `FreeArcExtract` + modern `unarc_run` API) |
 
 ### Linux ARM64 (aarch64) — `./build/linux-arm64/`
 | Binary | Size | Description |
@@ -101,12 +104,28 @@ Binaries are stripped production builds organized cleanly by target platform (`v
 | `build/linux-arm64/arc` | 1.51 MiB (`1,586,328 B`) | Full archiver and archive manager compiled natively for Linux ARM64 (AArch64) |
 | `build/linux-arm64/unarc` | 967 KiB (`990,616 B`) | Standalone unpacker, lister, and integrity tester for Linux ARM64 |
 | `build/linux-arm64/arc.sfx` | 967 KiB (`990,616 B`) | Standalone Linux ARM64 ELF stub for self-extracting packages (`.sfx` / `.run`) |
+| `build/linux-arm64/libunarc.so` | 1.07 MiB (`1,120,664 B`) | Shared C/C++ decoder library for Linux ARM64 |
+| `build/linux-arm64/libunarc.a` | 1.38 MiB (`1,443,870 B`) | Static C/C++ decoder archive for Linux ARM64 |
+| `build/linux-arm64/unarc.h` | 5.4 KiB (`5,550 B`) | Public C header |
 
 ### Windows (x86_64) — `./build/win64/`
 | Binary | Size | Description |
 |---|---|---|
 | `build/win64/arc.exe` | 1.62 MiB (`1,694,208 B`) | Standalone Windows 64-bit archiver (static MinGW-w64, zero runtime DLL dependencies) |
 | `build/win64/unarc.exe` | 1.04 MiB (`1,095,168 B`) | Standalone Windows 64-bit unpacker and integrity tester |
+| `build/win64/unarc.dll` | 1.05 MiB (`1,103,872 B`) | Windows 64-bit decoder DLL (static C/C++ runtime, OS DLLs only) |
+| `build/win64/libunarc.dll.a` | 5.2 KiB (`5,298 B`) | MinGW-w64 import library for `unarc.dll` |
+| `build/win64/unarc.h` | 5.4 KiB (`5,550 B`) | Public C header |
+
+### Linux RISC-V 64 (`riscv64`) — `./build/linux-riscv64/`
+| Binary | Size | Description |
+|---|---|---|
+| `build/linux-riscv64/arc` | 1.24 MiB (`1,299,736 B`) | Full archiver and archive manager cross-compiled for Linux RISC-V 64 |
+| `build/linux-riscv64/unarc` | 820 KiB (`839,184 B`) | Standalone unpacker, lister, and integrity tester for Linux RISC-V 64 |
+| `build/linux-riscv64/arc.sfx` | 820 KiB (`839,184 B`) | Standalone Linux RISC-V 64 ELF stub for `.sfx` / `.run` self-extractors |
+| `build/linux-riscv64/libunarc.so` | 793 KiB (`812,072 B`) | Shared C/C++ decoder library for Linux RISC-V 64 |
+| `build/linux-riscv64/libunarc.a` | 1.95 MiB (`2,042,172 B`) | Static C/C++ decoder archive for Linux RISC-V 64 |
+| `build/linux-riscv64/unarc.h` | 5.4 KiB (`5,550 B`) | Public C header |
 
 ---
 
@@ -128,20 +147,31 @@ make arm64
 # Compile Windows 64-bit native binaries (into ./build/win64/)
 make win64
 
-# (Or compile all platforms simultaneously)
+# Compile Linux RISC-V 64 binaries (into ./build/linux-riscv64/, requires g++-riscv64-linux-gnu)
+make riscv64
+
+# (Or compile standard CLI platforms simultaneously)
 make all-platforms
 
-# Run the automated Linux x86_64 validation suite
-make test
+# Compile decoder libraries: Linux .so/.a, Windows unarc.dll, Linux ARM64 .so/.a
+make lib          # ./build/linux/{libunarc.so,libunarc.a,unarc.h}
+make dll          # ./build/win64/{unarc.dll,libunarc.dll.a,unarc.h} (alias: make lib-win64)
+make lib-arm64    # ./build/linux-arm64/{libunarc.so,libunarc.a,unarc.h}
+make lib-riscv64  # ./build/linux-riscv64/{libunarc.so,libunarc.a,unarc.h}
+make lib-all      # all of the above (plus riscv64 if cross-compiler is installed)
 
-# Run the automated Linux ARM64 validation suite (via QEMU)
-make test-arm64
+# Run the automated CLI validation suites
+make test         # Linux x86_64 CLI suite
+make test-arm64   # Linux ARM64 CLI suite (via QEMU)
+make test-win64   # Windows 64-bit CLI suite (under Wine)
+make test-riscv64 # Linux RISC-V 64 CLI suite (via QEMU)
+make test-all     # Standard CLI suites (Linux, Win64, ARM64)
 
-# Run the automated Windows 64-bit validation suite (under Wine, bit-for-bit exact)
-make test-win64
-
-# Run all test suites across all platforms
-make test-all
+# Run the decoder library / DLL validation suites
+make test-lib
+make test-lib-win64
+make test-lib-arm64
+make test-lib-riscv64
 
 # (Optional) Build standalone Debian .deb package
 make deb
@@ -330,18 +360,55 @@ Measured on an **11th Gen Intel® Core™ i3-1115G4 @ 3.00GHz** (2 cores / 4 thr
 
 ---
 
+## Decoder Library & DLL API (`unarc.dll` / `libunarc`)
+
+FreeArc-c provides an embeddable 64-bit decoder library sharing the exact same decompression engines (LZMA/LZMA2 x64 ASM, Tornado, PPMd, GRZip, REP, LZP, Delta, Dict, BCJ, MM/TTA, `4x4`, and AES/Blowfish/Twofish/Serpent cryptography) while turning fatal CLI exits into clean negative return codes and callbacks. Calls are thread-safe (serialized via an internal mutex while preserving internal `4x4` multithreading).
+
+See [`src/unarc.h`](src/unarc.h) for the full C interface, supporting two APIs:
+
+1. **Legacy Win32/Win64 DLL API** (compatible with original FreeArc `Addons/Unarc-DLL` callers):
+   ```c
+   int  FreeArcExtract(unarc_legacy_callback callback, ...); /* NULL- or ""-terminated strings */
+   void UnloadDLL(void);
+   ```
+2. **Modern 64-bit C API** (full 64-bit sizes, `userdata` pointer, explicit `argc`/`argv`):
+   ```c
+   int         unarc_run(int argc, const char *const *argv, unarc_callback callback, void *userdata);
+   const char *unarc_version(void);
+   const char *unarc_last_error(void);
+   const char *unarc_error_string(int errcode);
+   void        unarc_cleanup(void);
+   ```
+   Supported callback events (`what`): `"total"`, `"read"`, `"write"`, `"filename"`, `"overwrite?"`, `"password?"`, `"error"`, `"total_files"`, `"origsize"`, `"compsize"`, and `"list_item"` (modern API `l`/`v` listing).
+
+### Linking Examples
+
+```bash
+# Linux dynamic linking against libunarc.so
+gcc app.c -Ibuild/linux -Lbuild/linux -Wl,-rpath,'$ORIGIN' -lunarc -o app
+
+# Linux static linking against libunarc.a
+gcc -DUNARC_STATIC app.c -Ibuild/linux build/linux/libunarc.a -lstdc++ -lpthread -lm -o app
+
+# Windows 64-bit (MinGW-w64) linking against unarc.dll via import library
+x86_64-w64-mingw32-gcc app.c -Ibuild/win64 build/win64/libunarc.dll.a -o app.exe
+```
+
+---
+
 ## Project Structure
 
 ```
 .
 ├── build/
-│   ├── linux/           # Linux x86_64 binaries (arc, unarc, arc.sfx, arc.ini.example)
-│   ├── linux-arm64/     # Linux ARM64 binaries (arc, unarc, arc.sfx, arc.ini.example)
-│   └── win64/           # Windows 64-bit binaries (arc.exe, unarc.exe, arc.ini.example)
+│   ├── linux/           # Linux x86_64 binaries & libs (arc, unarc, arc.sfx, libunarc.so/.a, unarc.h)
+│   ├── linux-arm64/     # Linux ARM64 binaries & libs (arc, unarc, arc.sfx, libunarc.so/.a, unarc.h)
+│   ├── linux-riscv64/   # Linux RISC-V 64 binaries & libs (arc, unarc, arc.sfx, libunarc.so/.a, unarc.h)
+│   └── win64/           # Windows 64-bit binaries & DLL (arc.exe, unarc.exe, unarc.dll, libunarc.dll.a, unarc.h)
 ├── build.sh             # Fast multi-mode Linux build script
 ├── build_deb.sh         # Complete Linux build + test + Debian .deb packager
 ├── arc.ini.example      # Annotated sample configuration file
-├── Makefile             # Root Makefile (all, win64, arm64, both, all-platforms, debug, clean, test, test-win64, test-arm64, test-all, deb, install, uninstall)
+├── Makefile             # Root Makefile (CLI, lib/dll, riscv64, test*, deb, install, clean targets)
 ├── README.md            # Project documentation
 ├── FORMAT.md            # FreeArc .arc container technical specification
 ├── LICENSE              # GPL-2.0 License
@@ -349,6 +416,8 @@ Measured on an **11th Gen Intel® Core™ i3-1115G4 @ 3.00GHz** (2 cores / 4 thr
 ├── src/                 # Native C/C++ & x86-64 ASM source code
 │   ├── arc.cpp          # Archiver CLI, routing, sorting & management logic
 │   ├── unarc.cpp        # Unpacker CLI & extraction logic
+│   ├── unarc.h          # Public C library & Win64 DLL header
+│   ├── unarc_dll.cpp    # Thread-safe C library / Win64 DLL entry points & recovery layer
 │   ├── ArcStructure.h   # FreeArc archive format structures & parser
 │   ├── ArcProcess.h     # High-level archive processing routines
 │   ├── ArcCommand.h     # CLI options parser & dispatcher
@@ -360,9 +429,12 @@ Measured on an **11th Gen Intel® Core™ i3-1115G4 @ 3.00GHz** (2 cores / 4 thr
 │   ├── run_tests.sh        # Linux x86_64 automated test suite (26 tests)
 │   ├── run_tests_win64.sh  # Windows 64-bit & Wine interoperability test suite (26 tests)
 │   ├── run_tests_arm64.sh  # Linux ARM64 QEMU conformance test suite (23 tests)
+│   ├── run_tests_riscv64.sh # Linux RISC-V 64 QEMU test suite
+│   ├── run_tests_lib.sh    # Decoder library/DLL test runner (Linux, Win64, ARM64, RISC-V 64)
+│   ├── test_lib_host.c     # C host test harness (FreeArcExtract, unarc_run, static & dlopen/LoadLibrary)
 │   ├── test_bitexact.sh    # Bit-exact parity (13) & crypto roundtrip (7) checker
 │   ├── test_arc_ini.sh     # arc.ini configuration parity suite (9 checks)
-│   └── test_compat_modes.sh # Compatibility modes & legacy 0.67 Wine parity suite (23/24 checks)
+│   └── test_compat_modes.sh # Compatibility modes & legacy 0.67 Wine parity suite (24 checks)
 └── tests_files/         # Test artifacts
     ├── corpus/          # Standard test corpus (binaries, text, code, nested dirs)
     └── samples_legacy/  # Legacy FreeArc .arc archives (example.arc, data2.arc)

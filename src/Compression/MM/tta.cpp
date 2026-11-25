@@ -54,6 +54,9 @@ static int bitvalues[] = {8,16,0};
 
 void tta_error (long error, const char *name)
 {
+#ifdef FREEARC_DLL
+    CHECK (FALSE, (s, "ERROR: TTA error %ld (%s)", error, name ? name : ""));
+#endif
     switch (error) {
     case COMMAND_ERROR:
         fprintf (stderr, "Error:   unknown command '%s'\n%s\n", name, LINE); exit(1);

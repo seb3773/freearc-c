@@ -135,6 +135,12 @@ void PROCESS::outfile_close()
 {
   if (included)
   {
+#ifdef FREEARC_LIBRARY
+    if ((crc^INIT_CRC) != dir->crc[curfile]) {
+      if (outfile.isopen()) { outfile.close(); outfile.remove(); }
+      freearc_dll_set_errcode(FREEARC_ERRCODE_BAD_COMPRESSED_DATA);
+    }
+#endif
     CHECK ((crc^INIT_CRC) == dir->crc[curfile], (s,"ERROR: file %s failed CRC check", outfile.utf8name));
     if (cmd->to_stdout) {
       fflush(stdout);
@@ -278,7 +284,18 @@ void PROCESS::ExtractFiles (DIRECTORY_BLOCK *dirblock, int block_num)
     curfile = dirblock->block_start (block_num); // ����� ������� ����� � ���� �����-�����
     outfile_open (SECOND_PASS);                  // ������� ������ �������� ����
     char resolved[MAX_METHOD_STRLEN];
+#ifdef FREEARC_LIBRARY
+    int prc = ResolveArchiveBlockPassword (data_block.compressor, resolved);
+    if (prc < 0) {
+      freearc_dll_set_errcode (prc == FREEARC_ERRCODE_BAD_COMPRESSED_DATA ? FREEARC_ERRCODE_BAD_COMPRESSED_DATA :
+                               prc == FREEARC_ERRCODE_OPERATION_TERMINATED ? FREEARC_ERRCODE_OPERATION_TERMINATED :
+                               prc == FREEARC_ERRCODE_GENERAL ? FREEARC_ERRCODE_GENERAL :
+                               FREEARC_ERRCODE_INVALID_COMPRESSOR);
+    }
+    CHECK (prc!=FREEARC_ERRCODE_OPERATION_TERMINATED, (s,"ERROR: operation terminated by user"));
+#else
     int prc = ApplyPasswordToCompressor (data_block.compressor, GetArchivePassword(), resolved);
+#endif
     CHECK (prc!=FREEARC_ERRCODE_GENERAL, (s,"ERROR: archive is encrypted, use -pPassword"));
     CHECK (prc!=FREEARC_ERRCODE_BAD_COMPRESSED_DATA, (s,"ERROR: wrong password"));
     CHECK (prc>=0, (s,"ERROR: unsupported compression method %s", data_block.compressor));
@@ -292,12 +309,22 @@ void PROCESS::ExtractFiles (DIRECTORY_BLOCK *dirblock, int block_num)
         MemSize mreq = GetDecompressionMem(cm_arr[mi]);
         if (mreq > max_req) max_req = mreq;
       }
+#ifdef FREEARC_LIBRARY
+      if (max_req > cmd->limit_decomp_mem) freearc_dll_set_errcode(FREEARC_ERRCODE_NOT_ENOUGH_MEMORY);
+#endif
       CHECK (max_req <= cmd->limit_decomp_mem,
              (s, "ERROR: decompression requires %llu MB memory, exceeding -ld limit of %llu MB",
               (unsigned long long)(max_req + 1048575)/1048576, (unsigned long long)(cmd->limit_decomp_mem + 1048575)/1048576));
     }
     char *compressor = AddTempfile (resolved);
     int result = MultiDecompress (compressor? compressor : resolved, global_callback, this);
+#ifdef FREEARC_LIBRARY
+    if (result < 0 && result != FREEARC_ERRCODE_NO_MORE_DATA_REQUIRED) {
+      free (compressor);
+      if (outfile.isopen()) { outfile.close(); outfile.remove(); }
+      freearc_dll_set_errcode(result);
+    }
+#endif
     CHECK (result!=FREEARC_ERRCODE_INVALID_COMPRESSOR, (s,"ERROR: unsupported compression method %s", resolved));
     CHECK (result>=0 || result==FREEARC_ERRCODE_NO_MORE_DATA_REQUIRED, (s,"ERROR: archive data corrupted (decompression fails)"));
     free (compressor);

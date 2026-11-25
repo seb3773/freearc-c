@@ -69,6 +69,17 @@ int ReadWriteMem (const char *what, void *buf, int size, void *callback)
 
 // ����������� ������ � ������, ������� � �������� ����� �� ����� outputSize ����.
 // ���������� ��� ������ ��� ���������� ����, ���������� � �������� �����
+#ifdef FREEARC_DLL
+int ReadWriteMemBuf (const char *what, void *buf, int size, void *_membuf);
+int DecompressMem (char *method, void *input, int inputSize, void *output, int outputSize)
+{
+  MemBuf membuf(input, inputSize, output, outputSize);
+  int result = strchr (method, COMPRESSION_METHODS_DELIMITER)
+                 ? MultiDecompress (method, ReadWriteMemBuf, &membuf)
+                 : Decompress (method, ReadWriteMemBuf, &membuf);
+  return result<0 ? result : membuf.written();
+}
+#else
 int DecompressMem (char *method, void *input, int inputSize, void *output, int outputSize)
 {
   readPtr=input, readLeft=inputSize, writePtr=output, writeLeft=outputSize;
@@ -77,6 +88,7 @@ int DecompressMem (char *method, void *input, int inputSize, void *output, int o
                  : Decompress (method, ReadWriteMem, 0);
   return result<0 ? result : outputSize-writeLeft;
 }
+#endif
 
 // ����������� ������ � ������, ������� � �������� ����� �� ����� outputSize ����.
 // ���������� ��� ������ ��� ���������� ����, ���������� � �������� �����
@@ -380,7 +392,19 @@ static DWORD WINAPI multi_decompress_thread (void *paramPtr)
     cb.buf = (BYTE*) malloc (MULTI_COMPRESS_COALESCE_SIZE);
     if (cb.buf) param->coalesce = &cb;
   }
+#ifdef FREEARC_DLL
+  int ret;
+  if (!jmpready && setjmp(jumper) != 0) {
+    jmpready = FALSE;
+    ret = FREEARC_ERRCODE_BAD_COMPRESSED_DATA;
+  } else {
+    jmpready = TRUE;
+    ret = Decompress (param->method, multi_coalesce_callback, param);
+    jmpready = FALSE;
+  }
+#else
   int ret = Decompress (param->method, multi_coalesce_callback, param);
+#endif
   if (param->coalesce) {
     int r = multi_coalesce_flush (param);
     param->coalesce = NULL;
