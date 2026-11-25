@@ -250,18 +250,20 @@ MATCH_NOT_FOUND:
 #define LZP_DEC_PREFETCH_W(addr) ((void)0)
 #endif
 
+static inline UINT lzpDecLoad32 (const BYTE *p) { UINT x; memcpy (&x, p, 4); return x; }
+static inline UINT lzpDecRor17  (UINT c)        { return (c >> 17) | (c << 15); }
+static inline UINT lzpDecHash   (UINT c, const BYTE *p, UINT HashMask)
+{
+    return (c + 5u * lzpDecRor17(c) + 3u * lzpDecLoad32(p - 5)) & HashMask;
+}
+
 /* Copy len bytes from p to Out and apply the same HTable stores as the
-   original byte loop. Updates sit at 0-based offsets period, 2*period, ...
-   with period = 2*n1+1 (the countdown starts at period+1 and then reloads
-   period). A store reads only bytes before its position, which the copy has
-   already finalized, so every hash is identical if it is applied afterwards
-   in increasing order. Wide copies are used only when the match distance
-   keeps each chunk from overlapping its source. */
-static inline void lzpApplyHashUpdates(BYTE *base, UINT len, UINT n1, BYTE **HTable, UINT HashMask)
+   original byte loop using compact 32-bit offsets from OutStart. */
+static inline void lzpApplyHashUpdates(BYTE *base, const BYTE *OutStart, UINT len, UINT n1, UINT *HTable, UINT HashMask)
 {
     const UINT period = 2u * n1 + 1u;
     if (len >= 5)
-        LZP_DEC_PREFETCH_R(&HTable[lzpH(lzpC(base + len), base + len, HashMask)]);
+        LZP_DEC_PREFETCH_R(&HTable[lzpDecHash(lzpDecLoad32(base + len - 4), base + len, HashMask)]);
     if (period >= len) return;
     enum { PIPE = 4 };
     UINT hs[PIPE] = {0, 0, 0, 0};
@@ -270,18 +272,18 @@ static inline void lzpApplyHashUpdates(BYTE *base, UINT len, UINT n1, BYTE **HTa
     UINT u = period;
     for (; n < PIPE && u < len; ++n, u += period) {
         ps[n] = base + u;
-        hs[n] = lzpH(lzpC(ps[n]), ps[n], HashMask);
+        hs[n] = lzpDecHash(lzpDecLoad32(ps[n] - 4), ps[n], HashMask);
         LZP_DEC_PREFETCH_W(&HTable[hs[n]]);
     }
     if (n < PIPE) {
-        for (int i = 0; i < n; i++) HTable[hs[i]] = ps[i];
+        for (int i = 0; i < n; i++) HTable[hs[i]] = (UINT)(ps[i] - OutStart);
         return;
     }
     int rd = 0;
     while (u < len) {
-        HTable[hs[rd]] = ps[rd];
+        HTable[hs[rd]] = (UINT)(ps[rd] - OutStart);
         BYTE *at = base + u;
-        UINT h = lzpH(lzpC(at), at, HashMask);
+        UINT h = lzpDecHash(lzpDecLoad32(at - 4), at, HashMask);
         LZP_DEC_PREFETCH_W(&HTable[h]);
         hs[rd] = h;
         ps[rd] = at;
@@ -289,25 +291,25 @@ static inline void lzpApplyHashUpdates(BYTE *base, UINT len, UINT n1, BYTE **HTa
         u += period;
     }
     for (int i = 0; i < PIPE; i++) {
-        HTable[hs[rd]] = ps[rd];
+        HTable[hs[rd]] = (UINT)(ps[rd] - OutStart);
         rd = (rd + 1) & (PIPE - 1);
     }
 }
 
-static inline void lzpDecodeMatch(BYTE *&Out, BYTE *&p, UINT len, UINT n1, BYTE **HTable, UINT HashMask)
+static inline void lzpDecodeMatch(BYTE *&Out, const BYTE *OutStart, BYTE *&p, UINT len, UINT n1, UINT *HTable, UINT HashMask)
 {
     size_t dist = (p < Out) ? (size_t)(Out - p) : 0;
     if (dist < 4 || len < 8) {
         UINT k = 2u * n1 + 2u;
         UINT i = len;
         do {
-            if ( !--k ) { k = 2u * n1 + 1u; HTable[lzpH(lzpC(Out), Out, HashMask)] = Out; }
+            if ( !--k ) { k = 2u * n1 + 1u; HTable[lzpDecHash(lzpDecLoad32(Out - 4), Out, HashMask)] = (UINT)(Out - OutStart); }
             *Out++ = *p++;
         } while ( --i );
         return;
     }
     if (dist >= len)
-        LZP_DEC_PREFETCH_R(&HTable[lzpH(lzpC(p + len), p + len, HashMask)]);
+        LZP_DEC_PREFETCH_R(&HTable[lzpDecHash(lzpDecLoad32(p + len - 4), p + len, HashMask)]);
     BYTE *base = Out;
     UINT done = 0;
     if (dist >= 8) {
@@ -332,33 +334,72 @@ static inline void lzpDecodeMatch(BYTE *&Out, BYTE *&p, UINT len, UINT n1, BYTE 
         }
         while (done < len) { *Out++ = *p++; done++; }
     }
-    lzpApplyHashUpdates(base, len, n1, HTable, HashMask);
+    lzpApplyHashUpdates(base, OutStart, len, n1, HTable, HashMask);
 }
 
 int LZPDecode(BYTE* In,UINT Size,BYTE* Out,int MinLen,int HashSize,int Barrier,int SmallestLen)
 {
-    UINT i, k, n1=1, n=1, HashMask=HashSize-1;
+    UINT i, n1=1, n=1, HashMask=(UINT)HashSize-1u;
     BYTE *p, *InEnd=In+Size, *OutStart=Out;
-    BYTE **HTable = (BYTE**) lzp_tls.ht.acquire((size_t)HashSize * sizeof(BYTE*));
+    UINT *HTable = (UINT*) lzp_tls.ht.acquire((size_t)HashSize * sizeof(UINT));
     if (HTable==NULL)  return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
-    for (i=0;i < (UINT)HashSize;i++)        HTable[i]=Out+5;
-    lzpC(Out+4)=lzpC(In+4);                 lzpC(Out+8)=lzpC(In+8);
-    i=lzpC(Out += 12)=lzpC(In += 12);       k=lzpH(i,Out,HashMask);
-    do {
-        p=HTable[k];
-        if ( !--n )  { HTable[k]=Out;       n=n1; }
-        if (*In++ != LZP_MATCH_FLAG || i != lzpC(p) || *--InEnd == 255)
-                *Out++ = In[-1];
-        else {
-            HTable[k]=Out;                  n1 += (Out-p > (n1+1)*HashSize && n1 < 7);
-            for (i=(Out-p>Barrier? SmallestLen:MinLen)-1;*InEnd == 0;InEnd--)
-                    i += 254;
-            i += *InEnd;
-            lzpDecodeMatch(Out, p, i, n1, HTable, HashMask);
+    for (i=0;i < (UINT)HashSize;i++)        HTable[i]=5u;
+    memcpy(Out, In, 12);
+    Out += 12;
+    In  += 12;
+    while (In < InEnd) {
+#if defined(FREEARC_INTEL_BYTE_ORDER) && (defined(__GNUC__) || defined(__clang__))
+        if (n >= 2u && (size_t)(InEnd - In) >= 8u) {
+            uint64_t w;
+            memcpy(&w, In, 8);
+            uint64_t x = w ^ 0xB5B5B5B5B5B5B5B5ULL;
+            uint64_t z = (x - 0x0101010101010101ULL) & ~x & 0x8080808080808080ULL;
+            uint64_t mask_n = (1ULL << (n * 8u)) - 1ULL;
+            uint64_t hits = z & mask_n;
+            if (!hits) {
+                for (UINT t = 0; t < n; t++) Out[t] = (BYTE)(w >> (t * 8u));
+                Out += n;
+                In  += n;
+                BYTE *upd = Out - 1;
+                UINT kh = lzpDecHash(lzpDecLoad32(upd - 4), upd, HashMask);
+                HTable[kh] = (UINT)(upd - OutStart);
+                n = n1;
+                if ((size_t)(InEnd - In) >= 24u) {
+                    LZP_DEC_PREFETCH_W(&HTable[lzpDecHash(lzpDecLoad32(In + 12), In + 16, HashMask)]);
+                }
+                continue;
+            }
+            UINT idx = (UINT)(__builtin_ctzll(hits) >> 3);
+            if (idx > 0u) {
+                for (UINT t = 0; t < idx; t++) Out[t] = (BYTE)(w >> (t * 8u));
+                Out += idx;
+                In  += idx;
+                n   -= idx;
+            }
         }
-        k=lzpH(i=lzpC(Out),Out,HashMask);
-    } while (In < InEnd);
-    return (Out-OutStart);
+#endif
+        BYTE c = *In++;
+        UINT hval = lzpDecLoad32(Out - 4);
+        UINT kh = lzpDecHash(hval, Out, HashMask);
+        if (c != LZP_MATCH_FLAG) {
+            if (!--n) { HTable[kh] = (UINT)(Out - OutStart); n = n1; }
+            *Out++ = c;
+        } else {
+            p = OutStart + HTable[kh];
+            if (!--n) { HTable[kh] = (UINT)(Out - OutStart); n = n1; }
+            if (hval != lzpDecLoad32(p - 4) || *--InEnd == 255) {
+                *Out++ = c;
+            } else {
+                HTable[kh] = (UINT)(Out - OutStart);
+                n1 += ((size_t)(Out - p) > (size_t)(n1 + 1u) * (size_t)HashSize && n1 < 7u);
+                for (i = (UINT)((Out - p > Barrier ? SmallestLen : MinLen) - 1); *InEnd == 0; InEnd--)
+                    i += 254u;
+                i += *InEnd;
+                lzpDecodeMatch(Out, OutStart, p, i, n1, HTable, HashMask);
+            }
+        }
+    }
+    return (int)(Out - OutStart);
 }
 
 

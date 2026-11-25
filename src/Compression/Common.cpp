@@ -2,6 +2,9 @@
 #ifdef FREEARC_UNIX
 #include <sys/resource.h>
 #endif
+#ifdef FREEARC_WIN
+#include <io.h>
+#endif
 #include "Common.h"
 #include "Compression.h"
 
@@ -358,6 +361,18 @@ CFILENAME GetTempDir (void)
 #ifdef FREEARC_WIN
 #include <sys/utime.h>
 
+bool SetFileDateTimeHandle (int fd, time_t mtime)
+{
+  if (fd < 0 || mtime < 0) return false;
+  intptr_t osfh = _get_osfhandle (fd);
+  if (osfh == -1) return false;
+  uint64 win_t = (uint64)mtime * 10000000ULL + 116444736000000000ULL;
+  FILETIME ft;
+  ft.dwLowDateTime  = (DWORD)(win_t & 0xFFFFFFFFULL);
+  ft.dwHighDateTime = (DWORD)(win_t >> 32);
+  return SetFileTime ((HANDLE)osfh, NULL, NULL, &ft) != 0;
+}
+
 void SetFileDateTime (const CFILENAME Filename, time_t mtime)
 {
   DLL_LOCAL_ARRAY(WCHAR, wname, MY_FILENAME_MAX);
@@ -431,6 +446,22 @@ void RunFile (const CFILENAME filename, const CFILENAME curdir, int wait_finish)
 }
 
 #else // For Unix:
+
+bool SetFileDateTimeHandle (int fd, time_t mtime)
+{
+#if defined(_POSIX_C_SOURCE) || defined(__linux__) || defined(__unix__) || defined(__APPLE__)
+  if (fd < 0) return false;
+  struct timespec ts[2];
+  ts[0].tv_sec = 0;
+  ts[0].tv_nsec = UTIME_OMIT;
+  ts[1].tv_sec = mtime;
+  ts[1].tv_nsec = 0;
+  return ::futimens (fd, ts) == 0;
+#else
+  (void)fd; (void)mtime;
+  return false;
+#endif
+}
 
 void SetFileDateTime(const CFILENAME Filename, time_t mtime)
 {

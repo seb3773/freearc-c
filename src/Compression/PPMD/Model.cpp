@@ -46,7 +46,7 @@ struct PPM_CONTEXT {                 // Notes:
     inline void   encodeSymbol2(int symbol);//   BCD    context
     inline void           decodeBinSymbol(const BYTE *hs, DWORD &l_low, DWORD &l_code, DWORD &l_range, SUBRANGE &sr);//    CD    suffix
     inline void             decodeSymbol1(const BYTE *hs, DWORD &l_low, DWORD &l_code, DWORD &l_range, SUBRANGE &sr);//   BCDE   successor
-    inline void             decodeSymbol2(const BYTE *hs, DWORD &l_low, DWORD &l_code, DWORD &l_range, SUBRANGE &sr);
+    inline uint64_t         decodeSymbol2(const BYTE *hs, DWORD l_diff, DWORD l_range);//   BCDE   successor
     inline void           update1(STATE* p);
     inline void           update2(STATE* p);
     inline SEE2_CONTEXT*     makeEscFreq2(const BYTE *hs, SUBRANGE &sr);
@@ -607,8 +607,9 @@ inline void PPM_CONTEXT::encodeSymbol2(int symbol)
     SubRange.scale += Tot;
     psee2c->update();                       update2(found);
 }
-inline void PPM_CONTEXT::decodeSymbol2(const BYTE *hs, DWORD &l_low, DWORD &l_code, DWORD &l_range, SUBRANGE &sr)
+inline uint64_t PPM_CONTEXT::decodeSymbol2(const BYTE *hs, DWORD l_diff, DWORD l_range)
 {
+    SUBRANGE sr;
     if (Suffix.o) PrefetchData(Suffix.get_nn(hs));
     SEE2_CONTEXT* psee2c=makeEscFreq2(hs, sr);
     STATE* p=Stats.get_nn(hs), * pe=p+NumStats;
@@ -633,7 +634,8 @@ inline void PPM_CONTEXT::decodeSymbol2(const BYTE *hs, DWORD &l_low, DWORD &l_co
     Tot += Tot1 + Tot2 + Tot3 + extra;
     sr.scale += Tot;
     ariScaleRangeDownLocal(l_range, sr.scale);
-    UINT count = (l_code - l_low) / l_range;
+    DWORD low_add, new_range;
+    UINT count = l_diff / l_range;
     if (count < Tot) {
         UINT HiCnt=0;
         p=Stats.get_nn(hs);
@@ -643,16 +645,20 @@ inline void PPM_CONTEXT::decodeSymbol2(const BYTE *hs, DWORD &l_low, DWORD &l_co
             p++;
         }
         PrefetchData(p->Successor.get_at(hs));
-        sr.LowCount = (sr.HighCount=HiCnt)-p->Freq;
+        DWORD freq = p->Freq;
+        low_add = l_range * (HiCnt - freq);
+        new_range = l_range * freq;
         psee2c->update();                   update2(p);
     } else {
-        sr.LowCount=Tot;                    sr.HighCount=sr.scale;
+        low_add = l_range * Tot;
+        new_range = l_range * (sr.scale - Tot);
         NumMasked = NumStats;
         p=Stats.get_nn(hs);
         do { CharMask[p->Symbol]=Esc; } while (++p <= pe);
         psee2c->Summ += sr.scale;
     }
     #undef PPMD_MASKED_FREQ
+    return ((uint64_t)new_range << 32) | (uint64_t)low_add;
 }
 inline void ClearMask(_PPMD_FILE* EncodedFile,_PPMD_FILE* DecodedFile)
 {
@@ -716,8 +722,9 @@ void _STDCALL DecodeFile(_PPMD_FILE* DecodedFile,_PPMD_FILE* EncodedFile,
                 MinContext=MinContext->Suffix.get_at(hs);
                 if ( !MinContext )          goto STOP_DECODING;
             } while (MinContext->NumStats == NumMasked);
-            MinContext->decodeSymbol2(hs, l_low, l_code, l_range, sr);
-            ariRemoveSubrangeLocal(l_low, l_range, sr);
+            uint64_t r2 = MinContext->decodeSymbol2(hs, l_code - l_low, l_range);
+            l_low += (DWORD)r2;
+            l_range = (DWORD)(r2 >> 32);
         }
         BYTE sym_out = FoundState->Symbol;
         PPM_CONTEXT *succ = FoundState->Successor.get_at(hs);

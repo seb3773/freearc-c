@@ -293,6 +293,7 @@ static inline int dir_exists (const char *name)
 
 void BuildPathTo(CFILENAME name);  // ������� �������� �� ���� � name
 void SetFileDateTime (const CFILENAME Filename, time_t t); // ���������� �����/���� ����������� �����
+bool SetFileDateTimeHandle (int fd, time_t mtime);
 void RunProgram (const CFILENAME filename, const CFILENAME curdir, int wait_finish);  // Execute program `filename` in the directory `curdir` optionally waiting until it finished
 int  RunCommand (const CFILENAME command,  const CFILENAME curdir, int wait_finish);  // Execute `command` in the directory `curdir` optionally waiting until it finished
 void RunFile    (const CFILENAME filename, const CFILENAME curdir, int wait_finish);  // Execute file `filename` in the directory `curdir` optionally waiting until it finished
@@ -980,6 +981,22 @@ struct MYFILE
   }
 
   void SetFileDateTime (time_t mtime)   {::SetFileDateTime (filename, mtime);}
+  void closeWithMeta (time_t mtime, unsigned int mode, bool apply_mode)
+  {
+    bool dt_done = false, mode_done = !apply_mode;
+    if (handle >= 0) {
+      dt_done = ::SetFileDateTimeHandle (handle, mtime);
+#ifndef _WIN32
+      if (apply_mode)
+        mode_done = (::fchmod (handle, mode & 07777) == 0);
+#endif
+    }
+    close();
+    if (!dt_done) SetFileDateTime (mtime);
+#ifndef _WIN32
+    if (!mode_done) ::chmod (filename, mode & 07777);
+#endif
+  }
   void close()
   {
     if (handle >= 0) {

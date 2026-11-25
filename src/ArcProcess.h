@@ -90,9 +90,9 @@ void PROCESS::outfile_open (PASS pass)
 #endif
         }
       } else {
-        if (outfile.exists()) {
+        if (!cmd->yes && outfile.exists()) {
           if (cmd->no)  included = FALSE;
-          else if (!cmd->yes) {
+          else {
             char answer = UI->AskOverwrite (outfile.displayname(), dir->size[curfile], dir->time[curfile]);
             switch (answer) {
               case 'y': break;
@@ -145,12 +145,15 @@ void PROCESS::outfile_close()
     if (cmd->to_stdout) {
       fflush(stdout);
     } else if (cmd->cmd!='t' && !dir->isdir[curfile] && !dir->issymlink[curfile]) {
-      outfile.close();
-      outfile.SetFileDateTime (dir->time[curfile]);
+      bool apply_mode = false;
+      unsigned int mode = 0;
 #ifndef _WIN32
-      if (dir->mode[curfile])
-        chmod (outfile.filename, dir->mode[curfile] & 07777);
+      if (dir->mode[curfile]) {
+        apply_mode = true;
+        mode = dir->mode[curfile];
+      }
 #endif
+      outfile.closeWithMeta (dir->time[curfile], mode, apply_mode);
     }
   }
   included = FALSE;
