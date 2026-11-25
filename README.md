@@ -330,6 +330,12 @@ The primary goal of this project is a faithful reimplementation of FreeArc in C/
 
 Specifying **`-nobitexact`** (alias: **`--max-ratio`**) lifts those legacy bit-exactness caps during **archive creation** while keeping the resulting container and streams **100% compatible with the FreeArc 0.6x format** and extractable by legacy Windows `unarc.exe 0.67`.
 
+Importantly, `-nobitexact` does **not** introduce any new compression methods, filters, or format extensions. It works exclusively with the algorithms and decoding mechanisms already supported by the original FreeArc 0.67 decoder.
+
+The difference lies entirely in how these existing components are configured, combined, ordered, and applied to the input data. This allows FreeArc-c to explore compression strategies that the original encoder did not use, or deliberately avoided, while preserving full backward compatibility.
+
+In other words, the encoder is free to evolve, but the format and its legacy decoder remain untouched.
+
 ### Benchmark Results on Matt Mahoney 10 GB Corpus (`79,431` files, `10,000,000,000 B` / `9.313 GiB` payload)
 
 Measured on an **11th Gen Intel® Core™ i3-1115G4 @ 3.00GHz** (2 cores / 4 threads, AVX2/AVX-512, NVMe SSD):
