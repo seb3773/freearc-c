@@ -25,7 +25,9 @@
 #  endif
 #  include <windows.h>
 #else
+#  include <errno.h>
 #  include <pthread.h>
+#  include <time.h>
 #endif
 
 #include "unarc.h"
@@ -190,12 +192,389 @@ int freearc_dll_ask_password(int attempt) {
   return (act == 'q') ? 'q' : 'n';
 }
 
+/* Resolve the path of the shared library / DLL module so ArcIni can locate an adjacent arc.ini */
+static std::string resolve_module_progname(void) {
+#ifdef _WIN32
+  HMODULE hm = NULL;
+  if (GetModuleHandleExW(
+          GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+          (LPCWSTR)(const void *)&resolve_module_progname,
+          &hm) && hm) {
+    std::vector<WCHAR> wbuf(32768);
+    DWORD len = GetModuleFileNameW(hm, &wbuf[0], (DWORD)wbuf.size() - 1);
+    if (len > 0 && len < wbuf.size()) {
+      wbuf[len] = L'\0';
+      int ulen = WideCharToMultiByte(CP_UTF8, 0, &wbuf[0], -1, NULL, 0, NULL, NULL);
+      if (ulen > 0) {
+        std::string utf8((size_t)ulen - 1, '\0');
+        if (WideCharToMultiByte(CP_UTF8, 0, &wbuf[0], -1, &utf8[0], ulen, NULL, NULL) > 0) {
+          return utf8;
+        }
+      }
+    }
+  }
+#endif
+  return "unarc";
+}
+
+/*
+ * Legacy callback marshaler: runs FreeArcExtract() extraction in a worker thread
+ * and dispatches all callbacks (plus a 10 ms "timer" heartbeat) strictly sequentially
+ * on the caller's thread, matching FreeArc 0.67 unarc.dll behavior.
+ */
+struct UnarcCallFrame;
+static int execute_unarc_frame(UnarcCallFrame *frame);
+
+class LegacyEventRelay {
+public:
+  LegacyEventRelay()
+    : initialized(false), worker_running(false), timer_running(false),
+      is_quit(false), quit_rc(0), what(NULL), n1(0), n2(0), str(NULL),
+      result(0), timer_stopped(0), abort_err(0) {
+#ifdef _WIN32
+    ev_do = NULL;
+    ev_done = NULL;
+    ev_timer_stop = NULL;
+    th_worker = NULL;
+    th_timer = NULL;
+    memset(&send_cs, 0, sizeof(send_cs));
+    memset(&state_cs, 0, sizeof(state_cs));
+#else
+    has_event = false;
+    event_handled = false;
+    memset(&th_worker, 0, sizeof(th_worker));
+    memset(&th_timer, 0, sizeof(th_timer));
+#endif
+  }
+
+  ~LegacyEventRelay() {
+    destroy();
+  }
+
+  bool init() {
+#ifdef _WIN32
+    InitializeCriticalSection(&send_cs);
+    InitializeCriticalSection(&state_cs);
+    ev_do         = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ev_done       = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ev_timer_stop = CreateEventW(NULL, TRUE,  FALSE, NULL);
+    if (!ev_do || !ev_done || !ev_timer_stop) {
+      initialized = true;
+      destroy();
+      return false;
+    }
+    initialized = true;
+    return true;
+#else
+    if (pthread_mutex_init(&send_mtx, NULL) != 0) return false;
+    if (pthread_mutex_init(&mtx, NULL) != 0) {
+      pthread_mutex_destroy(&send_mtx);
+      return false;
+    }
+    if (pthread_cond_init(&cv_do, NULL) != 0 ||
+        pthread_cond_init(&cv_done, NULL) != 0 ||
+        pthread_cond_init(&cv_timer, NULL) != 0) {
+      pthread_cond_destroy(&cv_do);
+      pthread_cond_destroy(&cv_done);
+      pthread_cond_destroy(&cv_timer);
+      pthread_mutex_destroy(&mtx);
+      pthread_mutex_destroy(&send_mtx);
+      return false;
+    }
+    initialized = true;
+    return true;
+#endif
+  }
+
+  void destroy() {
+    if (!initialized) return;
+    stop_timer();
+    wait_worker();
+#ifdef _WIN32
+    if (ev_do)         { CloseHandle(ev_do); ev_do = NULL; }
+    if (ev_done)       { CloseHandle(ev_done); ev_done = NULL; }
+    if (ev_timer_stop) { CloseHandle(ev_timer_stop); ev_timer_stop = NULL; }
+    DeleteCriticalSection(&state_cs);
+    DeleteCriticalSection(&send_cs);
+#else
+    pthread_cond_destroy(&cv_timer);
+    pthread_cond_destroy(&cv_done);
+    pthread_cond_destroy(&cv_do);
+    pthread_mutex_destroy(&mtx);
+    pthread_mutex_destroy(&send_mtx);
+#endif
+    initialized = false;
+  }
+
+  void record_abort(int code) {
+    if (code >= 0) return;
+#ifdef _WIN32
+    EnterCriticalSection(&state_cs);
+    if (abort_err == 0) abort_err = code;
+    LeaveCriticalSection(&state_cs);
+#else
+    pthread_mutex_lock(&mtx);
+    if (abort_err == 0) abort_err = code;
+    pthread_mutex_unlock(&mtx);
+#endif
+    freearc_dll_set_errcode(code);
+  }
+
+  int get_abort_err() {
+#ifdef _WIN32
+    EnterCriticalSection(&state_cs);
+    int r = abort_err;
+    LeaveCriticalSection(&state_cs);
+    return r;
+#else
+    pthread_mutex_lock(&mtx);
+    int r = abort_err;
+    pthread_mutex_unlock(&mtx);
+    return r;
+#endif
+  }
+
+  int call_legacy(const char *w, unarc_number i1, unarc_number i2, char *s) {
+#ifdef _WIN32
+    EnterCriticalSection(&send_cs);
+    is_quit = false;
+    what = w;
+    n1 = i1;
+    n2 = i2;
+    str = s;
+    result = 0;
+    SetEvent(ev_do);
+    WaitForSingleObject(ev_done, INFINITE);
+    int r = result;
+    LeaveCriticalSection(&send_cs);
+    return r;
+#else
+    pthread_mutex_lock(&send_mtx);
+    pthread_mutex_lock(&mtx);
+    is_quit = false;
+    what = w;
+    n1 = i1;
+    n2 = i2;
+    str = s;
+    result = 0;
+    has_event = true;
+    event_handled = false;
+    pthread_cond_signal(&cv_do);
+    while (!event_handled) pthread_cond_wait(&cv_done, &mtx);
+    int r = result;
+    pthread_mutex_unlock(&mtx);
+    pthread_mutex_unlock(&send_mtx);
+    return r;
+#endif
+  }
+
+  void send_quit(int rc) {
+#ifdef _WIN32
+    EnterCriticalSection(&send_cs);
+    is_quit = true;
+    quit_rc = rc;
+    what = "quit";
+    n1 = rc;
+    n2 = 0;
+    str = NULL;
+    SetEvent(ev_do);
+    LeaveCriticalSection(&send_cs);
+#else
+    pthread_mutex_lock(&send_mtx);
+    pthread_mutex_lock(&mtx);
+    is_quit = true;
+    quit_rc = rc;
+    what = "quit";
+    n1 = rc;
+    n2 = 0;
+    str = NULL;
+    has_event = true;
+    pthread_cond_signal(&cv_do);
+    pthread_mutex_unlock(&mtx);
+    pthread_mutex_unlock(&send_mtx);
+#endif
+  }
+
+  int pump_loop(unarc_legacy_callback cb) {
+#ifdef _WIN32
+    for (;;) {
+      WaitForSingleObject(ev_do, INFINITE);
+      if (is_quit) return quit_rc;
+      char empty[] = "";
+      result = cb((char *)what, n1, n2, str ? str : empty);
+      SetEvent(ev_done);
+    }
+#else
+    for (;;) {
+      pthread_mutex_lock(&mtx);
+      while (!has_event) pthread_cond_wait(&cv_do, &mtx);
+      if (is_quit) {
+        int rc = quit_rc;
+        has_event = false;
+        pthread_mutex_unlock(&mtx);
+        return rc;
+      }
+      const char *w = what;
+      unarc_number i1 = n1, i2 = n2;
+      char *s = str;
+      pthread_mutex_unlock(&mtx);
+
+      char empty[] = "";
+      int r = cb((char *)w, i1, i2, s ? s : empty);
+
+      pthread_mutex_lock(&mtx);
+      result = r;
+      has_event = false;
+      event_handled = true;
+      pthread_cond_signal(&cv_done);
+      pthread_mutex_unlock(&mtx);
+    }
+#endif
+  }
+
+  void start_timer() {
+    if (!initialized || timer_running) return;
+#ifdef _WIN32
+    EnterCriticalSection(&state_cs);
+    timer_stopped = 0;
+    LeaveCriticalSection(&state_cs);
+    ResetEvent(ev_timer_stop);
+    th_timer = CreateThread(NULL, 0, timer_proc, this, 0, NULL);
+    timer_running = (th_timer != NULL);
+#else
+    pthread_mutex_lock(&mtx);
+    timer_stopped = 0;
+    pthread_mutex_unlock(&mtx);
+    if (pthread_create(&th_timer, NULL, timer_proc, this) == 0) {
+      timer_running = true;
+    }
+#endif
+  }
+
+  void stop_timer() {
+    if (!initialized || !timer_running) return;
+#ifdef _WIN32
+    EnterCriticalSection(&state_cs);
+    timer_stopped = 1;
+    LeaveCriticalSection(&state_cs);
+    SetEvent(ev_timer_stop);
+    WaitForSingleObject(th_timer, INFINITE);
+    CloseHandle(th_timer);
+    th_timer = NULL;
+    timer_running = false;
+#else
+    pthread_mutex_lock(&mtx);
+    timer_stopped = 1;
+    pthread_cond_signal(&cv_timer);
+    pthread_mutex_unlock(&mtx);
+    pthread_join(th_timer, NULL);
+    timer_running = false;
+#endif
+  }
+
+  bool start_worker(UnarcCallFrame *f);
+
+  void wait_worker() {
+    if (!initialized || !worker_running) return;
+#ifdef _WIN32
+    WaitForSingleObject(th_worker, INFINITE);
+    CloseHandle(th_worker);
+    th_worker = NULL;
+    worker_running = false;
+#else
+    pthread_join(th_worker, NULL);
+    worker_running = false;
+#endif
+  }
+
+private:
+  void run_timer_loop() {
+#ifdef _WIN32
+    for (;;) {
+      DWORD wr = WaitForSingleObject(ev_timer_stop, 10);
+      if (wr == WAIT_OBJECT_0) break;
+      EnterCriticalSection(&state_cs);
+      int stopped = timer_stopped;
+      LeaveCriticalSection(&state_cs);
+      if (stopped) break;
+      char empty[] = "";
+      int r = call_legacy("timer", 0, 0, empty);
+      if (r < 0) record_abort(r);
+    }
+#else
+    for (;;) {
+      struct timespec ts;
+      clock_gettime(CLOCK_REALTIME, &ts);
+      ts.tv_nsec += 10000000L;
+      if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec += 1;
+        ts.tv_nsec -= 1000000000L;
+      }
+      pthread_mutex_lock(&mtx);
+      while (!timer_stopped) {
+        int wr = pthread_cond_timedwait(&cv_timer, &mtx, &ts);
+        if (wr == ETIMEDOUT) break;
+      }
+      int stopped = timer_stopped;
+      pthread_mutex_unlock(&mtx);
+      if (stopped) break;
+      char empty[] = "";
+      int r = call_legacy("timer", 0, 0, empty);
+      if (r < 0) record_abort(r);
+    }
+#endif
+  }
+
+#ifdef _WIN32
+  static DWORD WINAPI worker_proc(LPVOID arg);
+  static DWORD WINAPI timer_proc(LPVOID arg) {
+    ((LegacyEventRelay *)arg)->run_timer_loop();
+    return 0;
+  }
+  CRITICAL_SECTION send_cs;
+  CRITICAL_SECTION state_cs;
+  HANDLE ev_do;
+  HANDLE ev_done;
+  HANDLE ev_timer_stop;
+  HANDLE th_worker;
+  HANDLE th_timer;
+#else
+  static void *worker_proc(void *arg);
+  static void *timer_proc(void *arg) {
+    ((LegacyEventRelay *)arg)->run_timer_loop();
+    return NULL;
+  }
+  pthread_mutex_t send_mtx;
+  pthread_mutex_t mtx;
+  pthread_cond_t cv_do;
+  pthread_cond_t cv_done;
+  pthread_cond_t cv_timer;
+  bool has_event;
+  bool event_handled;
+  pthread_t th_worker;
+  pthread_t th_timer;
+#endif
+  bool initialized;
+  bool worker_running;
+  bool timer_running;
+  bool is_quit;
+  int quit_rc;
+  const char *what;
+  unarc_number n1;
+  unarc_number n2;
+  char *str;
+  int result;
+  volatile int timer_stopped;
+  volatile int abort_err;
+};
+
 class DLLUI : public BASEUI {
 public:
   bool is_legacy;
   unarc_legacy_callback legacy_cb;
   unarc_callback modern_cb;
   void *userdata;
+  LegacyEventRelay *relay;
   int last_cb_err;
   bool err_sent;
   char cur_cmd;
@@ -205,8 +584,8 @@ public:
   uint64 total_packed;
   std::string password_storage;
 
-  DLLUI(bool legacy, unarc_legacy_callback lcb, unarc_callback mcb, void *ud)
-    : is_legacy(legacy), legacy_cb(lcb), modern_cb(mcb), userdata(ud),
+  DLLUI(bool legacy, unarc_legacy_callback lcb, unarc_callback mcb, void *ud, LegacyEventRelay *r)
+    : is_legacy(legacy), legacy_cb(lcb), modern_cb(mcb), userdata(ud), relay(r),
       last_cb_err(0), err_sent(false), cur_cmd(' '),
       total_files(0), total_bytes(0), total_packed(0) {
     outdir[0] = '\0';
@@ -222,6 +601,9 @@ public:
       unarc_number i1 = shift_int1 ? (unarc_number)(p1 >> 20) : (unarc_number)p1;
       unarc_number i2 = shift_int1 ? (unarc_number)p1         : (unarc_number)p2;
       char empty[] = "";
+      if (relay) {
+        return relay->call_legacy(what, i1, i2, str ? str : empty);
+      }
       return legacy_cb((char *)what, i1, i2, str ? str : empty);
     } else {
       if (!modern_cb) {
@@ -235,11 +617,27 @@ public:
   }
 
   bool dispatch_progress(const char *what, int64_t p1, int64_t p2, char *str, size_t cap, bool shift_int1) {
+    if (relay) {
+      int ae = relay->get_abort_err();
+      if (ae < 0) {
+        last_cb_err = ae;
+        freearc_dll_set_errcode(ae);
+        return FALSE;
+      }
+    }
     int rc = call_cb(what, p1, p2, str, cap, shift_int1);
     if (rc < 0) {
       last_cb_err = rc;
       freearc_dll_set_errcode(rc);
       return FALSE;
+    }
+    if (relay) {
+      int ae = relay->get_abort_err();
+      if (ae < 0) {
+        last_cb_err = ae;
+        freearc_dll_set_errcode(ae);
+        return FALSE;
+      }
     }
     return TRUE;
   }
@@ -352,51 +750,16 @@ public:
 
 struct UnarcCallFrame {
   DLLUI ui;
+  LegacyEventRelay *relay;
+  std::vector<std::string> owned;
+  std::vector<char *> raw_argv;
   COMMAND *cmd;
   PROCESS *proc;
-  UnarcCallFrame(bool legacy, unarc_legacy_callback lcb, unarc_callback mcb, void *ud)
-    : ui(legacy, lcb, mcb, ud), cmd(NULL), proc(NULL) {}
+  UnarcCallFrame(bool legacy, unarc_legacy_callback lcb, unarc_callback mcb, void *ud, LegacyEventRelay *r)
+    : ui(legacy, lcb, mcb, ud, r), relay(r), cmd(NULL), proc(NULL) {}
 };
 
-static int unarc_run_internal(
-    int argc,
-    const char *const *argv,
-    bool is_legacy,
-    unarc_legacy_callback legacy_cb,
-    unarc_callback modern_cb,
-    void *userdata)
-{
-  if (!g_codec_anchors_once) {
-    size_t acc = 0;
-    for (size_t i = 0; i < sizeof(g_codec_anchors) / sizeof(g_codec_anchors[0]); i++) {
-      acc ^= (size_t)g_codec_anchors[i];
-    }
-    g_codec_anchors_once = acc ? 1 : -1;
-  }
-  if (argc <= 0 || !argv) {
-    const char *msg = "ERROR: invalid or empty command arguments";
-    copy_cstr(tl_last_error, sizeof(tl_last_error), msg);
-    if (is_legacy && legacy_cb) legacy_cb((char *)"error", UNARC_ERR_GENERAL, 0, (char *)msg);
-    else if (!is_legacy && modern_cb) modern_cb("error", UNARC_ERR_GENERAL, 0, (char *)msg, strlen(msg) + 1, userdata);
-    return UNARC_ERR_GENERAL;
-  }
-
-  std::vector<std::string> owned;
-  owned.reserve((size_t)argc + 1);
-  owned.push_back("unarc");
-  for (int i = 0; i < argc; i++) {
-    if (!argv[i]) break;
-    owned.push_back(argv[i]);
-  }
-  std::vector<char *> raw_argv(owned.size() + 1, NULL);
-  for (size_t i = 0; i < owned.size(); i++) {
-    raw_argv[i] = &owned[i][0];
-  }
-
-  UnarcCallFrame *frame = new UnarcCallFrame(is_legacy, legacy_cb, modern_cb, userdata);
-  if (!frame) return UNARC_ERR_NOT_ENOUGH_MEMORY;
-
-  UnarcCallLock lock;
+static int execute_unarc_frame(UnarcCallFrame *frame) {
   g_call_error[0] = '\0';
   g_call_errcode = UNARC_OK;
   tl_last_error[0] = '\0';
@@ -405,6 +768,8 @@ static int unarc_run_internal(
   g_active_ui = &frame->ui;
   g_active_pwd_storage = &frame->ui.password_storage;
   SetArchivePassword(NULL);
+
+  if (frame->relay) frame->relay->start_timer();
 
   int final_rc = UNARC_OK;
 
@@ -417,9 +782,9 @@ static int unarc_run_internal(
     }
   } else {
     jmpready = TRUE;
-    frame->cmd = new COMMAND((int)(raw_argv.size() - 1), &raw_argv[0]);
-    if (!frame->cmd->ok || (is_legacy && frame->cmd->cmd == 'v')) {
-      final_rc = (is_legacy && frame->cmd->cmd == 'v') ? UNARC_ERR_NOT_IMPLEMENTED : UNARC_ERR_GENERAL;
+    frame->cmd = new COMMAND((int)(frame->raw_argv.size() - 1), &frame->raw_argv[0]);
+    if (!frame->cmd->ok || (frame->ui.is_legacy && frame->cmd->cmd == 'v')) {
+      final_rc = (frame->ui.is_legacy && frame->cmd->cmd == 'v') ? UNARC_ERR_NOT_IMPLEMENTED : UNARC_ERR_GENERAL;
       freearc_dll_report_error(final_rc == UNARC_ERR_NOT_IMPLEMENTED
                                  ? "ERROR: command 'v' is not supported by legacy FreeArcExtract()"
                                  : "ERROR: invalid command syntax or missing archive name");
@@ -434,6 +799,14 @@ static int unarc_run_internal(
       }
     }
     jmpready = FALSE;
+  }
+
+  if (frame->relay) {
+    frame->relay->stop_timer();
+    if (final_rc == UNARC_OK) {
+      int ae = frame->relay->get_abort_err();
+      if (ae < 0) final_rc = ae;
+    }
   }
 
   if (final_rc != UNARC_OK && !frame->ui.err_sent) {
@@ -468,7 +841,116 @@ static int unarc_run_internal(
   CurrentProcess = NULL;
   tl_is_owner_thread = false;
 
+  return final_rc;
+}
+
+#ifdef _WIN32
+DWORD WINAPI LegacyEventRelay::worker_proc(LPVOID arg) {
+  UnarcCallFrame *frame = (UnarcCallFrame *)arg;
+  int rc = execute_unarc_frame(frame);
+  frame->relay->send_quit(rc);
+  return 0;
+}
+
+bool LegacyEventRelay::start_worker(UnarcCallFrame *f) {
+  th_worker = CreateThread(NULL, 0, worker_proc, f, 0, NULL);
+  worker_running = (th_worker != NULL);
+  return worker_running;
+}
+#else
+void *LegacyEventRelay::worker_proc(void *arg) {
+  UnarcCallFrame *frame = (UnarcCallFrame *)arg;
+  int rc = execute_unarc_frame(frame);
+  frame->relay->send_quit(rc);
+  return NULL;
+}
+
+bool LegacyEventRelay::start_worker(UnarcCallFrame *f) {
+  if (pthread_create(&th_worker, NULL, worker_proc, f) == 0) {
+    worker_running = true;
+    return true;
+  }
+  return false;
+}
+#endif
+
+static int unarc_run_internal(
+    int argc,
+    const char *const *argv,
+    bool is_legacy,
+    unarc_legacy_callback legacy_cb,
+    unarc_callback modern_cb,
+    void *userdata)
+{
+  if (!g_codec_anchors_once) {
+    size_t acc = 0;
+    for (size_t i = 0; i < sizeof(g_codec_anchors) / sizeof(g_codec_anchors[0]); i++) {
+      acc ^= (size_t)g_codec_anchors[i];
+    }
+    g_codec_anchors_once = acc ? 1 : -1;
+  }
+  if (argc <= 0 || !argv) {
+    const char *msg = "ERROR: invalid or empty command arguments";
+    copy_cstr(tl_last_error, sizeof(tl_last_error), msg);
+    if (is_legacy && legacy_cb) legacy_cb((char *)"error", UNARC_ERR_GENERAL, 0, (char *)msg);
+    else if (!is_legacy && modern_cb) modern_cb("error", UNARC_ERR_GENERAL, 0, (char *)msg, strlen(msg) + 1, userdata);
+    return UNARC_ERR_GENERAL;
+  }
+
+  bool use_relay = (is_legacy && legacy_cb != NULL);
+  LegacyEventRelay *relay = NULL;
+  if (use_relay) {
+    relay = new LegacyEventRelay();
+    if (!relay || !relay->init()) {
+      delete relay;
+      return UNARC_ERR_NOT_ENOUGH_MEMORY;
+    }
+  }
+
+  UnarcCallFrame *frame = new UnarcCallFrame(is_legacy, legacy_cb, modern_cb, userdata, relay);
+  if (!frame) {
+    delete relay;
+    return UNARC_ERR_NOT_ENOUGH_MEMORY;
+  }
+
+  frame->owned.reserve((size_t)argc + 1);
+  frame->owned.push_back(resolve_module_progname());
+  for (int i = 0; i < argc; i++) {
+    if (!argv[i]) break;
+    frame->owned.push_back(argv[i]);
+  }
+  frame->raw_argv.resize(frame->owned.size() + 1, NULL);
+  for (size_t i = 0; i < frame->owned.size(); i++) {
+    frame->raw_argv[i] = &frame->owned[i][0];
+  }
+
+  UnarcCallLock lock;
+  tl_last_error[0] = '\0';
+
+  int final_rc;
+  if (relay) {
+    if (!relay->start_worker(frame)) {
+      const char *msg = "ERROR: failed to create worker thread";
+      copy_cstr(tl_last_error, sizeof(tl_last_error), msg);
+      legacy_cb((char *)"error", UNARC_ERR_NOT_ENOUGH_MEMORY, 0, (char *)msg);
+      delete frame;
+      delete relay;
+      return UNARC_ERR_NOT_ENOUGH_MEMORY;
+    }
+    final_rc = relay->pump_loop(legacy_cb);
+    relay->wait_worker();
+    if (final_rc != UNARC_OK) {
+      if (g_call_error[0] == '\0') {
+        copy_cstr(g_call_error, sizeof(g_call_error), unarc_error_string(final_rc));
+      }
+      copy_cstr(tl_last_error, sizeof(tl_last_error), g_call_error);
+    }
+  } else {
+    final_rc = execute_unarc_frame(frame);
+  }
+
   delete frame;
+  delete relay;
   return final_rc;
 }
 

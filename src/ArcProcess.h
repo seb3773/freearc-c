@@ -28,8 +28,8 @@ public:
   enum PASS {FIRST_PASS, SECOND_PASS};  // ������/������ ������ �� �����-����� (������ - ���������� ��������� � ������ ������, ������ - ���� ���������)
 
   // ������
-  void outfile_open (PASS pass);                         // ������� ��������� �������� ���� � ���������� ��������� � ��� ����������
-  void outfile_write (void *buf, int size);              // �������� ������ � �������� ����
+  bool outfile_open (PASS pass, bool in_callback = false);                         // ������� ��������� �������� ���� � ���������� ��������� � ��� ����������
+  bool outfile_write (void *buf, int size, bool in_callback = false);              // �������� ������ � �������� ����
   void outfile_close();                                  // ������� �������� ����
   int  DecompressCallback (const char *what, void *buf, int size);  // Callback-������� ������/������ ��� ������������
 
@@ -55,12 +55,12 @@ public:
 *************************************************************************************************/
 
 // ������� ��������� �������� ���� � ���������� ��������� � ��� ����������
-void PROCESS::outfile_open (PASS pass)
+bool PROCESS::outfile_open (PASS pass, bool in_callback)
 {
   crc = INIT_CRC;
   bytes_to_write = dir->size[curfile];
   if (pass==SECOND_PASS && bytes_to_write==0)
-    return;  // Directories and empty files were extracted in first pass
+    return true;  // Directories and empty files were extracted in first pass
   included = cmd->accept_file (dir, curfile);
   char *xname = cmd->cmd=='e'? dir->name[curfile]
                              : dir->fullname (curfile, fullname);
@@ -99,7 +99,11 @@ void PROCESS::outfile_open (PASS pass)
               case 'n': included = FALSE;  break;
               case 'a': cmd->yes = TRUE;   break;
               case 's': cmd->no  = TRUE;   included = FALSE;  break;
-              case 'q': quit(FREEARC_ERRCODE_OPERATION_TERMINATED);
+              case 'q':
+#ifdef FREEARC_LIBRARY
+                if (in_callback) { cmd->ok = FALSE; return false; }
+#endif
+                quit(FREEARC_ERRCODE_OPERATION_TERMINATED);
             }
           }
         }
@@ -110,24 +114,39 @@ void PROCESS::outfile_open (PASS pass)
 
   if (pass==FIRST_PASS || dir->size[curfile]>0)   // �� ������ �������� � ���������� ���������/������ ������
     if (!(dir->isdir[curfile] && cmd->cmd!='x'))  // �� �������� � ������������ ��������� ;)
-      if (!UI->ProgressFile (dir->isdir[curfile], included? (cmd->cmd=='t'? "Testing":"Extracting"):"Skipping", MYFILE(xname).displayname(), bytes_to_write))
+      if (!UI->ProgressFile (dir->isdir[curfile], included? (cmd->cmd=='t'? "Testing":"Extracting"):"Skipping", MYFILE(xname).displayname(), bytes_to_write)) {
+#ifdef FREEARC_LIBRARY
+        if (in_callback) { cmd->ok = FALSE; return false; }
+#endif
         quit(FREEARC_ERRCODE_OPERATION_TERMINATED);
+      }
+  return true;
 }
 
 // �������� ������ � �������� ����
-void PROCESS::outfile_write (void *buf, int size)
+bool PROCESS::outfile_write (void *buf, int size, bool in_callback)
 {
   crc = UpdateCRC (buf, size, crc);
   if (included && cmd->cmd!='t' && size) {
     if (cmd->to_stdout) {
       size_t written = fwrite(buf, 1, size, stdout);
-      if (written != (size_t)size)
+      if (written != (size_t)size) {
+#ifdef FREEARC_LIBRARY
+        if (in_callback) { freearc_dll_set_errcode(FREEARC_ERRCODE_WRITE); return false; }
+#endif
         quit(FREEARC_ERRCODE_WRITE);
+      }
     } else {
       outfile.write(buf,size);
     }
   }
-  if (!UI->ProgressWrite (writtenBytes += size))  quit(FREEARC_ERRCODE_OPERATION_TERMINATED);
+  if (!UI->ProgressWrite (writtenBytes += size)) {
+#ifdef FREEARC_LIBRARY
+    if (in_callback) { cmd->ok = FALSE; return false; }
+#endif
+    quit(FREEARC_ERRCODE_OPERATION_TERMINATED);
+  }
+  return true;
 }
 
 // ������� �������� ����
@@ -171,7 +190,14 @@ int PROCESS::DecompressCallback (const char *what, void *buf, int size)
     if (bytes_left <= 0 || size <= 0)  return 0;
     int read_bytes = (int)mymin ((uint64)bytes_left, (uint64)size);
     if (read_bytes <= 0)  return 0;
-    if (!UI->ProgressRead (archive_pos))  quit(FREEARC_ERRCODE_OPERATION_TERMINATED);
+    if (!UI->ProgressRead (archive_pos)) {
+#ifdef FREEARC_LIBRARY
+      cmd->ok = FALSE;
+      return FREEARC_ERRCODE_OPERATION_TERMINATED;
+#else
+      quit(FREEARC_ERRCODE_OPERATION_TERMINATED);
+#endif
+    }
     int len = infile->tryRead (buf, read_bytes);
     if (len>0)  bytes_left -= len,  archive_pos += len;
     return len;
@@ -181,12 +207,12 @@ int PROCESS::DecompressCallback (const char *what, void *buf, int size)
     if (curfile > extractUntil)  return FREEARC_ERRCODE_NO_MORE_DATA_REQUIRED;   // ��� ������� ����� �����������, �� ��������� ��������� ���������� �� ���������� :(
     while (size>0) {
       int n = mymin (bytes_to_write, size);   // ���������� ������� �������� �� ����� ����� ���
-      outfile_write (buf,n);                  // ������� �������� ������ � ������ - ������ ��� ������
+      if (!outfile_write (buf,n,true))  return FREEARC_ERRCODE_OPERATION_TERMINATED;                  // ������� �������� ������ � ������ - ������ ��� ������
       bytes_to_write -= n;
       if (bytes_to_write==0) {                // ���� ���� ������� �� ����� - ������� � ����������
         outfile_close();
         if (++curfile > extractUntil)  return FREEARC_ERRCODE_NO_MORE_DATA_REQUIRED;   // ���� ��� �����, ������� �� ������ ����������� �� ����� �����, ��� ���������, �� ��������� ����������� ��������� ����������
-        outfile_open(SECOND_PASS);
+        if (!outfile_open(SECOND_PASS, true))  return FREEARC_ERRCODE_OPERATION_TERMINATED;
       }
       buf=(uint8*)buf+n; size-=n;
     }
@@ -327,6 +353,7 @@ void PROCESS::ExtractFiles (DIRECTORY_BLOCK *dirblock, int block_num)
       if (outfile.isopen()) { outfile.close(); outfile.remove(); }
       freearc_dll_set_errcode(result);
     }
+    CHECK (result!=FREEARC_ERRCODE_OPERATION_TERMINATED, (s,"ERROR: operation terminated by user"));
 #endif
     CHECK (result!=FREEARC_ERRCODE_INVALID_COMPRESSOR, (s,"ERROR: unsupported compression method %s", resolved));
     CHECK (result>=0 || result==FREEARC_ERRCODE_NO_MORE_DATA_REQUIRED, (s,"ERROR: archive data corrupted (decompression fails)"));

@@ -59,11 +59,17 @@ extern "C" {
 /* -------------------------------------------------------------------------
  * 1. Legacy FreeArc unarc.dll API (Addons/Unarc-DLL compatible)
  *
+ * Callbacks are always marshaled sequentially onto the caller's thread
+ * (matching original FreeArc 0.67 unarc.dll behavior, safe for GUI/VCL/
+ * Inno Setup Pascal Script wrappers such as ISFreeArcExtract), and a 10 ms
+ * "timer" heartbeat event is dispatched while active when callback != NULL.
+ *
  * Callback events ("what"):
  *   "total"       : int1 = TotalBytes>>20, int2 = (int)TotalBytes, str = ""
  *   "read"        : int1 = ReadBytes>>20,  int2 = (int)ReadBytes,  str = ""
  *   "write"       : int1 = Written>>20,    int2 = (int)Written,    str = ""
  *   "filename"    : int1 = Filesize>>20,   int2 = (int)Filesize,   str = Name
+ *   "timer"       : int1 = 0,              int2 = 0,               str = ""
  *   "overwrite?"  : int1 = Filesize>>20,   int2 = (int)Filesize,   str = Name
  *                   return: 'y' (yes), 'n' (no), 'a' (all), 's' (skip all), 'q' (abort)
  *   "password?"   : int1 = PasswordBufCap, int2 = 0,               str = PasswordBuf (UTF-8)
@@ -89,6 +95,11 @@ UNARC_API void UNARC_CALL UnloadDLL(void);
 
 /* -------------------------------------------------------------------------
  * 2. Modern C API (full 64-bit parameters, explicit argc/argv, userdata)
+ *
+ * High-performance direct dispatch: callbacks are invoked directly without
+ * thread marshaling (zero context-switch overhead on archives with many small
+ * files). Note that callbacks may be called from internal decoder worker
+ * threads, so user callbacks must be thread-safe.
  *
  * Callback events ("what"):
  *   "total"       : param1 = TotalArchiveBytes, param2 = 0

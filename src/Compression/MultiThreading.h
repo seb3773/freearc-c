@@ -264,6 +264,13 @@ int MTCompressor<Job>::run()
 template <class Job>
 void MTCompressor<Job>::WriterThread()
 {
+#ifdef FREEARC_DLL
+    if (!jmpready && setjmp(jumper) != 0) {
+        jmpready = FALSE;
+        SetErrCode(FREEARC_ERRCODE_BAD_COMPRESSED_DATA);
+    } else {
+        jmpready = TRUE;
+#endif
     for(;;)
     {
         // Acquire next writer job
@@ -282,6 +289,10 @@ void MTCompressor<Job>::WriterThread()
         // Make thread available for next compression job
         FreeJobs.Put(job);
     }
+#ifdef FREEARC_DLL
+        jmpready = FALSE;
+    }
+#endif
     FreeJobs.Put(NULL);
     Finished.Signal();
 }

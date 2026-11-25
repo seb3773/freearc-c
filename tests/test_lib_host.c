@@ -79,28 +79,53 @@ typedef struct {
   int64_t total_files;
   int64_t orig_size;
   int64_t comp_size;
+  int check_caller_thread;
+  int wrong_thread_hits;
+  int concurrent_hits;
+  int active_cb;
+#ifdef _WIN32
+  DWORD caller_tid;
+#else
+  pthread_t caller_tid;
+#endif
 } HostState;
 
 static HostState g_legacy_state;
 
 static int UNARC_CALL legacy_cb(char *what, unarc_number int1, unarc_number int2, char *str) {
   (void)int2;
+  if (g_legacy_state.check_caller_thread) {
+    if (g_legacy_state.active_cb != 0) g_legacy_state.concurrent_hits++;
+    g_legacy_state.active_cb++;
+#ifdef _WIN32
+    if (GetCurrentThreadId() != g_legacy_state.caller_tid) g_legacy_state.wrong_thread_hits++;
+#else
+    if (!pthread_equal(pthread_self(), g_legacy_state.caller_tid)) g_legacy_state.wrong_thread_hits++;
+#endif
+  }
+  int rc = 1;
   if (strcmp(what, "total") == 0) g_legacy_state.seen_total++;
   else if (strcmp(what, "filename") == 0) g_legacy_state.seen_filename++;
-  else if (strcmp(what, "write") == 0) g_legacy_state.seen_write++;
+  else if (strcmp(what, "write") == 0) {
+    g_legacy_state.seen_write++;
+    if (g_legacy_state.abort_after_read) rc = -43;
+  }
   else if (strcmp(what, "error") == 0) g_legacy_state.seen_error++;
   else if (strcmp(what, "total_files") == 0) { g_legacy_state.seen_total_files++; g_legacy_state.total_files = int1; }
   else if (strcmp(what, "origsize") == 0) g_legacy_state.orig_size = int2;
   else if (strcmp(what, "compsize") == 0) g_legacy_state.comp_size = int2;
-  else if (strcmp(what, "overwrite?") == 0) return g_legacy_state.overwrite_reply;
+  else if (strcmp(what, "overwrite?") == 0) rc = g_legacy_state.overwrite_reply;
   else if (strcmp(what, "password?") == 0) {
     int att = g_legacy_state.pwd_attempts++;
     const char *pw = (att == 0) ? g_legacy_state.pwd0 : g_legacy_state.pwd1;
-    if (!pw) return 'n';
-    snprintf(str, (size_t)int1, "%s", pw);
-    return 'y';
+    if (!pw) rc = 'n';
+    else {
+      snprintf(str, (size_t)int1, "%s", pw);
+      rc = 'y';
+    }
   }
-  return 1;
+  if (g_legacy_state.check_caller_thread) g_legacy_state.active_cb--;
+  return rc;
 }
 
 static int UNARC_CALL modern_cb(
@@ -193,13 +218,35 @@ int main(int argc, char **argv) {
   CHECK_TEST(g_legacy_state.seen_total_files > 0 && g_legacy_state.total_files > 0, "legacy list total_files");
   CHECK_TEST(g_legacy_state.orig_size > 0 && g_legacy_state.comp_size > 0, "legacy list orig/comp size");
 
-  /* 2. Legacy FreeArcExtract: extract with C#-style empty string terminator */
+  /* 2. Legacy FreeArcExtract: extract with C#-style empty string terminator and verify caller-thread marshaling */
   memset(&g_legacy_state, 0, sizeof(g_legacy_state));
   g_legacy_state.overwrite_reply = 'y';
+  g_legacy_state.check_caller_thread = 1;
+#ifdef _WIN32
+  g_legacy_state.caller_tid = GetCurrentThreadId();
+#else
+  g_legacy_state.caller_tid = pthread_self();
+#endif
   rc = fn_FreeArcExtract(legacy_cb, "x", dp_leg, "-o+", "--", plain_arc, "", NULL);
   CHECK_TEST(rc == 0, "legacy extract empty-term rc == 0");
   CHECK_TEST(g_legacy_state.seen_total > 0 && g_legacy_state.seen_filename > 0 && g_legacy_state.seen_write > 0,
              "legacy progress callbacks fired");
+  CHECK_TEST(g_legacy_state.wrong_thread_hits == 0 && g_legacy_state.concurrent_hits == 0,
+             "legacy callbacks marshaled strictly sequentially on caller thread");
+
+  /* 2b. Legacy FreeArcExtract: user abort from callback */
+  memset(&g_legacy_state, 0, sizeof(g_legacy_state));
+  g_legacy_state.overwrite_reply = 'y';
+  g_legacy_state.abort_after_read = 1;
+  g_legacy_state.check_caller_thread = 1;
+#ifdef _WIN32
+  g_legacy_state.caller_tid = GetCurrentThreadId();
+#else
+  g_legacy_state.caller_tid = pthread_self();
+#endif
+  rc = fn_FreeArcExtract(legacy_cb, "x", dp_abort, "-o+", "--", plain_arc, NULL);
+  CHECK_TEST(rc == -43 && g_legacy_state.wrong_thread_hits == 0 && g_legacy_state.concurrent_hits == 0,
+             "legacy callback abort returned -43 cleanly on caller thread");
 
   /* 3. Legacy overwrite 'n' preserves marker vs 'y' overwrites */
   {

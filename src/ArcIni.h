@@ -134,15 +134,49 @@ public:
     return trim(clean);
   }
 
-  static std::string get_executable_dir(const char *argv0) {
+  static FILE *open_rb(const std::string &path) {
 #ifdef _WIN32
-    char buf[MAX_PATH];
-    DWORD len = GetModuleFileNameA(NULL, buf, sizeof(buf) - 1);
-    if (len > 0) {
-      buf[len] = '\0';
-      std::string s(buf);
-      size_t slash = s.find_last_of("\\/");
+    if (!path.empty()) {
+      int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, NULL, 0);
+      if (wlen > 0) {
+        std::vector<WCHAR> wpath((size_t)wlen);
+        if (MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], wlen) > 0) {
+          FILE *wf = _wfopen(&wpath[0], L"rb");
+          if (wf) return wf;
+        }
+      }
+    }
+#endif
+    return fopen(path.c_str(), "rb");
+  }
+
+  static std::string dir_from_path(const char *path) {
+    if (path && *path) {
+      std::string s(path);
+      size_t slash = s.find_last_of("/\\");
       if (slash != std::string::npos) return s.substr(0, slash + 1);
+    }
+    return "";
+  }
+
+  static std::string get_executable_dir(const char *argv0) {
+#ifdef FREEARC_LIBRARY
+    std::string lib_dir = dir_from_path(argv0);
+    if (!lib_dir.empty()) return lib_dir;
+#endif
+#ifdef _WIN32
+    WCHAR wbuf[32768];
+    DWORD wlen = GetModuleFileNameW(NULL, wbuf, (DWORD)(sizeof(wbuf) / sizeof(wbuf[0])) - 1);
+    if (wlen > 0 && wlen < (DWORD)(sizeof(wbuf) / sizeof(wbuf[0]))) {
+      wbuf[wlen] = L'\0';
+      int ulen = WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, NULL, 0, NULL, NULL);
+      if (ulen > 0) {
+        std::string s((size_t)ulen - 1, '\0');
+        if (WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, &s[0], ulen, NULL, NULL) > 0) {
+          std::string dir = dir_from_path(s.c_str());
+          if (!dir.empty()) return dir;
+        }
+      }
     }
 #else
     char buf[PATH_MAX];
@@ -154,11 +188,8 @@ public:
       if (slash != std::string::npos) return s.substr(0, slash + 1);
     }
 #endif
-    if (argv0 && *argv0) {
-      std::string s(argv0);
-      size_t slash = s.find_last_of("/\\");
-      if (slash != std::string::npos) return s.substr(0, slash + 1);
-    }
+    std::string fallback = dir_from_path(argv0);
+    if (!fallback.empty()) return fallback;
     return "./";
   }
 
@@ -168,21 +199,21 @@ public:
       return custom_cfg;
     }
 
-    // 1. Next to executable
+    // 1. Next to executable (or DLL when built as FREEARC_LIBRARY)
     std::string exe_dir = get_executable_dir(argv0);
     std::string exe_ini = exe_dir + "arc.ini";
-    FILE *f = fopen(exe_ini.c_str(), "rb");
+    FILE *f = open_rb(exe_ini);
     if (f) { fclose(f); return exe_ini; }
 
     // 2. Current working directory
     std::string cwd_ini = "arc.ini";
-    f = fopen(cwd_ini.c_str(), "rb");
+    f = open_rb(cwd_ini);
     if (f) { fclose(f); return cwd_ini; }
 
     // 3. /etc/arc.ini on Unix
 #ifndef _WIN32
     std::string etc_ini = "/etc/arc.ini";
-    f = fopen(etc_ini.c_str(), "rb");
+    f = open_rb(etc_ini);
     if (f) { fclose(f); return etc_ini; }
 #endif
 
@@ -216,7 +247,7 @@ public:
 
   bool load(const std::string &path) {
     if (path.empty()) return false;
-    FILE *f = fopen(path.c_str(), "rb");
+    FILE *f = open_rb(path);
     if (!f) return false;
 
     filepath = path;
