@@ -365,9 +365,9 @@ typedef struct
 
 
 // 18.06
-#define kNumOpts (1 << 11)
+#define kNumOpts (1 << 12)
 #define kPackReserve (kNumOpts * 8)
-// #define kNumOpts (1 << 12)
+// #define kNumOpts (1 << 11)
 // #define kPackReserve (1 + kNumOpts * 2)
 
 #define kNumLenToPosStates 4
@@ -2727,7 +2727,7 @@ static SRes LzmaEnc_CodeOneBlock(CLzmaEnc *p, UInt32 maxPackSize, UInt32 maxUnpa
         if (p->lenEnc.counter <= 0)
           LenPriceEnc_UpdateTables(&p->lenEnc, 1 << p->pb, &p->lenProbs, p->ProbPrices);
         */
-        if (p->matchPriceCount >= 64)
+        if (p->matchPriceCount >= 32)
         {
           FillAlignPrices(p);
           // { int y; for (y = 0; y < 100; y++) {

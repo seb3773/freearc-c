@@ -151,6 +151,11 @@ struct FileRec {
   bool   is_symlink;
   std::string symlink_target;
   std::string datatype;
+  uint64 content_sig;
+  bool   has_sig;
+
+  FileRec() : size(0), mtime(0), isdir(0), crc(0), mode(0), is_symlink(false),
+              content_sig(0), has_sig(false) {}
 };
 
 struct BlockInfo {
@@ -1317,24 +1322,35 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     bool use_4x4_lzma = mt3 && !g_opt_solid_continuous;
     lzma4 = use_4x4_lzma ? (std::string("4x4:b128m:") + buf4) : std::string(buf4);
 
-    int fb5 = (g_opt_fb > 0) ? g_opt_fb : 128;
-    int mc5 = (g_opt_mc > 0) ? g_opt_mc : 256;
-    char buf5[128];
-    snprintf(buf5, sizeof(buf5), "lzma:96m:max:%d:mc%d", fb5, mc5);
+    int fb5 = (g_opt_fb > 0) ? g_opt_fb : 273;
+    int mc5 = (g_opt_mc > 0) ? g_opt_mc : 512;
+    uint64 phys_mem = GetPhysicalMemory();
+    const char *lzma5_dict = (phys_mem == 0 || phys_mem >= 16ull * gb) ? "192m" : "96m";
+    char buf5[128], buf5_code[128];
+    snprintf(buf5, sizeof(buf5), "lzma:%s:max:%d:mc%d", lzma5_dict, fb5, mc5);
+    snprintf(buf5_code, sizeof(buf5_code), "lzma:%s:max:%d:mc%d:lc4:lp0:pb0", lzma5_dict, fb5, mc5);
     lzma5 = use_4x4_lzma ? (std::string("4x4:b192m:") + buf5) : std::string(buf5);
 
     bin3 = mt ? "4x4:lzma:96m:normal:32:mc16" : "lzma:96m:normal:32:mc16";
+    if (strequ(name, "5") || strequ(name, "5x") || strequ(name, "x") ||
+        strequ(name, "mx") || strequ(name, "max") || strequ(name, "ultra")) {
+      std::string lzma5_code = use_4x4_lzma ? (std::string("4x4:b192m:") + buf5_code) : std::string(buf5_code);
+      out.push_back(std::make_pair(std::string("$code"), std::string("rep:256m+") + lzma5_code));
+    }
   }
   std::string etor_c3 = mt ? "4x4:tor:c3" : "tor:c3";
   // -nobitexact text/DNA back-ends:
-  // - $text: split the dict+lzp preprocessed stream into independent 32 MB 4x4 jobs for
-  //   PPMd so both compression and decompression run in parallel across all threads.
-  // - $dna: order-7 / 16 MB fits L3 cache and beats order-16 / 256 MB in both ratio and
-  //   speed (~5x faster compression & extraction, 16x less RAM per worker).
+  // - $text: widen dict/lzp to 128 MB on >=8 GB systems, then split into independent 32 MB 4x4 PPMd jobs.
+  // - $dna: rep:256m:l128:s64 captures cross-scaffold/read repeats, then 64 MB 4x4 PPMd order-7 / 16 MB.
+  uint64 phys_nbx = g_opt_nobitexact ? GetPhysicalMemory() : 0;
+  bool big_ram_nbx = (phys_nbx == 0 || phys_nbx >= 8ull * gb);
   std::string dna_ppmd_nbx = mt ? "4x4:b32m:ppmd:7:16m" : "ppmd:7:16m";
-  std::string text_chain_nbx = mt
-    ? "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+4x4:b32m:ppmd:16:256m"
-    : "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m";
+  std::string dna_mx_nbx = mt ? "rep:256m:l128:s64+4x4:b64m:ppmd:7:16m" : "rep:256m:l128:s64+ppmd:7:16m";
+  std::string text_chain_nbx = big_ram_nbx
+    ? (mt ? "dict:p:128m:80%+lzp:128m:105:d1m:s32:h23:92%+4x4:b32m:ppmd:16:256m"
+          : "dict:p:128m:80%+lzp:128m:105:d1m:s32:h23:92%+ppmd:16:256m")
+    : (mt ? "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+4x4:b32m:ppmd:16:256m"
+          : "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:16:256m");
   std::string bmp = "mm+grzip:m1:l2048:a";
   std::string bin1 = mt ? "4x4:tor:3:8mb" : "tor:4";
   std::string bin2 = mt ? "4x4:tor:5" : "tor:6";
@@ -1394,32 +1410,36 @@ static std::vector<std::pair<std::string, std::string> > expand_auto_groups(cons
     if (g_opt_nobitexact) {
       out.push_back(std::make_pair(std::string("$dna"), dna_ppmd_nbx));
     }
+  } else if (g_opt_nobitexact && (strequ(name, "5") || strequ(name, "5x") || strequ(name, "x") ||
+                                 strequ(name, "mx") || strequ(name, "max") || strequ(name, "ultra"))) {
+    int fb_pc = (g_opt_fb > 0) ? g_opt_fb : 273;
+    int mc_pc = (g_opt_mc > 0) ? g_opt_mc : 512;
+    char pc_buf[128];
+    snprintf(pc_buf, sizeof(pc_buf), "lzma:16m:max:%d:mc%d", fb_pc, mc_pc);
+    std::string precomp_lzma = (mt3 && !g_opt_solid_continuous)
+      ? (std::string("rep:256m+4x4:b16m:") + pc_buf)
+      : (std::string("rep:256m+") + pc_buf);
+    out.push_back(std::make_pair(std::string(""), std::string("rep:256m+delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$exe"), std::string("rep:256m+exe+delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$obj"), std::string("rep:256m+delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$text"), text_chain_nbx));
+    out.push_back(std::make_pair(std::string("$compressed"), mt ? "rep:256m:l24:s12+4x4:tor:8m:c3" : "rep:256m:l24:s12+tor:8m:c3"));
+    out.push_back(std::make_pair(std::string("$precomp"), precomp_lzma));
+    out.push_back(std::make_pair(std::string("$wav"), "tta"));
+    out.push_back(std::make_pair(std::string("$bmp"), mt ? "rep:256m+mm+4x4:b64m:grzip:m1:l2048:a" : "rep:256m+mm+grzip:m1:l2048:a"));
+    out.push_back(std::make_pair(std::string("$dna"), dna_mx_nbx));
   } else if (strequ(name, "5")) {
-    std::string rep_m5 = g_opt_nobitexact ? "rep:256m+" : "rep:96m+";
-    out.push_back(std::make_pair(std::string(""), rep_m5 + "exe+delta+" + lzma5));
-    out.push_back(std::make_pair(std::string("$obj"), rep_m5 + "delta+" + lzma5));
-    std::string text_m5 = g_opt_nobitexact
-      ? text_chain_nbx
-      : "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:12:192m";
-    out.push_back(std::make_pair(std::string("$text"), text_m5));
+    out.push_back(std::make_pair(std::string(""), std::string("rep:96m+exe+delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$obj"), std::string("rep:96m+delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$text"), "dict:p:64m:80%+lzp:80m:105:d1m:s32:h22:92%+ppmd:12:192m"));
     out.push_back(std::make_pair(std::string("$wav"), "tta"));
     out.push_back(std::make_pair(std::string("$bmp"), bmp));
-    if (g_opt_nobitexact) {
-      out.push_back(std::make_pair(std::string("$dna"), dna_ppmd_nbx));
-    }
   } else if (strequ(name, "5x") || strequ(name, "x") || strequ(name, "mx") || strequ(name, "max") || strequ(name, "ultra")) {
-    std::string prefix = g_opt_nobitexact ? "rep:256m+" : "";
-    out.push_back(std::make_pair(std::string(""), prefix + "exe+delta+" + lzma5));
-    out.push_back(std::make_pair(std::string("$obj"), prefix + "delta+" + lzma5));
-    std::string text_mx = g_opt_nobitexact
-      ? text_chain_nbx
-      : (std::string("dict:128m:75%+") + lzma5);
-    out.push_back(std::make_pair(std::string("$text"), text_mx));
+    out.push_back(std::make_pair(std::string(""), std::string("exe+delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$obj"), std::string("delta+") + lzma5));
+    out.push_back(std::make_pair(std::string("$text"), std::string("dict:128m:75%+") + lzma5));
     out.push_back(std::make_pair(std::string("$wav"), "tta:m1"));
     out.push_back(std::make_pair(std::string("$bmp"), std::string("mm+") + lzma5));
-    if (g_opt_nobitexact) {
-      out.push_back(std::make_pair(std::string("$dna"), dna_ppmd_nbx));
-    }
   }
   return out;
 }
@@ -1531,6 +1551,20 @@ static std::string group_type_from_name(const std::string &name) {
     "cmo", "nmo", "sue", "trc", "clz", "sga", "gsv", NULL
   };
 
+  if (g_opt_nobitexact) {
+    static const char *code_names[] = {"makefile", "cmakelists.txt", NULL};
+    static const char *code_exts[] = {
+      "c", "h", "hpp", "hxx", "hh", "inl", "inc", "cpp", "cc", "cxx", "ipp", "m", "mm", "idl",
+      "py", "pyw", "pyi", "js", "mjs", "cjs", "ts", "tsx", "jsx", "php", "phtml",
+      "rb", "rbw", "pl", "pm", "prl", "lua", "sh", "bash", "zsh", "ksh", "csh", "bat", "cmd", "ps1",
+      "rs", "go", "java", "kt", "kts", "cs", "fs", "fsx", "swift", "scala", "pas", "pp", "dpr",
+      "d", "nim", "zig", "v", "sv", "vh", "vhd", "vhdl", "erl", "hrl", "ex", "exs",
+      "hs", "lhs", "ml", "mli", "clj", "cljs", "cljc", "lisp", "lsp", "scm", "ss",
+      "asm", "s", "asi", "for", "f", "fpp", "f90", "f95", "f03", "r", "jl", "tcl", "awk", "sed",
+      "vim", "el", "cmake", "mk", "gradle", "wat", "ll", NULL
+    };
+    if (name_in_list(name, code_names) || ext_in_list(name, code_exts)) return "$code";
+  }
   if (ext_in_list(name, wav_exts)) return "$wav";
   if (ext_in_list(name, bmp_exts)) return "$bmp";
   if (ext_in_list(name, obj_exts)) return "$obj";
@@ -1538,20 +1572,39 @@ static std::string group_type_from_name(const std::string &name) {
   if (ext_in_list(name, comp_exts)) return "$compressed";
   if (ext_in_list(name, exe_exts)) return "$exe";
   if (ext_in_list(name, iso_exts)) return "$iso";
-  if (ext_in_list(name, precomp_exts)) return "$precomp";
+  if (ext_in_list(name, precomp_exts)) {
+    if (g_opt_nobitexact) {
+      static const char *pdf_swf_exts[] = {"pdf", "swf", NULL};
+      return ext_in_list(name, pdf_swf_exts) ? "$precomp" : "$compressed";
+    }
+    return "$precomp";
+  }
 
   if (g_opt_nobitexact) {
-    static const char *dna_exts[] = {"fa", "fna", "fasta", "fastq", "fq", "sam", "bam", "cram", "vcf", "gff", "gtf", NULL};
+    static const char *extra_text_names[] = {"cmakelists.txt", NULL};
+    static const char *dna_exts[] = {"fa", "fna", "fasta", "fastq", "fq", "sam", "vcf", "gff", "gtf", NULL};
     static const char *extra_text_exts[] = {
       "po", "pot", "dic", "json", "yaml", "yml", "toml", "proto", "graphql",
       "rs", "go", "ts", "tsx", "swift", "kt", "kts", "dart", "zig", "nim", "v",
-      "md", "markdown", "rst", "tsv", "nfo", NULL
+      "md", "markdown", "rst", "tsv", "nfo",
+      "bib", "sty", "xslt", "diff", "patch", "srt", "vtt", "ass", "ssa", "eml", "mbox",
+      "pyi", "fsx", "jsx", "phtml", "jl", "clj", "cljs", "cljc", "lisp", "lsp", "ss",
+      "f95", "f03", "dpr", "sv", "vh", "vhd", "vhdl", "cmake", "mk", "gradle", "wat", "ll",
+      "tscn", "tres", "pem", "crt", "csr", NULL
     };
+    static const char *extra_exe_exts[] = {"efi", "cpl", NULL};
     static const char *extra_comp_exts[] = {
-      "jpg", "jpeg", "webp", "avif", "heic", "heif",
-      "opus", "flac", "alac", "webm", "m4a",
-      "zst", "zstandard", "tzst", "xz", "txz", "lzma", "tlz", "br", "lz4", "snappy",
-      "zpaq", "paq8px", "uha", "apk", "appx", "whl", "deb", "rpm", "dmg", "wim", "nupkg", "crx",
+      "jpg", "jpeg", "webp", "avif", "heic", "heif", "jxl", "jp2", "j2k", "jpf", "jpx",
+      "hif", "jng", "mng", "apng",
+      "opus", "flac", "alac", "webm", "m4a", "mp2", "ac3", "eac3", "dts", "spx", "wma", "amr", "oga",
+      "wv", "ape", "tak", "ofr", "ofs", "shn",
+      "mka", "mks", "f4v", "m4s", "m4p", "m2v", "h264", "264", "avc", "h265", "265", "hevc", "av1", "obu", "vp8", "vp9",
+      "woff", "woff2", "bam", "cram",
+      "zst", "zstandard", "zstd", "tzst", "xz", "txz", "lzma", "tlz", "br", "lz4", "snappy",
+      "lz", "lzo", "rz", "lrz", "sz", "gzip", "zipx", "egg", "alz", "ace", "xar",
+      "zpaq", "paq8px", "uha", "apk", "aab", "ipa", "appx", "whl", "deb", "rpm", "dmg", "wim", "nupkg", "crx", "xpi",
+      "kra", "ora", "usdz", "laz", "vma", "cso", "zso", "chd", "squashfs", "cramfs", "erofs",
+      "kdbx", "age", "gpg", "pgp", "par2",
       NULL
     };
     static const char *data_exts[] = {
@@ -1559,8 +1612,9 @@ static std::string group_type_from_name(const std::string &name) {
     };
 
     if (ext_in_list(name, dna_exts)) return "$dna";
-    if (ext_in_list(name, extra_text_exts)) return "$text";
+    if (name_in_list(name, extra_text_names) || ext_in_list(name, extra_text_exts)) return "$text";
     if (ext_in_list(name, extra_comp_exts)) return "$compressed";
+    if (ext_in_list(name, extra_exe_exts)) return "$exe";
     if (ext_in_list(name, data_exts)) return "$obj";
   }
 
@@ -1587,6 +1641,38 @@ static bool detect_file_mm(FILE *fp, uint64 filesize, int detect_level) {
   return detect_mm(detect_level, &buf[0], (int)got) != 0;
 }
 
+static int detect_x86_exec_magic(const BYTE *b, size_t n) {
+  // +1: PE or ELF targeting x86/x86_64; -1: non-x86 PE/ELF or Mach-O; 0: other
+  if (n >= 20 && b[0] == 0x7f && b[1] == 'E' && b[2] == 'L' && b[3] == 'F') {
+    if (b[5] != 1 && b[5] != 2) return 0;
+    uint16_t mach = (b[5] == 2)
+      ? (uint16_t)(((uint16_t)b[18] << 8) | b[19])
+      : (uint16_t)(b[18] | ((uint16_t)b[19] << 8));
+    return (mach == 3 || mach == 62) ? 1 : -1;
+  }
+  if (n >= 64 && b[0] == 'M' && b[1] == 'Z') {
+    uint32_t pe_off = (uint32_t)b[0x3C] | ((uint32_t)b[0x3D] << 8) |
+                      ((uint32_t)b[0x3E] << 16) | ((uint32_t)b[0x3F] << 24);
+    if (pe_off <= n - 6 && b[pe_off] == 'P' && b[pe_off + 1] == 'E' &&
+        b[pe_off + 2] == 0 && b[pe_off + 3] == 0) {
+      uint16_t mach = (uint16_t)(b[pe_off + 4] | ((uint16_t)b[pe_off + 5] << 8));
+      return (mach == 0x014c || mach == 0x8664) ? 1 : -1;
+    }
+  }
+  if (n >= 4 && ((b[0] == 0xfe && b[1] == 0xed && b[2] == 0xfa && (b[3] == 0xce || b[3] == 0xcf)) ||
+                 ((b[0] == 0xce || b[0] == 0xcf) && b[1] == 0xfa && b[2] == 0xed && b[3] == 0xfe) ||
+                 (b[0] == 0xca && b[1] == 0xfe && b[2] == 0xba && b[3] == 0xbe))) {
+    return -1;
+  }
+  return 0;
+}
+
+static bool is_preserved_default_type(const std::string &t) {
+  if (t == "$wav" || t == "$bmp" || t == "$obj") return true;
+  if (!g_opt_nobitexact) return false;
+  return t == "$dna" || t == "$compressed" || t == "$text" || t == "$code" || t == "$precomp" || t == "$exe";
+}
+
 static std::string choose_detected_type(const std::vector<std::string> &dataTypes, const std::string &defaultType) {
   int total = (int)dataTypes.size();
   int n_nondef = 0;
@@ -1602,16 +1688,59 @@ static std::string choose_detected_type(const std::vector<std::string> &dataType
   if (n_nondef > 0 && x_same &&
       (n_nondef == total || (total >= aCHUNKS && n_nondef == total - 1) || n_nondef * 12 >= total * 11))
     best = x;
-  if (best == "default") {
-    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj" ||
-        (g_opt_nobitexact && (defaultType == "$dna" || defaultType == "$compressed" || defaultType == "$text")))
-      return defaultType;
-    return "default";
-  }
+  if (best == "default")
+    return is_preserved_default_type(defaultType) ? defaultType : std::string("default");
   return best;
 }
 
-static std::string detect_file_datatype(const FileRec &f, int detect_level) {
+static uint64 compute_content_sig(const BYTE *b, size_t n, bool is_dna) {
+  if (!b || n == 0) return 0;
+  size_t len = n < 16384 ? n : 16384;
+  if (is_dna) {
+    size_t gc = 0, at = 0;
+    for (size_t i = 0; i < len; i++) {
+      BYTE c = b[i];
+      if (c == 'G' || c == 'C' || c == 'g' || c == 'c') gc++;
+      else if (c == 'A' || c == 'T' || c == 'a' || c == 't') at++;
+    }
+    size_t tot = gc + at;
+    uint64 gc_pct = tot ? (uint64)((gc * 100ull) / tot) : 50ull;
+    return gc_pct / 4ull; // 4% GC bins for homogeneous DNA grouping
+  }
+  uint32 cnt[256] = {0};
+  size_t b0 = 0, b1 = 0, b3 = 0;
+  for (size_t i = 0; i < len; i++) {
+    BYTE ch = b[i];
+    cnt[ch]++;
+    if (ch == 9 || ch == 10 || ch == 13 || ch == 32 || (ch >= '0' && ch <= '9')) b1++;
+    else if (ch < 32 || ch == 127) b0++;
+    else if (ch >= 128) b3++;
+  }
+  double h0 = 0.0;
+  double inv = 1.0 / (double)len;
+  for (int i = 0; i < 256; i++) {
+    if (cnt[i]) {
+      double p = (double)cnt[i] * inv;
+      h0 -= p * (log(p) / log(2.0));
+    }
+  }
+  uint64 sclass = (b0 == 0) ? 0ull : ((b0 * 20ull < len) ? 1ull : 2ull);
+  uint64 h0_q = (uint64)(h0 * 2.0);
+  if (h0_q > 15) h0_q = 15;
+  uint64 q0 = (uint64)(b0 * 8ull / len); if (q0 > 7) q0 = 7;
+  uint64 q1 = (uint64)(b1 * 8ull / len); if (q1 > 7) q1 = 7;
+  uint64 q3 = (uint64)(b3 * 8ull / len); if (q3 > 7) q3 = 7;
+  uint64 morton = 0;
+  for (int bit = 2; bit >= 0; bit--) {
+    morton = (morton << 3) | (((q0 >> bit) & 1ull) << 2) |
+             (((q1 >> bit) & 1ull) << 1) | ((q3 >> bit) & 1ull);
+  }
+  return (sclass << 13) | (h0_q << 9) | morton;
+}
+
+static std::string detect_file_datatype(FileRec &f, int detect_level) {
+  f.content_sig = 0;
+  f.has_sig = false;
   if (f.isdir || f.is_symlink || f.size == 0 || f.path.empty())
     return "default";
   std::string defaultType = group_type_from_name(f.name);
@@ -1623,17 +1752,26 @@ static std::string detect_file_datatype(const FileRec &f, int detect_level) {
       return defaultType;
     return "default";
   }
-  // Under -nobitexact, if the file is known genomic data ($dna), bypass disk sampling.
-  if (g_opt_nobitexact && defaultType == "$dna")
+  // Under -nobitexact, $compressed/$precomp bypass disk sampling; $dna reads 8 KB for GC% sort key.
+  if (g_opt_nobitexact && (defaultType == "$compressed" || defaultType == "$precomp"))
     return defaultType;
+  if (g_opt_nobitexact && defaultType == "$dna") {
+    FILE *dfp = fopen(f.path.c_str(), "rb");
+    if (dfp) {
+      BYTE hbuf[8192];
+      size_t got = fread(hbuf, 1, sizeof(hbuf), dfp);
+      fclose(dfp);
+      if (got > 0) {
+        f.content_sig = compute_content_sig(hbuf, got, true);
+        f.has_sig = true;
+      }
+    }
+    return defaultType;
+  }
 
   FILE *fp = fopen(f.path.c_str(), "rb");
-  if (!fp) {
-    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj" ||
-        (g_opt_nobitexact && (defaultType == "$dna" || defaultType == "$compressed" || defaultType == "$text")))
-      return defaultType;
-    return "default";
-  }
+  if (!fp)
+    return is_preserved_default_type(defaultType) ? defaultType : std::string("default");
   if ((defaultType == "$wav" || defaultType == "$bmp") && detect_file_mm(fp, f.size, detect_level)) {
     fclose(fp);
     return defaultType;
@@ -1655,22 +1793,30 @@ static std::string detect_file_datatype(const FileRec &f, int detect_level) {
     step = (filesize - (uint64)n * blocksize) / (uint64)n;
   std::vector<char> buf((size_t)blocksize);
   std::vector<std::string> dataTypes;
+  int exec_magic = 0;
   for (int i = 0; i < n; i++) {
     uint64 pos = (uint64)i * (blocksize + step);
     size_t got = 0;
     if (!read_file_chunk(fp, pos, blocksize, buf, got)) break;
+    if (i == 0 && g_opt_nobitexact) {
+      f.content_sig = compute_content_sig((const BYTE *)&buf[0], got, false);
+      f.has_sig = true;
+      exec_magic = detect_x86_exec_magic((const BYTE *)&buf[0], got);
+      if (defaultType == "$exe" && exec_magic == -1)
+        defaultType.clear();
+    }
     char typ[64];
-    detect_datatype((BYTE *)&buf[0], (int)got, typ);
+    detect_datatype_utf8((BYTE *)&buf[0], (int)got, typ, g_opt_nobitexact ? 1 : 0);
     dataTypes.push_back(typ);
   }
   fclose(fp);
-  if (dataTypes.empty()) {
-    if (defaultType == "$wav" || defaultType == "$bmp" || defaultType == "$obj" ||
-        (g_opt_nobitexact && (defaultType == "$dna" || defaultType == "$compressed" || defaultType == "$text")))
-      return defaultType;
-    return "default";
-  }
-  return choose_detected_type(dataTypes, defaultType);
+  if (dataTypes.empty())
+    return is_preserved_default_type(defaultType) ? defaultType : std::string("default");
+  std::string res = choose_detected_type(dataTypes, defaultType);
+  if (g_opt_nobitexact && exec_magic == 1 && res == "default" &&
+      (defaultType.empty() || defaultType == "$iso"))
+    return "$exe";
+  return res;
 }
 
 /* PERF: content-based type detection (detect_level >= 2) reads and analyzes up to ~sqrt(5*N)
@@ -1747,7 +1893,7 @@ static bool ext_match(const std::string &e, const char *const *exts) {
 }
 
 static int get_extension_cluster(const std::string &e) {
-  if (e.empty()) return 50;
+  if (e.empty()) return 55;
 
   static const char *const c_cpp[] = {
     "h", "hpp", "hxx", "hh", "inl", "inc", "c", "cpp", "cc", "cxx", "m", "mm", "idl", "ipp", NULL
@@ -1770,10 +1916,10 @@ static int get_extension_cluster(const std::string &e) {
   };
   static const char *const binaries[] = {
     "exe", "dll", "so", "dylib", "sys", "drv", "ocx", "com", "scr", "elf", "bin", "o", "obj",
-    "a", "lib", "class", "dex", "386", "vxd", "dcu", NULL
+    "a", "lib", "class", "dex", "386", "vxd", "dcu", "pyc", "pyo", "mo", "gmo", "wasm", "efi", "cpl", "ko", NULL
   };
   static const char *const multimedia[] = {
-    "bmp", "dib", "raw", "pbm", "pgm", "ppm", "tga", "pcx", "wav", "wave", "aif", "aiff", "au", "pcm", NULL
+    "bmp", "dib", "raw", "pbm", "pgm", "ppm", "tga", "pcx", "tif", "tiff", "wav", "wave", "aif", "aiff", "au", "pcm", NULL
   };
   static const char *const scientific[] = {
     "fa", "fasta", "fna", "fastq", "fq", "sam", "bam", "cram", "vcf", "gff", "gtf", "bed", "pdb", NULL
@@ -1800,6 +1946,19 @@ static int get_extension_cluster(const std::string &e) {
   return 100;
 }
 
+static uint64 smart_sort_sig_key(const FileRec &f, int cluster) {
+  if (cluster == 10 || cluster == 70) return 0; // Preserve dir-first locality for C/C++ and multimedia
+  if (f.datatype == "$dna") return f.has_sig ? f.content_sig : 0;
+  bool binary_or_unknown = (cluster == 55 || cluster == 60 || cluster >= 95);
+  if (binary_or_unknown && f.datatype != "$text" && f.datatype != "$code" &&
+      f.datatype != "$compressed" && f.datatype != "$precomp" && f.datatype != "$exe") {
+    uint64 lg = (f.size >= 64ull * 1048576ull) ? 1ull : 0ull;
+    uint64 sig = f.has_sig ? f.content_sig : 0ull;
+    return (lg << 20) | sig;
+  }
+  return 0;
+}
+
 static bool file_sort_smart(const FileRec &a, const FileRec &b) {
   if (a.isdir != b.isdir) return a.isdir > b.isdir;
   if (a.is_symlink != b.is_symlink) return a.is_symlink > b.is_symlink;
@@ -1809,6 +1968,14 @@ static bool file_sort_smart(const FileRec &a, const FileRec &b) {
   int ca = get_extension_cluster(ea);
   int cb = get_extension_cluster(eb);
   if (ca != cb) return ca < cb;
+
+  bool dir_first = (ca == 10 || ca == 70);
+  if (!dir_first) {
+    if (ea != eb) return ea < eb;
+    uint64 ska = smart_sort_sig_key(a, ca);
+    uint64 skb = smart_sort_sig_key(b, cb);
+    if (ska != skb) return ska < skb;
+  }
 
   if (a.dir != b.dir) return a.dir < b.dir;
 
@@ -3154,10 +3321,27 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
         auto_groups[gi].second = apply_mem_limits(auto_groups[gi].second, limit_decomp_mem, limit_comp_mem);
     }
     default_method = auto_default_method(auto_groups);
-    if (sort_files)
-      std::sort(files.begin(), files.end(), g_opt_nobitexact ? file_sort_smart : file_sort_epn);
     if (auto_has_detectable_types(auto_groups))
       detect_file_types(files, auto_method_level(method));
+    if (g_opt_nobitexact) {
+      int code_gi = -1;
+      for (size_t gi = 0; gi < auto_groups.size(); gi++) {
+        if (auto_groups[gi].first == "$code") { code_gi = (int)gi; break; }
+      }
+      uint64 code_bytes = 0;
+      for (size_t i = 0; i < files.size(); i++) {
+        if (files[i].datatype == "$code") code_bytes += files[i].size;
+      }
+      if (code_gi < 0 || code_bytes < 64ull * mb) {
+        // Below 64 MB (small/sparse source sets), merging into $text PPMd shares cross-file words better.
+        // At >= 64 MB, dedicated $code (rep:256m+lzma:192m:pb0:lc4 without dict) wins hugely & decodes ~15x faster.
+        for (size_t i = 0; i < files.size(); i++) {
+          if (files[i].datatype == "$code") files[i].datatype = "$text";
+        }
+      }
+    }
+    if (sort_files && g_opt_nobitexact)
+      std::sort(files.begin(), files.end(), file_sort_smart);
     std::map<std::string, std::vector<FileRec> > by_method;
     std::vector<std::string> method_order;
     for (size_t i = 0; i < files.size(); i++) {
@@ -3267,9 +3451,103 @@ static bool write_archive(const std::string &arcname, uint64 vol_size,
     tasks.swap(expanded);
   }
 
+  struct MdlHelper {
+    struct Ctx { const BYTE *in; size_t len; size_t pos; uint64 out_bytes; };
+    static int cb(const char *what, void *data, int size, void *aux) {
+      Ctx *c = (Ctx *)aux;
+      if (strequ(what, "read")) {
+        size_t avail = c->pos < c->len ? (c->len - c->pos) : 0;
+        size_t n = (size_t)size < avail ? (size_t)size : avail;
+        if (n > 0) memcpy(data, c->in + c->pos, n);
+        c->pos += n;
+        return (int)n;
+      }
+      if (strequ(what, "write")) { c->out_bytes += (uint64)size; return size; }
+      return 0;
+    }
+    static uint64 probe(const std::vector<BYTE> &buf, const char *m) {
+      std::string prep = canonize_method_chain(m, haskell_dict_limit((FILESIZE)buf.size()));
+      Ctx c = { buf.empty() ? NULL : &buf[0], buf.size(), 0, 0 };
+      int rc = MultiCompress((char *)prep.c_str(), cb, &c);
+      return rc >= 0 ? c.out_bytes : (uint64)-1;
+    }
+    static void sample_block(const FileRec *files, int start, int count, uint64 insize,
+                             std::vector<BYTE> &out) {
+      out.clear();
+      const size_t WIN = 2u * 1024u * 1024u;
+      const uint64 targets[2] = { insize / 4ull, (insize * 2ull) / 3ull };
+      out.reserve(WIN * 2u);
+      uint64 cum = 0, cur_rem = WIN;
+      int wi = 0;
+      for (int k = 0; k < count && wi < 2; k++) {
+        const FileRec &f = files[start + k];
+        if (f.isdir || f.is_symlink || f.size == 0 || f.path.empty()) continue;
+        uint64 fsz = f.size;
+        if (cum + fsz <= targets[wi]) { cum += fsz; continue; }
+        FILE *fp = fopen(f.path.c_str(), "rb");
+        if (fp) {
+          uint64 off = targets[wi] > cum ? (targets[wi] - cum) : 0;
+          if (off > 0) fseeko(fp, (off_t)off, SEEK_SET);
+          while (cur_rem > 0 && off < fsz) {
+            size_t want = (size_t)std::min<uint64>(cur_rem, fsz - off);
+            size_t old_n = out.size();
+            out.resize(old_n + want);
+            size_t got = fread(&out[old_n], 1, want, fp);
+            out.resize(old_n + got);
+            if (got == 0) break;
+            off += got; cur_rem -= got;
+          }
+          fclose(fp);
+        }
+        cum += fsz;
+        if (cur_rem == 0) {
+          wi++;
+          while (wi < 2 && cum > targets[wi]) wi++;
+          cur_rem = WIN;
+        }
+      }
+    }
+  };
+
   std::vector<DataBlockRec> data_blocks;
   FileRec *files_ptr = files.empty() ? NULL : &files[0];
   int threads = GetCompressionThreads();
+
+  bool mdl_eligible = g_opt_nobitexact && use_auto && method && !strchr(method, '/') &&
+                      extra_filters.empty() && limit_decomp_mem == 0 && limit_comp_mem == 0 &&
+                      (strequ(method, "5") || strequ(method, "5x") || strequ(method, "x") ||
+                       strequ(method, "mx") || strequ(method, "max") || strequ(method, "ultra"));
+  if (mdl_eligible && files_ptr) {
+    std::vector<BYTE> sample;
+    std::string comp_fallback = (threads >= 2) ? "rep:256m:l24:s12+4x4:tor:8m:c3" : "rep:256m:l24:s12+tor:8m:c3";
+    for (size_t i = 0; i < tasks.size(); i++) {
+      uint64 insize = 0;
+      for (int k = 0; k < tasks[i].count; k++) insize += files[tasks[i].start + k].size;
+      if (insize < 12ull * mb) continue;
+      std::string &mth = tasks[i].method;
+      bool is_def_delta = (mth.compare(0, 15, "rep:256m+delta+") == 0);
+      bool is_bmp_mm = (mth.find("+mm+") != std::string::npos);
+      if (!is_def_delta && !is_bmp_mm) continue;
+      MdlHelper::sample_block(files_ptr, tasks[i].start, tasks[i].count, insize, sample);
+      if (sample.size() < 512u * 1024u) continue;
+      uint64 s_tor = MdlHelper::probe(sample, "tor:8m:c3");
+      if (s_tor == (uint64)-1) continue;
+      if (is_def_delta) {
+        if ((double)s_tor >= (double)sample.size() * 0.94) {
+          mth = comp_fallback;
+        } else {
+          uint64 s_del = MdlHelper::probe(sample, "delta+lzma:4m:normal:64:mc32");
+          uint64 s_nod = MdlHelper::probe(sample, "lzma:4m:normal:64:mc32");
+          if (s_del != (uint64)-1 && s_nod != (uint64)-1 && s_nod * 1000ull < s_del * 997ull)
+            mth = std::string("rep:256m+") + mth.substr(15);
+        }
+      } else if (is_bmp_mm) {
+        uint64 s_gr = MdlHelper::probe(sample, "mm+grzip:m1:l2048:a");
+        if (s_gr != (uint64)-1 && s_tor * 1000ull < s_gr * 995ull)
+          mth = comp_fallback;
+      }
+    }
+  }
 
   if (g_opt_nobitexact && threads >= 8) {
     for (size_t i = 0; i < tasks.size(); i++) {

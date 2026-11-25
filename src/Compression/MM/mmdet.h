@@ -12,5 +12,7 @@ int  detect_mm (int mode, void *buf, int bufsize);
 int detect_mm_header (int mode, void *buf, int bufsize);
 // Returns 'type' describing data in the buffer ($compressed/$text/$binary)
 void detect_datatype (BYTE *buf, int bufsize, char *type);
+// Extended variant allowing multi-byte UTF-8 prose when allow_utf8_extended != 0
+void detect_datatype_utf8 (BYTE *buf, int bufsize, char *type, int allow_utf8_extended);
 
 

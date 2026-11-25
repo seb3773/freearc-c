@@ -774,7 +774,35 @@ int detect_mm_header (int mode, void *buf, int bufsize)
 // ****************************************************************************************
 int count_desc_order (const int *a, const int *b)   { return *b-*a; }
 
-void detect_datatype (BYTE *buf, int bufsize, char *type)
+static int is_valid_utf8_text (const BYTE *buf, int bufsize)
+{
+    if (!buf || bufsize < 32) return 0;
+    int valid_bytes = 0, i = 0;
+    while (i < bufsize) {
+        BYTE c = buf[i];
+        if (c == 0) return 0;
+        if ((c >= 0x20 && c <= 0x7E) || c == '\t' || c == '\r' || c == '\n') {
+            valid_bytes++; i++;
+        } else if (c >= 0xC2 && c <= 0xDF) {
+            if (i + 1 >= bufsize) break;
+            if ((buf[i+1] & 0xC0) == 0x80) { valid_bytes += 2; i += 2; }
+            else i++;
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            if (i + 2 >= bufsize) break;
+            if ((buf[i+1] & 0xC0) == 0x80 && (buf[i+2] & 0xC0) == 0x80) { valid_bytes += 3; i += 3; }
+            else i++;
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            if (i + 3 >= bufsize) break;
+            if ((buf[i+1] & 0xC0) == 0x80 && (buf[i+2] & 0xC0) == 0x80 && (buf[i+3] & 0xC0) == 0x80) { valid_bytes += 4; i += 4; }
+            else i++;
+        } else {
+            i++;
+        }
+    }
+    return i > 0 && (double)valid_bytes >= 0.90 * (double)i;
+}
+
+void detect_datatype_utf8 (BYTE *buf, int bufsize, char *type, int allow_utf8_extended)
 {
     // Âû÷èñëÿåì ðàñïðåäåëåíèå ÷àñòîò ñèìâîëîâ è îäíîâðåìåííî..
     int count[256];  iterate(256, count[i]=0);
@@ -836,6 +864,13 @@ void detect_datatype (BYTE *buf, int bufsize, char *type)
         }
     }
 
+    int max_normal_chars = 80;
+    if (allow_utf8_extended && normal_chars > 80 && normal_chars <= 140 &&
+        repdists < 0.20*matches && sumlen > 0.10*bufsize &&
+        is_valid_utf8_text (buf, bufsize)) {
+        max_normal_chars = 140;
+    }
+
     // Òèï äàííûõ: $compressed åñëè íå ñæèìàåòñÿ íè order-0 íè lz77.
     //             $text åñëè àêòèâíûõ ñèìâîëîâ îò 17 äî 80, ÷èñëî ïîâòîðîâ äèñòàíöèé íåâåëèêî è lz-ìàò÷è ñîñòàâëÿþò õîòÿ áû 10% äàííûõ
     strcpy (type, buf==NULL                                 ? "$compressed $text" :  // list of data types this procedure is able to recognize
@@ -844,7 +879,7 @@ void detect_datatype (BYTE *buf, int bufsize, char *type)
                     // && matches < bufsize/100
                     && sumlen < 0.10*bufsize                ? "$compressed" :
 
-                  17<=normal_chars && normal_chars<=80
+                  17<=normal_chars && normal_chars<=max_normal_chars
                     // && matches < bufsize/6
                     && repdists < 0.20*matches
                     && sumlen   > 0.10*bufsize              ? "$text" :
@@ -855,6 +890,11 @@ void detect_datatype (BYTE *buf, int bufsize, char *type)
     //if(bufsize) printf (" %8s %d\n", type, normal_chars);
     //if(bufsize)  printf (" %8s %5.2lf%% %5d %5.2lf%% %5.0lf %5.2lf %5.2lf%%\n", type, order0/bufsize*100, normal_chars, double(repdists+1)/(matches+1)*100, double(matches), double(sumlen)/(matches+1), double(sumlen)/(bufsize+1)*100);
     //(printf("\n\n\nSTAT: normal_chars=%d, repdists=%d, matches=%d, sumlen=%d, bufsize=%d\n\n %*.*s\n", normal_chars, repdists, matches, sumlen, bufsize, bufsize, bufsize, buf), "default"));
+}
+
+void detect_datatype (BYTE *buf, int bufsize, char *type)
+{
+    detect_datatype_utf8 (buf, bufsize, type, 0);
 }
 
 #endif  // !defined (FREEARC_DECOMPRESS_ONLY)
