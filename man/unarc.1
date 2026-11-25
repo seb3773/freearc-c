@@ -1,4 +1,4 @@
-.TH UNARC 1 "October 2026" "FreeArc 1.2" "User Commands"
+.TH UNARC 1 "November 2026" "FreeArc-c 1.4.5" "User Commands"
 .SH NAME
 unarc \- FreeArc high-compression archive unpacker
 .SH SYNOPSIS
@@ -30,10 +30,16 @@ Extract files with pathnames.
 Extract files to standard output (pipe).
 .SH OPTIONS
 .TP
-.BI \-dp \ PATH\fR,\ \fB\-d \ PATH
+.BI \-dp PATH\fR,\ \fB\-d PATH
 Set destination directory for extracted files.
 .TP
-.BI \-p \ PASS
+.BI \-ap PATH
+Set archive path prefix.
+.TP
+.BI \-w PATH
+Set temporary files directory.
+.TP
+.BI \-p PASS
 Specify archive password for decryption.
 .TP
 .B \-o+\fR, \fB\-y
@@ -42,16 +48,19 @@ Overwrite existing files without prompting.
 .B \-o-\fR, \fB\-n
 Do not overwrite existing files.
 .TP
-.B \-s\fR, \fB\-q
+.B \-s\fR[\fB0..2\fR], \fB\-q
 Silent mode (suppress output except errors).
 .TP
-.BI \-x \ PATTERN
-Exclude files matching pattern (@listfile supported).
+.BI \-x PATTERN\fR,\ \fB\-i PATTERN
+Exclude (\fB-x\fR) or include only (\fB-i\fR) files matching pattern (\fB@listfile\fR supported).
 .TP
-.BI \-i \ PATTERN
-Include only files matching pattern (@listfile supported).
+.B \-so\fR, \fB\-\-noarcext
+Write extracted file contents to stdout (\fB-so\fR) or avoid appending \fB.arc\fR (\fB--noarcext\fR).
 .TP
-.B \-so
-Write extracted file contents to stdout.
+.BI \-cfg FILE\fR,\ \fB\-\-no-config\fR,\ \fB\-\-print-config
+Specify, disable, or inspect active \fBarc.ini\fR configuration.
+.TP
+.B \-\-
+Stop option parsing.
 .SH AUTHOR
 Modern native C/C++ port by seb3773. Original FreeArc format by Bulat Ziganshin.

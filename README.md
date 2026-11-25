@@ -29,7 +29,7 @@ Consequently, to create or maintain FreeArc archives on Linux, users and develop
 ### The Solution: A Pure C/C++ Native Re-engineering
 This project fills this 15-year gap by providing a **100% native C/C++ suite** that is modern, autonomous, and fast:
 * **Zero Haskell, Zero GHC, Zero Wine**: Pure standard C/C++ that compiles cleanly with standard GCC or Clang on any modern Linux system.
-* **Zero External Dependencies**: Produces lean, self-contained binaries (< 1 MB total suite: `arc` ~427 KB, `unarc` ~197 KB, `arc.sfx` ~194 KB).
+* **Zero External Dependencies**: Produces self-contained, stripped executables for Linux x86_64 (`arc` 1.42 MiB, `unarc` 837 KiB, `arc.sfx` 833 KiB), Linux ARM64, and Windows x64.
 * **Total Binary Format Parity**: Strictly generates standard compliant blocks (`HEADER_BLOCK`, `DATA_BLOCK`, `DIR_BLOCK`, `FOOTER_BLOCK`) with 100% bit-exact DATA and DIR parity vs original Windows FreeArc 0.67 (`Arc.exe`) across all codecs and auto-profiles (`-m1` to `-m5x`).
 * **True 64-bit Architecture (No 2 GB RAM Ceiling)**: Fully breaks the 32-bit architectural barrier of legacy FreeArc 0.67 (which was strictly capped at 2 GB of virtual address space, causing notorious `Out of memory` and `data compression failed (-11)` crashes when handling large datasets, high thread counts `-mt`, or heavy dictionaries like `-ld3600m`). `freearc-c` natively supports 8 GB, 16 GB, 32 GB, 64 GB+ RAM allocations, enabling massive multi-gigabyte dictionaries and multi-core throughput on modern hardware.
 * **True Intra-Stream Multithreading (4x4)**: High-performance multi-core compression of single solid streams without breaking solid compression ratios, splitting streams into in-memory chunks processed concurrently.
@@ -51,25 +51,25 @@ This project fills this 15-year gap by providing a **100% native C/C++ suite** t
 * **100% Bit-Exact Legacy Parity**: Full bit-for-bit parity on compressed payload (`DATA`) and directory block metadata (`DIR`) against original Windows FreeArc 0.67 (`Arc.exe`) across all codecs, filters, and auto-profiles (`-m1` through `-m5x`).
 * **True 64-bit Memory Freedom (No 2 GB Barrier)**: Unlike legacy 32-bit FreeArc (which failed with error `-11` or out-of-memory when RAM approached ~1.8 GB), `freearc-c` runs on a native 64-bit flat address space, allowing massive dictionaries (e.g. `-ld3600m`, `-lc8g`) and high concurrency (`-mt14`, `-mt32`) on multi-gigabyte/terabyte workloads.
 * **Intra-Stream Multithreading (4x4)**: Multi-core parallel compression inside single solid streams (`4x4:lzma`, `4x4:tor`), scaling linearly across CPU cores without creating separate solid block boundaries.
-* **Intelligent Auto-Profiles & File Grouping**: Complete `arc.groups` classification table (`$text`, `$compressed`, `$exe`, `$iso`, `$precomp`, `$obj`, `$bmp`, `$wav`) with dynamic content detection routing files to optimal compression pipelines.
+* **Intelligent Auto-Profiles & File Grouping**: Built-in `arc.groups` classification (`$text`, `$code`, `$compressed`, `$exe`, `$iso`, `$precomp`, `$obj`, `$bmp`, `$wav`, plus `$dna` in `-nobitexact`) with content-based detection and PE/ELF magic verification routing files to optimal compression pipelines.
 * **Full Archive Management**: Complete command set — add (`a`), update (`u`), freshen (`f`), delete (`d`), move (`m`), list (`l`/`v`), test (`t`), extract (`x`/`e`), and pipe (`p`/`-so`).
 * **High-Ratio Codecs**: Full suite of FreeArc compression algorithms:
-  * **LZMA** (fast to maximum levels: `-m1` to `-m5x`, with `4x4` multi-threading)
-  * **Tornado** (ultra-fast LZ77 variant with 64-bit CTZ acceleration)
-  * **PPMD** (high-order prediction by partial matching, 64-bit bit-exact allocator)
+  * **LZMA** (fast to maximum levels: `-m1` to `-m5x`, with `4x4` multi-threading, plus vendored LZMA SDK 25.01 fast encoder/decoder & x86-64 ASM kernels)
+  * **Tornado** (ultra-fast LZ77 variant with 64-bit CTZ and x86-64 AVX2/SSE2 match-extension kernels)
+  * **PPMD** (high-order prediction by partial matching, 64-bit allocator, parallel `4x4` decompression with transparent hugepage & arena reuse)
   * **GRZip** (Burrows-Wheeler transform compression with adaptive block mode and $O(1)$ MTF rank table)
   * **TTA** (lossless true audio compression with SIMD vectorization)
   * **4x4** (intra-stream chunked multi-threaded compression wrapper)
   * **Storing** (uncompressed store)
 * **Intelligent Preprocessors & Filters**:
   * **BCJ / EXE**: x86 32/64-bit branch target preprocessor (`-bcj` / `-exe`)
-  * **REP**: High-speed multi-megabyte repetition filter (`-rep`) with multi-threaded hasher
+  * **REP**: High-speed multi-megabyte repetition filter (`-rep`) with multi-threaded hasher and vectorized match extension
   * **DELTA**: Multi-byte differential filter (`-delta`)
-  * **DICT**: Text dictionary preprocessor (`-dict`)
+  * **DICT**: Text dictionary preprocessor (`-dict`) with thread-safe parallel encoding and early abort for incompressible blocks
   * **LZP**: Lempel-Ziv + Prediction filter (`-lzp`)
   * **MM**: Multimedia 8/16/24/32-bit channel interleaved preprocessor (`-mm`)
 * **Strong Encryption**:
-  * AES (128/256-bit), Blowfish, Twofish, and Serpent.
+  * AES (128/192/256-bit), Blowfish, Twofish, and Serpent (CTR/CFB modes with PKCS#5 PBKDF2 HMAC-SHA-512).
   * Encrypt data blocks (`-p`) or full header + data (`-hp`).
 * **Autonomous Linux SFX Engine**:
   * Create standalone `.sfx` or `.run` executables (`arc a -sfx setup.run ...`).
@@ -86,27 +86,27 @@ This project fills this 15-year gap by providing a **100% native C/C++ suite** t
 
 ## Generated Binaries
 
-Binaries are organized cleanly by target platform:
+Binaries are stripped production builds organized cleanly by target platform (`v1.4.5`):
 
 ### Linux (x86_64) — `./build/linux/`
 | Binary | Size | Description |
 |---|---|---|
-| `build/linux/arc` | ~427 KB | Full archiver and archive manager (create, update, freshen, delete, move, SFX conversion) |
-| `build/linux/unarc` | ~197 KB | Standalone unpacker, lister, and integrity tester |
-| `build/linux/arc.sfx` | ~194 KB | Standalone Linux ELF stub for self-extracting packages (`.sfx` / `.run`) |
+| `build/linux/arc` | 1.42 MiB (`1,486,360 B`) | Full archiver and archive manager (create, update, freshen, delete, move, SFX conversion) |
+| `build/linux/unarc` | 837 KiB (`857,240 B`) | Standalone unpacker, lister, and integrity tester |
+| `build/linux/arc.sfx` | 833 KiB (`853,144 B`) | Standalone Linux ELF stub for self-extracting packages (`.sfx` / `.run`) |
 
 ### Linux ARM64 (aarch64) — `./build/linux-arm64/`
 | Binary | Size | Description |
 |---|---|---|
-| `build/linux-arm64/arc` | ~431 KB | Full archiver and archive manager compiled natively for Linux ARM64 (AArch64) |
-| `build/linux-arm64/unarc` | ~198 KB | Standalone unpacker, lister, and integrity tester for Linux ARM64 |
-| `build/linux-arm64/arc.sfx` | ~196 KB | Standalone Linux ARM64 ELF stub for self-extracting packages (`.sfx` / `.run`) |
+| `build/linux-arm64/arc` | 1.51 MiB (`1,586,328 B`) | Full archiver and archive manager compiled natively for Linux ARM64 (AArch64) |
+| `build/linux-arm64/unarc` | 967 KiB (`990,616 B`) | Standalone unpacker, lister, and integrity tester for Linux ARM64 |
+| `build/linux-arm64/arc.sfx` | 967 KiB (`990,616 B`) | Standalone Linux ARM64 ELF stub for self-extracting packages (`.sfx` / `.run`) |
 
 ### Windows (x86_64) — `./build/win64/`
 | Binary | Size | Description |
 |---|---|---|
-| `build/win64/arc.exe` | ~682 KB | Standalone Windows 64-bit archiver (static MinGW, zero runtime DLL dependencies) |
-| `build/win64/unarc.exe` | ~429 KB | Standalone Windows 64-bit unpacker and integrity tester |
+| `build/win64/arc.exe` | 1.62 MiB (`1,694,208 B`) | Standalone Windows 64-bit archiver (static MinGW-w64, zero runtime DLL dependencies) |
+| `build/win64/unarc.exe` | 1.04 MiB (`1,095,168 B`) | Standalone Windows 64-bit unpacker and integrity tester |
 
 ---
 
@@ -252,7 +252,7 @@ Both `arc` / `unarc` on Linux and `arc.exe` / `unarc.exe` on Windows 64-bit serv
   1. Explicit CLI specification: `-cfg<path>` or `--config <path>`
   2. Executable directory: `arc.ini` located alongside `arc` / `unarc`
   3. Current working directory: `./arc.ini`
-  4. System-wide configuration: `/etc/arc.ini` (Linux) or `%APPDATA%\FreeArc\arc.ini` (Windows)
+  4. System-wide configuration: `/etc/arc.ini` (Unix/Linux)
 * **Disabling Config Loading**: `-cfg-` or `--no-config` skips searching and loading any `arc.ini`.
 * **Inspection**: `--print-config` displays the parsed active configuration, default options, and compression method aliases.
 * **Supported INI Sections**:
@@ -266,63 +266,67 @@ Both `arc` / `unarc` on Linux and `arc.exe` / `unarc.exe` on Windows 64-bit serv
 
 The native C/C++ engine incorporates a multi-tier multithreading architecture and targeted hardware optimizations while preserving strict 100% bit-exact output determinism:
 
-* **True Intra-Stream Multithreading (4x4 Codec)**:
+* **True Intra-Stream Multithreading (`4x4` Codec)**:
   * For single solid streams (`arc a archive.arc ...`), FreeArc does **not** compromise compression ratio by splitting archives into independent non-solid blocks.
-  * Instead, the `4x4` codec wraps backend compressors (e.g. `4x4:lzma`, `4x4:tor`), chunking the stream in memory and compressing chunks in parallel across $N$ worker threads into a single continuous solid `DATA_BLOCK`.
+  * Instead, the `4x4` codec wraps backend compressors (e.g. `4x4:lzma`, `4x4:tor`, `4x4:ppmd`), chunking the stream in memory and compressing/decompressing chunks in parallel across $N$ worker threads into a single continuous solid `DATA_BLOCK`.
   * Automatically deployed in auto-profiles (`-m4`, `-m5`, `-m4x`, `-m5x`) whenever $\ge 3$ CPU cores are detected.
-* **Multi-Threaded Codec Internals**:
-  * **REP Hasher**: Long-distance repetition filter uses `MultipleProcessingThreads` to parallelize match hash-table lookups across CPU cores.
-  * **LZMA Match Finder**: Multi-threaded dictionary match finding (`LzFindMt`) for standalone LZMA streams, with clean thread isolation inside `4x4` chunks to avoid thread over-subscription and excessive RAM usage.
+* **x86-64 Assembly Kernels (`MF_ASM=1` / `LZMA_ASM=1`)**:
+  * Hand-written x86-64 match finders for bit-exact LZMA (`LzFind_x86_64.S`), `-nobitexact` LZMA SDK 25 (`LzFind25_x86_64.S`), and Tornado (`tor_match_x86_64.S`) using shared System V / Win64 ABI macros and runtime `CPUID`/`XGETBV` AVX2/SSE2 match-extension dispatch (`fa_cpu_x86_64.S`), alongside the `LzmaDecOpt.S` x86-64 assembly LZMA decoder loop.
+  * Branchless binary-tree descent (`cmov`), ahead-of-time node prefetching, and AVX2/SSE2 match extension with C fallback (`MF_ASM=0` / `LZMA_ASM=0`) for portability and ARM64 builds.
+* **Multi-Threaded Codec Internals & Fast Extraction**:
+  * **LZMA2 SDK 25 Optimal Parser (`-nobitexact`)**: AVX2/SSE2 vectorized match extension inside `GetOptimum` paired with adaptive BT4 pruning (`stagnation abort` and `good-match` cutoffs).
+  * **Parallel `4x4` PPMd & Fast Range Coding**: Multi-threaded `Dict` (`DictEncode`) + `LZP` + `PPMd` compression/decompression across CPU cores, per-thread arena reuse, 2 MB transparent hugepage (`THP`) sub-allocator hints, write coalescing, and division-free range coding.
+  * **REP & DICT Vectorization**: Multi-threaded `REP` hasher with vectorized forward/backward match extensions, and early-abort skip logic in `DICT` for incompressible blocks.
 * **True 64-bit Address Space & Memory Scaling**:
   * Legacy FreeArc 0.67 was a 32-bit application limited to 2 GB of virtual memory, making it prone to crashes on mixed-datatype datasets, high thread counts, or dictionary sizes $> 1\text{ GB}$.
-  * `freearc-c` operates with native 64-bit pointer and allocation models across Linux (`x86_64`) and Windows (`win64`), effortlessly scaling to 32 GB, 64 GB, or more RAM without address space fragmentation or memory exhaustion.
+  * `freearc-c` operates with native 64-bit pointer and allocation models across Linux (`x86_64`, `aarch64`) and Windows (`win64`), effortlessly scaling to multi-gigabyte dictionaries on modern hardware.
 * **Overlapping Asynchronous I/O Pipeline & Multi-Block Engine**:
-  * Dual-buffering background `reader` thread with on-the-fly SIMD CRC-32 and dedicated background `writer` thread.
-  * Thread pool for multi-block archives (non-solid `-s-`, partitioned `-s<size>`, `-s<N>f`) with deterministic ordered archive flushing.
+  * Dual-buffering background reader with on-the-fly SIMD CRC-32 and background block writer/worker pool for multi-block modes (`-s-`, `-s<size>`, `-s<N>f`) with deterministic sequential flushing.
 * **Bit-Exact Auto-Profiles & File Routing**:
-  * Faithful emulation of original FreeArc Haskell auto-presets (`-m1` to `-m5x`) and complete `arc.groups` classification table (`$text`, `$compressed`, `$exe`, `$iso`, `$precomp`, `$obj`, `$bmp`, `$wav`).
-  * Dynamic datatype detection via entropy and structure profiling, routing audio to TTA, bitmaps to MM+GRZip/LZMA, and object files to DELTA+LZMA.
-  * Exact stream-bounded dictionary capping (`LimitDictionary`).
-  * Standard EPN (*Extension, Path, Name*) file ordering matching FreeArc `-ds` (configurable via `-ds-`).
+  * Faithful emulation of original FreeArc Haskell auto-presets (`-m1` to `-m5x`) and built-in `arc.groups` classification (`$text`, `$code`, `$compressed`, `$exe`, `$iso`, `$precomp`, `$obj`, `$bmp`, `$wav`, plus `$dna` in `-nobitexact`).
+  * Multi-threaded content-based datatype detection routing audio to `TTA`, bitmaps to `MM+GRZip/LZMA`, and object files to `DELTA+LZMA`, with standard EPN (*Extension, Path, Name*) ordering (`file_sort_epn`).
 * **Hardware-Accelerated CRC-32 (PCLMULQDQ SIMD)**:
-  * Carry-less multiplication (`_mm_clmulepi64_si128`) with 64-byte parallel folding and Barrett reduction, reaching ~9.5 GB/s in memory streaming (~6× faster than scalar slice-by-8/16) and > 300 GB/s on cache.
-  * Dynamic runtime dispatch (`__builtin_cpu_supports("pclmul")`) with seamless slice-by-8/16 fallback.
-* **Tornado MatchFinder Acceleration**:
-  * 64-bit XOR and CTZ (`__builtin_ctzll`) match-length finder eliminating inner comparison loops and branch mispredictions.
-* **Vectorized TTA Audio Filter**:
-  * Fused single-pass stereo deinterleaving and channel decorrelation (`split_int` / `combine_int`) halving memory traffic.
-  * Decoupled contiguous passes for order-1 polynomial prediction, hybrid filter stages, and SSE2/AVX vectorization.
-* **GRZip MTF Rank Table**:
-  * Instant $O(1)$ inverse rank table (`MTF_Pos[256]`) replacing $O(N)$ sequential list scanning during Move-To-Front encoding.
+  * Carry-less multiplication (`_mm_clmulepi64_si128`) with 64-byte parallel folding and Barrett reduction (`__builtin_cpu_supports("pclmul")`), reaching ~9.5 GB/s in streaming (~6× faster than scalar slice-by-8/16) and > 300 GB/s in cache, with scalar fallback.
+* **Vectorized TTA & $O(1)$ GRZip MTF**:
+  * Single-pass stereo deinterleaving/decorrelation and SIMD polynomial prediction in TTA, and $O(1)$ inverse rank table (`MTF_Pos[256]`) in GRZip.
 * **Compiler & Link-Time Optimization**:
-  * Production builds compiled with `-O3`, Link-Time Optimization (`-flto=auto`), dead code elimination (`-Wl,--gc-sections`), and symbol stripping.
+  * Linux x86_64 production builds use `-O3`, Link-Time Optimization (`-flto=auto`), dead code elimination (`-Wl,--gc-sections`), and stripping (`sstrip` / `strip --strip-all`); Windows x64 and Linux ARM64 builds compile with `-O3` and `-s`.
 
 ---
 
 ## Ratio Optimization Mode: `-nobitexact`
 
-The primary goal of this project is, of course, a faithful reimplementation of FreeArc in C, reproducing the exact behavior of the historical 0.67 binary, that is, producing archives that are bit-for-bit exact with it. This is done in order to preserve the format, and to have a "modern" implementation, faithful to the original and compilable on any current system. It also makes it possible to understand the mechanisms Bulat Ziganshin used back then to achieve such a compression ratio. That said, while working on this reimplementation, I noticed on several occasions that certain parameters could be "pushed" further, and others adjusted differently, to obtain a much better ratio, to the point that I sometimes had to "throttle" certain algorithms/search functions in order to match the exact behavior of the historical binary. Once bit-exactness was achieved, and various optimizations applied to improve performance (encoding time), I wondered how much better the FreeArc-c port could compress compared to the legacy version if it were no longer "constrained" by the bit-for-bit exact rule, while of course remaining 100% compatible with the specifications of the FreeArc format, meaning archives that decompress perfectly with the historical decoder under Windows. In short, what does the .arc format really "have under the hood", and how far can we go? The result is, on the face of it, more than interesting! I therefore decided to introduce a new argument (also taken into account in the `.ini` file): `-nobitexact` (alias: `--max-ratio`).
+The primary goal of this project is a faithful reimplementation of FreeArc in C/C++, reproducing the exact behavior of the historical 0.67 binary so archives remain bit-for-bit identical with it. While building `freearc-c`, several opportunities emerged to push ratios and throughput further where parameters or heuristics were previously throttled for 32-bit constraints or historical bit-exactness.
 
-If this argument is specified on the command line (for encoding only, of course), then FreeArc-c is no longer "limited" to bit-exactness with the legacy encoder, and "unleashes" the maximum possible power for the algorithms used, while also adding a few additional mechanisms upstream to maximize the ratio. As mentioned earlier, the archives produced this way, although smaller than those produced in bit-exact mode, are fully valid `.arc` archives that can be decoded by the legacy `unarc.exe` 0.67 (or any other decoder of the FreeArc 0.6x format).
+Specifying **`-nobitexact`** (alias: **`--max-ratio`**) lifts those legacy bit-exactness caps during **archive creation** while keeping the resulting container and streams **100% compatible with the FreeArc 0.6x format** and extractable by legacy Windows `unarc.exe 0.67`.
 
-### Final Benchmark Results on Matt Mahoney 10 GB Corpus (79,431 files)
+### Benchmark Results on Matt Mahoney 10 GB Corpus (`79,431` files, `10,000,000,000 B` / `9.313 GiB` payload)
 
-| Compressor / Profile | Archive Size | Gain vs Legacy 0.67 | Difference vs 7-Zip Ultra | Encoding Time | Wine 0.67 Decompression |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **FreeArc 0.67 Legacy** (`-mx`) | 3,961,251,304 B (3.689 GiB) | Reference (0) | +308.57 MiB (larger) | ~85 min | All OK |
-| **7-Zip 26.02 Ultra** (`-mx=9`) | 3,652,683,873 B (3.402 GiB) | −308.57 MiB | Reference (0) | ~178 min | Incompatible (.7z reference) |
-| **FreeArc-c `-nobitexact`** (`-mx`) | **3,602,764,507 B (3.355 GiB)** | **−358.49 MiB (−9.05%)** | **−49.92 MiB (MORE COMPACT!)** | **21.85 min** | **All OK** |
+Measured on an **11th Gen Intel® Core™ i3-1115G4 @ 3.00GHz** (2 cores / 4 threads, AVX2/AVX-512, NVMe SSD):
 
-* **Speed**: Complete encoding of the 10 GB dataset (79,431 files) took only **21.85 minutes** (compared to ~85 min for historical FreeArc 0.67 and ~178 min for 7-Zip Ultra), measured on an **11th Gen Intel® Core™ i3-1115G4 @ 3.00GHz (2 cores / 4 threads)**.
-* **100% Backward Compatible (Strict Invariant)**: The final 3.60 GB archive was fully verified and extracted with zero errors (`All OK`) under Wine using the original historical 32-bit `unarc.exe 0.67` binary.
+| Compressor / Profile | Archive Size | vs Bit-Exact (`-mx`) | vs 7-Zip Ultra | Encoding Time | Decoding Time (`unarc x` / native) | Legacy `unarc 0.67` (Wine) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **FreeArc 0.67 Legacy** (`-mx`) | 3,961,251,304 B (3.689 GiB) | −0.57 MiB | +294.28 MiB | ~85 min | — | All OK |
+| **FreeArc-c Bit-Exact** (`-mx`) | 3,961,852,890 B (3.690 GiB) | Reference (`0`) | +294.85 MiB | 22.22 min (`1,333.2 s`) | 63.9 s (`1.06 min`) | All OK |
+| **Zstandard 1.5.4** (`--ultra -22 -T4`) | 3,816,208,568 B (3.554 GiB) | −138.90 MiB (−3.68%) | +155.96 MiB | 118.38 min (`7,102.8 s`) | 27.7 s | N/A (`.tar.zst`) |
+| **7-Zip 26.02 Ultra** (`-mx=9 -ms=on`) | 3,652,676,518 B (3.402 GiB) | −294.85 MiB (−7.80%) | Reference (`0`) | 82.19 min (`4,931.5 s`) | 76.3 s | N/A (`.7z`) |
+| **FreeArc-c v1.4.5 `-nobitexact`** (`-mx`) | **3,352,618,009 B (3.122 GiB)** | **−581.01 MiB (−15.38%)** | **−286.16 MiB (−8.21%)** | **16.79 min (`1,007.7 s`)** | **353.3 s (`5.89 min`)** | **All OK (`448.9 s`)** |
+
+* **v1.4.5 vs Earlier `-nobitexact` (`v1.4.0`: `3.60 GB` / `3,602,280,111 B`)**: Cuts archive size by an additional **238.10 MiB** (`−6.93%`), encodes **~28.9% faster** (`1,007.7 s` vs `1,416.4 s`), and extracts **2.52× faster** (`353.3 s` / `27.00 MiB/s` vs `889.7 s`), all verified across all `79,431` files.
+* **vs 7-Zip Ultra & Zstandard**: Produces an archive **286.16 MiB (8.21%) smaller** than 7-Zip `-mx=9` while encoding **4.89× faster**, and **442.11 MiB (12.15%) smaller** than Zstandard `--ultra -22` while encoding **7.05× faster**.
+* **100% Backward Compatible**: The `3.35 GB` (`3,352,618,009 B`) archive passed full integrity verification (`unarc.exe t`, `All OK`, `rc=0` in `448.9 s`) under Wine using the historical 32-bit FreeArc 0.67 unpacker.
 
 ### Key Enhancements in `-nobitexact` Mode
 
-* **Deep LZMA Match Finder Parameterization**: Extends search cycles (`-mc=256..1000` vs 32 default) and fast bytes / nice match length (`-fb=128..273` vs 64), discovering deep long-distance match chains and significantly increasing dictionary match density.
-* **Intelligent Solid Stem Grouping**: Prioritizes clustering files by common filename stem and subpath rather than pure alphabetical extension ordering, bringing related files (e.g. `.cpp`/`.h`, `.html`/`.js`) adjacent in the solid stream to maximize cross-file LZ redundancy.
-* **High-Order Text Routing**: Routes textual data in `-mx` to deep PPMd (Order 16, up to 256 MB memory) paired with LZP and Dictionary pre-filters, substantially outperforming LZMA on source code, text files, and logs.
-* **Concurrent Multi-Block Compression**: Scales compression across available CPU threads without fragmenting solid streams, drastically cutting encoding time while maintaining byte-level decompression compatibility.
-* **Incompressible Data Bypass**: Automatically skips futile compression passes on pre-compressed data (`.arc`, `.uha`, `.gz`, `.xz`, `.7z`, `.zip`, `.zst`, etc.), freeing CPU cycles for compressible payload.
+* **Deep LZMA SDK 25 Parameterization**: Extends search cycles (`-mc=16..1000`, `-nobitexact -mx` default `mc512`) and fast bytes (`-fb=32..273`, `-nobitexact -mx` default `273`) with `192m` dictionaries (`96m` on < 16 GB RAM hosts), AVX2/SSE2 vectorized optimal parsing, adaptive BT4 pruning, and `LzFind25_x86_64.S` assembly kernels.
+* **Content-Aware Solid Sorting (`file_sort_smart`)**: Groups files by datatype/extension class, structural entropy & Morton-coded byte signature (or 4% GC bins for `$dna`), subpath stem clustering (`.cpp`/`.h`, `.html`/`.js`), and file size.
+* **Specialized Group Pipelines & Isolation**:
+  * `$code`: `rep:256m+lzma:...:lc4:lp0:pb0` tuned for source code (or folded into `$text` below 64 MB).
+  * `$text`: Dynamic `dict` + `lzp` + `4x4:ppmd:16:256m` (Order 16, widened `128m` tables on >= 8 GB systems).
+  * `$dna`: `rep:256m:l128:s64+4x4:ppmd:7:16m` for genomic sequences (`.fa`, `.fasta`, `.fastq`, etc.).
+  * `$exe`: PE/ELF magic verification (`detect_x86_exec_magic`) isolating x86/x86_64 binaries for BCJ/EXE filtering while excluding non-x86 executables.
+  * `$compressed` & `$precomp`: Fast routing bypassing disk entropy probing for pre-compressed archives/media (`rep+tor`) and compressible PDF/SWF containers (`rep+lzma:16m`).
+* **Fast 4 MiB MDL Block Selection**: Probes sampled chunks on blocks $\ge 12\text{ MiB}$ (`tor:8m:c3`, `delta+lzma:4m` vs `lzma:4m`, `mm+grzip`) to skip counterproductive `delta`/`mm` passes or drop straight to fast compression on incompressible payloads.
 
 ---
 
@@ -331,26 +335,34 @@ If this argument is specified on the command line (for encoding only, of course)
 ```
 .
 ├── build/
-│   ├── linux/           # Linux 64-bit binaries (arc, unarc, arc.sfx)
-│   └── win64/           # Windows 64-bit binaries (arc.exe, unarc.exe)
-├── build.sh             # Fast multi-mode build script
-├── build_deb.sh         # Complete build + test + Debian .deb packager
-├── Makefile             # Root Makefile (all, win64, both, debug, clean, test, test-win64, deb, install)
+│   ├── linux/           # Linux x86_64 binaries (arc, unarc, arc.sfx, arc.ini.example)
+│   ├── linux-arm64/     # Linux ARM64 binaries (arc, unarc, arc.sfx, arc.ini.example)
+│   └── win64/           # Windows 64-bit binaries (arc.exe, unarc.exe, arc.ini.example)
+├── build.sh             # Fast multi-mode Linux build script
+├── build_deb.sh         # Complete Linux build + test + Debian .deb packager
+├── arc.ini.example      # Annotated sample configuration file
+├── Makefile             # Root Makefile (all, win64, arm64, both, all-platforms, debug, clean, test, test-win64, test-arm64, test-all, deb, install, uninstall)
 ├── README.md            # Project documentation
 ├── FORMAT.md            # FreeArc .arc container technical specification
 ├── LICENSE              # GPL-2.0 License
 ├── man/                 # Standard roff manual pages (arc.1, unarc.1)
-├── src/                 # Native C/C++ source code, headers, and codecs
-│   ├── arc.cpp          # Archiver CLI & management logic
+├── src/                 # Native C/C++ & x86-64 ASM source code
+│   ├── arc.cpp          # Archiver CLI, routing, sorting & management logic
 │   ├── unarc.cpp        # Unpacker CLI & extraction logic
 │   ├── ArcStructure.h   # FreeArc archive format structures & parser
 │   ├── ArcProcess.h     # High-level archive processing routines
 │   ├── ArcCommand.h     # CLI options parser & dispatcher
+│   ├── ArcIni.h         # arc.ini discovery and configuration parser
 │   ├── WinCompat.h      # Windows 64-bit POSIX compatibility shims
-│   └── Compression/     # Compression codecs (4x4, LZMA, PPMD, GRZip, Tornado, TTA, Filters)
+│   └── Compression/     # Codecs (4x4, LZMA, LZMA2/sdk25, PPMD, GRZip, Tornado, TTA, Filters, asm/)
+├── bench/               # Decoder & encoder A/B benchmark harnesses and fuzzers
 ├── tests/
-│   ├── run_tests.sh       # Comprehensive Linux automated test suite (24 tests)
-│   └── run_tests_win64.sh # Automated Windows 64-bit & cross-platform test suite (24 tests)
+│   ├── run_tests.sh        # Linux x86_64 automated test suite (26 tests)
+│   ├── run_tests_win64.sh  # Windows 64-bit & Wine interoperability test suite (26 tests)
+│   ├── run_tests_arm64.sh  # Linux ARM64 QEMU conformance test suite (23 tests)
+│   ├── test_bitexact.sh    # Bit-exact parity (13) & crypto roundtrip (7) checker
+│   ├── test_arc_ini.sh     # arc.ini configuration parity suite (9 checks)
+│   └── test_compat_modes.sh # Compatibility modes & legacy 0.67 Wine parity suite (23/24 checks)
 └── tests_files/         # Test artifacts
     ├── corpus/          # Standard test corpus (binaries, text, code, nested dirs)
     └── samples_legacy/  # Legacy FreeArc .arc archives (example.arc, data2.arc)
@@ -364,11 +376,11 @@ Build a standard `.deb` package with a single command:
 ```bash
 ./build_deb.sh
 ```
-This automatically compiles the suite, validates the test suite, and installs stripped binaries, manpages, and documentation into a standalone Debian package (`freearc_1.3.4_amd64.deb`).
+This automatically compiles the Linux x86_64 suite, runs the test suite, and packages stripped binaries, manpages, and documentation into a standalone Debian package (`freearc_1.4.5_amd64.deb`).
 
 To install the generated package:
 ```bash
-sudo dpkg -i freearc_1.3.4_amd64.deb
+sudo dpkg -i freearc_1.4.5_amd64.deb
 ```
 
 ---

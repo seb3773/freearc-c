@@ -1,13 +1,15 @@
-# x86-64 assembly match finders
+# x86-64 assembly match finders & decoder kernels
 
-Hand-written x86-64 kernels for the two encoder hot spots. Each one returns exactly
-the same matches as the C code it replaces, so archives stay byte-for-byte identical.
-The C code stays in place as the reference and as the portable fallback.
+Hand-written x86-64 kernels for the hot encoder and LZMA decoder loops. Each match-finder
+kernel matches the C code semantics it accelerates (C stays in place as reference and portable
+fallback).
 
 | File | Replaces (C) | Used by |
 |---|---|---|
-| `LZMA2/asm/LzFind_x86_64.S` | `GetMatchesSpec1`, `SkipMatchesSpec`, `Ht_GetMatchesSpec` (`LZMA2/C/LzFind.c`) | bit-exact LZMA: BT2/BT3/BT4 (`lzma:mfbt*`, archive directory), HT4 rows of 64+ entries (`lzma:...:mc64` and above; the default profiles use mc4-mc32, where the inlined C code is faster) |
+| `LZMA2/asm/LzFind_x86_64.S` | `GetMatchesSpec1`, `SkipMatchesSpec`, `Ht_GetMatchesSpec` (`LZMA2/C/LzFind.c`) | bit-exact LZMA: BT2/BT3/BT4 (`lzma:mfbt*`, archive directory), HT4 rows of 64+ entries (`lzma:...:mc64` and above; default profiles use mc4–mc32 inlined C) |
+| `LZMA2/asm/LzFind25_x86_64.S` | `GetMatchesSpec1`, `SkipMatchesSpec` (`LZMA2/sdk25/LzFind.c`), `GetMatchesSpecN_2` (`LZMA2/sdk25/LzFindOpt.c`) | `-nobitexact` LZMA SDK 25.01 encoder (single-threaded & batched MT BT4 walks) |
 | `Tornado/asm/tor_match_x86_64.S` | `find_match_len`, the 4-byte extension loops (`Tornado/MatchFinder.cpp`) | Tornado `-m1`, `-m2`, `-mtor`, `tor:N` |
+| `LZMA2/sdk25/asm/LzmaDecOpt.S` | `LzmaDec_DecodeReal_3` (`LZMA2/sdk25/LzmaDec.c`) | `unarc`, SFX, and encoder self-decode (`LZMA_ASM=1` on x86-64) |
 | `asm/fa_cpu_x86_64.S` | – | runtime AVX2 detection (CPUID + XGETBV) |
 | `asm/fa_x86_64.h` | – | ABI macros, `LZEXT` match-extension macro |
 

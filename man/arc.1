@@ -1,4 +1,4 @@
-.TH ARC 1 "October 2026" "FreeArc 1.2" "User Commands"
+.TH ARC 1 "November 2026" "FreeArc-c 1.4.5" "User Commands"
 .SH NAME
 arc \- FreeArc high-compression archive manager
 .SH SYNOPSIS
@@ -8,37 +8,37 @@ arc \- FreeArc high-compression archive manager
 .B arc
 is a modern native C/C++ implementation of the FreeArc archiver. It provides
 high compression ratios through advanced algorithms (LZMA, PPMD, GRZip, Tornado,
-TTA) combined with intelligent preprocessors (REP, DICT, DELTA, BCJ/EXE, MM).
+TTA) combined with intelligent preprocessors (REP, DICT, DELTA, BCJ/EXE, MM, LZP).
 .SH COMMANDS
 .TP
-.B a
+.B a, add, c, create
 Add files to archive (default).
 .TP
-.B u
+.B u, update
 Update newer files and add new files.
 .TP
-.B f
+.B f, freshen
 Freshen existing files in archive (no new files added).
 .TP
-.B d
+.B d, delete
 Delete files or patterns from archive.
 .TP
-.B m
+.B m, move
 Move files to archive (delete from disk after archiving).
 .TP
-.B l
+.B l, list
 Display archive file listing.
 .TP
 .B v
 Display verbose archive file listing with Unix attributes and CRCs.
 .TP
-.B t
+.B t, test
 Test archive integrity.
 .TP
 .B e
 Extract files without pathnames.
 .TP
-.B x
+.B x, extract
 Extract files with pathnames.
 .TP
 .B p
@@ -49,43 +49,67 @@ Convert an existing archive to a standalone self-extracting executable (SFX).
 .SH OPTIONS
 .TP
 .BI \-m \ METHOD
-Select compression method or level (e.g. \fBstoring\fR, \fBlzma\fR, \fBtor\fR, \fBppmd\fR, \fBgrzip\fR, \fBtta\fR, \fB-m0\fR..\fB-m5\fR, \fB-mx\fR).
+Select compression method, level, or filter chain (e.g. \fBstoring\fR, \fBlzma\fR, \fBtor\fR, \fBppmd\fR, \fBgrzip\fR, \fBtta\fR, \fB-m0\fR..\fB-m5\fR, \fB-mx\fR, \fB-m4x\fR, \fB-m5x\fR, \fB-m exe+lzma\fR).
+.TP
+.B \-bcj
+Activate x86 executable branch filter (alias: \fB-exe\fR).
+.TP
+.B \-rep
+Activate repetition filter (\fBrep:64m\fR).
+.TP
+.B \-delta
+Activate delta filter.
+.TP
+.B \-dict
+Activate dictionary filter.
+.TP
+.B \-lzp
+Activate LZP filter.
+.TP
+.B \-mm
+Activate multimedia filter.
 .TP
 .B \-sfx\fR[\fB=\fISTUB\fR]
 Create a standalone self-extracting executable (.sfx or .run).
 .TP
 .B \-s\fR, \fB\-s-
-Create solid archive (default) or non-solid archive.
+Create solid archive (default) or non-solid archive (one data block per file).
+.TP
+.BI \-s SIZE
+Set solid block size limit (e.g. \fB-s64m\fR).
+.TP
+.BI \-s N\fRf
+Set solid block limit by file count (e.g. \fB-s10f\fR).
 .TP
 .B \-r\fR, \fB\-r-
 Recurse subdirectories (default) or disable recursion.
 .TP
-.BI \-p \ PASS
-Encrypt archive data blocks using password.
-.TP
-.BI \-hp \ PASS
-Encrypt archive headers and data using password.
+.B \-p \fIPASS\fR, \fB\-hp \fIPASS
+Encrypt data blocks (\fB-p\fR) or headers and data (\fB-hp\fR) with password.
 .TP
 .BI \-ae \ ALG
-Encryption algorithm: \fBaes\fR (default), \fBblowfish\fR, \fBtwofish\fR, or \fBserpent\fR.
+Encryption algorithm: \fBaes\fR (default), \fBaes-128\fR, \fBaes-256\fR, \fBblowfish\fR, \fBtwofish\fR, or \fBserpent\fR.
 .TP
 .BI \-v SIZE
 Create multi-volume archive (e.g. \fB-v10m\fR, \fB-v1440k\fR).
 .TP
-.BI \-x \ PATTERN
-Exclude files matching pattern (@listfile supported).
-.TP
-.BI \-i \ PATTERN
-Include only files matching pattern (@listfile supported).
+.BI \-x \ PATTERN\fR,\ \fB\-i \ PATTERN
+Exclude (\fB-x\fR) or include only (\fB-i\fR) files matching pattern (\fB@listfile\fR supported).
 .TP
 .B \-so
 Write extracted files to stdout.
 .TP
-.B \-ep
-Store basenames only (strip directories).
+.B \-ep\fR, \fB\-ep1
+Store basenames only (\fB-ep\fR) or strip the first path component (\fB-ep1\fR).
 .TP
-.BI \-dp \ DIR
-Set base disk path for compression/extraction (supports \fB--diskpath=DIR\fR).
+.BI \-ap \ PATH
+Set archive path prefix.
+.TP
+.BI \-z \ TEXT
+Set archive comment (or \fB-zFILE\fR to read from a file).
+.TP
+.BI \-dp \ DIR\fR,\ \fB\-\-diskpath= DIR
+Set base disk path for compression/extraction.
 .TP
 .BI \-ld \ MEM
 Limit memory usage for decompression (e.g. \fB-ld64m\fR, \fB--LimitDecompMem=64m\fR).
@@ -93,10 +117,25 @@ Limit memory usage for decompression (e.g. \fB-ld64m\fR, \fB--LimitDecompMem=64m
 .BI \-lc \ MEM
 Limit memory usage for compression (e.g. \fB-lc256m\fR, \fB--LimitCompMem=256m\fR).
 .TP
-.BI \-lo \ FILE
-Log all console output, progress, and errors to file (supports \fB--logfile=FILE\fR).
+.BI \-lo \ FILE\fR,\ \fB\-\-logfile= FILE
+Mirror all console output, progress, and errors to file.
 .TP
-.BI \-mt \ NUM
-Set number of worker threads (supports \fB--MultiThreaded=NUM\fR).
+.BI \-mt \ NUM\fR,\ \fB\-\-multithreaded= NUM
+Set number of worker threads.
+.TP
+.B \-q\fR, \fB\-\-noarcext
+Enable quiet mode (\fB-q\fR) or avoid appending \fB.arc\fR to the archive name (\fB--noarcext\fR).
+.TP
+.BI \-cfg FILE\fR,\ \fB\-\-config= FILE\fR,\ \fB\-cfg-\fR,\ \fB\-\-no-config\fR,\ \fB\-\-print-config
+Specify, disable, or inspect active \fBarc.ini\fR configuration.
+.TP
+.B \-nobitexact\fR, \fB\-\-max-ratio
+Maximize compression ratio while remaining format-compatible with legacy \fBunarc 0.67\fR.
+.TP
+.BI \-mc= N\fR,\ \fB\-fb= N
+Override LZMA match finder search cycles (\fB16..1000\fR) and fast bytes (\fB32..273\fR).
+.TP
+.BI @ LIST
+Read file paths from \fILIST\fR (one path per line).
 .SH AUTHOR
 Modern native C/C++ port by seb3773. Original FreeArc format by Bulat Ziganshin.

@@ -5,7 +5,7 @@
 ;   1. Explicit CLI flag: -cfg<path> or --config <path>
 ;   2. Executable directory: arc.ini located alongside arc / unarc
 ;   3. Current working directory: ./arc.ini
-;   4. System-wide configuration: /etc/arc.ini (Linux) or %APPDATA%\FreeArc\arc.ini (Windows)
+;   4. System-wide configuration: /etc/arc.ini (Unix/Linux)
 ;
 ; Disabling configuration:
 ;   Pass -cfg- or --no-config on the command line.

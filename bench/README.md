@@ -18,7 +18,7 @@ Archives cover `-m1..-m5`, `-mx`, `-m4x`, `-m5x`, lzma (several lc/lp/pb and
 match-finder variants), tor (levels 1/3/5/7), ppmd, grzip, tta, the
 `-bcj/-delta/-dict/-lzp/-rep/-mm` filters, `-m0`, AES and `4x4:` multithreaded
 variants. Archives are created by this repo's encoder, which is bit-exact
-with legacy FreeArc 0.67 (`tests/test_bitexact.sh`).
+with legacy FreeArc 0.67 (`tests/test_bitexact.sh --verify`).
 
 ## Bit-exact verification
 

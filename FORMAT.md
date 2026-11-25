@@ -128,7 +128,7 @@ The `DIR_BLOCK` contains the complete catalog of files stored in the archive:
    - `issymlink[]`: Symbolic link indicators.
    - `symlink_target[]`: Symlink target path string.
 
-The `DIR_BLOCK` payload is compressed with LZMA (default `lzma:1mb:normal:bt4:32`), minimizing metadata overhead across large file sets while maintaining fast directory retrieval.
+The `DIR_BLOCK` and `FOOTER_BLOCK` control payloads are compressed with LZMA (`lzma:mfbt4:d1m` — 1 MB dictionary, `bt4` match finder), minimizing metadata overhead across large file sets while maintaining fast directory retrieval.
 
 ---
 
@@ -146,16 +146,16 @@ FreeArc combines preprocessors and compressors using string specifications. Filt
 | | Tornado | `tor` | High-speed LZ77 compressor |
 | | TTA | `tta` | True Audio lossless multichannel codec |
 | | 4x4 | `4x4` | Intra-stream multithreading chunked wrapper (`4x4:method[:size][:threads]`) |
-| **Filters** | BCJ | `bcj` | Branch/Call/Jump converter for x86 binaries |
+| **Filters** | BCJ | `bcj` (`exe`) | Branch/Call/Jump converter for x86 binaries |
 | | REP | `rep` | Long-distance repetition preprocessor |
 | | DICT | `dict` | Dictionary-based word preprocessor |
 | | DELTA | `delta` | Byte difference preprocessor for structured tables |
 | | MM | `mm` | Multimedia channel-interleaving preprocessor |
 | | LZP | `lzp` | Lempel-Ziv + Prediction preprocessor |
-| **Ciphers** | AES | `aes` | AES-128 / AES-256 in CTR or CBC mode |
-| | Blowfish | `blowfish` | Bruce Schneier 128-bit cipher |
-| | Twofish | `twofish` | Counter-mode 256-bit Twofish |
-| | Serpent | `serpent` | Counter-mode 256-bit Serpent |
+| **Ciphers** | AES | `aes` | AES-128 / AES-192 / AES-256 in CTR (default) or CFB mode |
+| | Blowfish | `blowfish` | Bruce Schneier cipher in CTR or CFB mode |
+| | Twofish | `twofish` | Twofish cipher in CTR or CFB mode |
+| | Serpent | `serpent` | Serpent cipher in CTR or CFB mode |
 
 ### Example Pipeline String
 ```
@@ -171,4 +171,4 @@ rep:512m+bcj+lzma:max:64m:bt4:128
 
 * **Data Encryption (`-p`)**: Encrypts individual `DATA_BLOCK`s. The block compressor string is wrapped with a cipher descriptor (e.g. `aes+lzma`).
 * **Header Encryption (`-hp`)**: Encrypts both `DIR_BLOCK` and `FOOTER_BLOCK`. The entire file inventory, filenames, directory structure, sizes, and timestamps are protected and unreadable without the password.
-* Key derivation utilizes **PKCS#5 PBKDF2** with SHA-1 or SHA-512 and random salts.
+* Key derivation utilizes **PKCS#5 PBKDF2** with HMAC-SHA-512 (`numIterations = 1000` by default) and random salts.
