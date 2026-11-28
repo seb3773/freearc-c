@@ -385,45 +385,56 @@ void SetFileDateTime (const CFILENAME Filename, time_t mtime)
   _wutime (wname, &times);
 }
 
-// Execute program `filename` in the directory `curdir` optionally waiting until it finished
-void RunProgram (const CFILENAME filename, const CFILENAME curdir, int wait_finish)
+// Launch a Windows child process, suppressing spurious console windows when
+// the caller itself has no attached console (e.g. GUI hosts loading unarc.dll).
+static BOOL run_win_process (LPCSTR app, LPSTR cmd, const CFILENAME curdir,
+                             int wait_finish, DWORD *exit_code)
 {
   STARTUPINFOA si;
   PROCESS_INFORMATION pi;
   ZeroMemory (&si, sizeof(si));
   si.cb = sizeof(si);
   ZeroMemory (&pi, sizeof(pi));
-  BOOL process_created = CreateProcessA (filename, NULL, NULL, NULL, FALSE, 0, NULL, curdir, &si, &pi);
 
-  if (process_created && wait_finish)
-      WaitForSingleObject (pi.hProcess, INFINITE);
+  DWORD flags = (GetConsoleWindow () == NULL) ? CREATE_NO_WINDOW : 0;
+  BOOL process_created = CreateProcessA (app, cmd, NULL, NULL, FALSE, flags,
+                                         NULL, curdir, &si, &pi);
+  if (!process_created) {
+    if (exit_code) {
+      DWORD err = GetLastError ();
+      *exit_code = err ? err : 1;
+    }
+    return FALSE;
+  }
 
+  DWORD code = 0;
+  if (wait_finish) {
+    WaitForSingleObject (pi.hProcess, INFINITE);
+    GetExitCodeProcess  (pi.hProcess, &code);
+  }
   CloseHandle (pi.hProcess);
   CloseHandle (pi.hThread);
+  if (exit_code)
+    *exit_code = code;
+  return TRUE;
+}
+
+// Execute program `filename` in the directory `curdir` optionally waiting until it finished
+void RunProgram (const CFILENAME filename, const CFILENAME curdir, int wait_finish)
+{
+  run_win_process (filename, NULL, curdir, wait_finish, NULL);
 }
 
 // Execute `command` in the directory `curdir` optionally waiting until it finished
 int RunCommand (const CFILENAME command, const CFILENAME curdir, int wait_finish)
 {
-  STARTUPINFOA si;
-  PROCESS_INFORMATION pi;
-  ZeroMemory (&si, sizeof(si));
-  si.cb = sizeof(si);
-  ZeroMemory (&pi, sizeof(pi));
+  if (!command)
+    return 1;
   DWORD ExitCode = 0;  // код возврата вызываемой программы
-
   char cmd_buf[MY_FILENAME_MAX];
   snprintf(cmd_buf, sizeof(cmd_buf), "%s", command);
-  BOOL process_created = CreateProcessA (NULL, cmd_buf, NULL, NULL, FALSE, 0, NULL, curdir, &si, &pi);
-  if (process_created)
-  {
-    if (wait_finish)
-      WaitForSingleObject (pi.hProcess, INFINITE);
-      GetExitCodeProcess  (pi.hProcess, &ExitCode);
-    CloseHandle (pi.hProcess);
-    CloseHandle (pi.hThread);
-  }
-  return ExitCode;
+  run_win_process (NULL, cmd_buf, curdir, wait_finish, &ExitCode);
+  return (int)ExitCode;
 }
 
 // Execute file `filename` in the directory `curdir` optionally waiting until it finished
