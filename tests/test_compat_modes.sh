@@ -268,8 +268,8 @@ test_lzma_deep_parameterization() {
   local arc_deep="$T/lzma_deep.arc"
   local arc_custom="$T/lzma_custom.arc"
 
-  # Compress with default vs -nobitexact at -mx
-  (cd "$ROOT_DIR" && "$ARC" a -q -mx "$arc_def" src/arc.cpp)
+  # Compress with -m5x (fast LZMA normal) vs -nobitexact -mx
+  (cd "$ROOT_DIR" && "$ARC" a -q -m5x "$arc_def" src/arc.cpp)
   (cd "$ROOT_DIR" && "$ARC" a -q -nobitexact -mx "$arc_deep" src/arc.cpp)
 
   local sz_def
@@ -278,9 +278,9 @@ test_lzma_deep_parameterization() {
   sz_deep=$(wc -c < "$arc_deep")
 
   if [ "$sz_deep" -lt "$sz_def" ]; then
-    pass "-nobitexact -mx automatically leverages deep LZMA (size: $sz_deep < default: $sz_def)"
+    pass "-nobitexact -mx automatically leverages deep LZMA/PPMd (size: $sz_deep < -m5x: $sz_def)"
   else
-    fail "-nobitexact -mx did not improve size over default (deep: $sz_deep, def: $sz_def)"
+    fail "-nobitexact -mx did not improve size over -m5x (deep: $sz_deep, def: $sz_def)"
   fi
 
   # Test custom -fb and -mc flags
@@ -321,8 +321,8 @@ test_text_ppmd_tuning() {
   local arc_def_mx="$T/text_def_mx.arc"
   local arc_nobit_mx="$T/text_nobit_mx.arc"
 
-  # In default -mx, text uses dict+lzma5; in -nobitexact -mx, text routes to dict+lzp+ppmd:16:256m
-  (cd "$ROOT_DIR" && "$ARC" a -q -mx "$arc_def_mx" src/arc.cpp)
+  # In default -m5x, text uses dict+lzma5; in -nobitexact -m5x/-mx, text routes to dict+lzp+ppmd
+  (cd "$ROOT_DIR" && "$ARC" a -q -m5x "$arc_def_mx" src/arc.cpp)
   (cd "$ROOT_DIR" && "$ARC" a -q -nobitexact -mx "$arc_nobit_mx" src/arc.cpp)
 
   local sz_def_mx sz_nobit_mx
@@ -330,9 +330,9 @@ test_text_ppmd_tuning() {
   sz_nobit_mx=$(wc -c < "$arc_nobit_mx")
 
   if [ "$sz_nobit_mx" -lt "$sz_def_mx" ]; then
-    pass "-nobitexact -mx successfully routes text to deep PPMd chain (size: $sz_nobit_mx < default: $sz_def_mx)"
+    pass "-nobitexact -mx successfully routes text to deep PPMd chain (size: $sz_nobit_mx < -m5x: $sz_def_mx)"
   else
-    fail "-nobitexact -mx failed to compress text smaller (nobit: $sz_nobit_mx, def: $sz_def_mx)"
+    fail "-nobitexact -mx failed to compress text smaller (nobit: $sz_nobit_mx, -m5x: $sz_def_mx)"
   fi
 
   # Extract nobitexact PPMd text archive with modern unarc and verify integrity

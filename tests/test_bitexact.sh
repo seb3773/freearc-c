@@ -58,6 +58,13 @@ PYEOF
 declare -a CASES=(
   "m1:        -mt1 -m1"
   "m5:        -mt1 -m5"
+  "m6:        -mt4 -m6"
+  "m7:        -mt4 -m7"
+  "m8:        -mt4 -m8"
+  "m9:        -mt4 -m9"
+  "mx:        -mt4 -mx"
+  "m6x:       -mt4 -m6x"
+  "m9x:       -mt4 -m9x"
   "lzma:      -mt1 -mlzma"
   "tor:       -mt1 -mtor"
   "ppmd:      -mt1 -mppmd"

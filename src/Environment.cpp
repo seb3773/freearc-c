@@ -252,9 +252,23 @@ uint64 GetMaxMemToAlloc (void)
 
 uint64 GetAvailablePhysicalMemory (void)
 {
+#ifdef __linux__
+  FILE *f = fopen("/proc/meminfo", "r");
+  if (f) {
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+      unsigned long long mem_kb = 0;
+      if (sscanf(line, "MemAvailable: %llu kB", &mem_kb) == 1) {
+        fclose(f);
+        return (uint64)mem_kb * 1024ull;
+      }
+    }
+    fclose(f);
+  }
+#endif
   struct sysinfo si;
     sysinfo(&si);
-  return (uint64)si.freeram*si.mem_unit;
+  return ((uint64)si.freeram + (uint64)si.bufferram) * si.mem_unit;
 }
 
 int GetProcessorsCount (void)

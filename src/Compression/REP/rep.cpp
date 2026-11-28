@@ -770,6 +770,7 @@ finished:
 }
 
 extern "C" uint64 GetPhysicalMemory (void);
+extern "C" uint64 GetAvailablePhysicalMemory (void);
 
 int rep_compress (unsigned BlockSize, int MinCompression, int ChunkSize, int MinMatchLen, int Barrier, int SmallestLen, int HashBits, int Amplifier, CALLBACK_FUNC *callback, void *auxdata)
 {
@@ -778,18 +779,22 @@ int rep_compress (unsigned BlockSize, int MinCompression, int ChunkSize, int Min
         int L = 0;
         int BaseHashSize = CalcHashSize(HashBits, BlockSize, SmallestLen, MinMatchLen, ChunkSize, Amplifier, &L);
         if (BaseHashSize >= 4096) {
-            // Use 2x legacy hasharr budget (BaseHashSize * 8 B) for 4-way tagged buckets when physical RAM comfortably allows it
+            // Use 2x legacy hasharr budget (BaseHashSize * 8 B) for 4-way tagged buckets when physical/available RAM comfortably allows it
             size_t nb = (size_t)BaseHashSize / 4;
             size_t p2 = 1;
             while ((p2 << 1) <= nb) p2 <<= 1;
             if (p2 >= 1024) {
-                uint64 phys = GetPhysicalMemory();
+                uint64 phys  = GetPhysicalMemory();
+                uint64 avail = GetAvailablePhysicalMemory();
+                uint64 cap   = (avail > 0 && (phys == 0 || avail < phys))
+                                 ? mymax(phys / 3ull, avail)
+                                 : phys;
                 uint64 conc = (uint64)mymax(1, mymin(GetCompressionThreads(), 4));
                 uint64 buckets_2x = (uint64)p2 * 4ull * (uint64)sizeof(RepSlot8);
                 uint64 single_2x = (uint64)BlockSize + buckets_2x;
-                bool allow_2x = (phys >= 4ull * (uint64)gb &&
-                                 single_2x <= phys / 3ull &&
-                                 buckets_2x * conc <= phys / 6ull);
+                bool allow_2x = (cap >= 4ull * (uint64)gb &&
+                                 single_2x <= cap / 3ull &&
+                                 buckets_2x * conc <= cap / 3ull);
                 if (allow_2x) {
                     int rc = rep_compress_impl<true>(BlockSize, MinCompression, ChunkSize, MinMatchLen, Barrier, SmallestLen, HashBits, Amplifier, p2, callback, auxdata);
                     if (rc != FREEARC_ERRCODE_NOT_ENOUGH_MEMORY)
