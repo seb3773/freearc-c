@@ -91,11 +91,11 @@ Binaries are stripped production builds organized cleanly by target platform (`v
 ### Linux (x86_64) — `./build/linux/`
 | Binary | Size | Description |
 |---|---|---|
-| `build/linux/arc` | 1.51 MiB (`1,580,664 B`) | Full archiver and archive manager (create, update, freshen, delete, move, SFX conversion) |
+| `build/linux/arc` | 1.51 MiB (`1,582,200 B`) | Full archiver and archive manager (create, update, freshen, delete, move, SFX conversion) |
 | `build/linux/unarc` | 837 KiB (`857,240 B`) | Standalone unpacker, lister, and integrity tester |
 | `build/linux/arc.sfx` | 837 KiB (`857,240 B`) | Standalone Linux ELF stub for self-extracting packages (`.sfx` / `.run`) |
 | `build/linux/libunarc.so` | 877 KiB (`897,544 B`) | Shared C/C++ decoder library (`dlopen` / `-lunarc`) |
-| `build/linux/libunarc.a` | 1.35 MiB (`1,420,698 B`) | Static C/C++ decoder archive (link with `-lstdc++ -lpthread -lm`) |
+| `build/linux/libunarc.a` | 1.36 MiB (`1,421,978 B`) | Static C/C++ decoder archive (link with `-lstdc++ -lpthread -lm`) |
 | `build/linux/unarc.h` | 6.1 KiB (`6,211 B`) | Public C header (legacy `FreeArcExtract` + modern `unarc_run` API) |
 
 ### Linux ARM64 (aarch64) — `./build/linux-arm64/`
@@ -105,13 +105,13 @@ Binaries are stripped production builds organized cleanly by target platform (`v
 | `build/linux-arm64/unarc` | 967 KiB (`990,632 B`) | Standalone unpacker, lister, and integrity tester for Linux ARM64 |
 | `build/linux-arm64/arc.sfx` | 967 KiB (`990,632 B`) | Standalone Linux ARM64 ELF stub for self-extracting packages (`.sfx` / `.run`) |
 | `build/linux-arm64/libunarc.so` | 1.07 MiB (`1,120,696 B`) | Shared C/C++ decoder library for Linux ARM64 |
-| `build/linux-arm64/libunarc.a` | 1.39 MiB (`1,460,286 B`) | Static C/C++ decoder archive for Linux ARM64 |
+| `build/linux-arm64/libunarc.a` | 1.39 MiB (`1,461,838 B`) | Static C/C++ decoder archive for Linux ARM64 |
 | `build/linux-arm64/unarc.h` | 6.1 KiB (`6,211 B`) | Public C header |
 
 ### Windows (x86_64) — `./build/win64/`
 | Binary | Size | Description |
 |---|---|---|
-| `build/win64/arc.exe` | 1.70 MiB (`1,778,176 B`) | Standalone Windows 64-bit archiver (static MinGW-w64, zero runtime DLL dependencies) |
+| `build/win64/arc.exe` | 1.70 MiB (`1,779,200 B`) | Standalone Windows 64-bit archiver (static MinGW-w64, zero runtime DLL dependencies) |
 | `build/win64/unarc.exe` | 1.05 MiB (`1,096,704 B`) | Standalone Windows 64-bit unpacker and integrity tester |
 | `build/win64/unarc.dll` | 1.06 MiB (`1,111,552 B`) | Windows 64-bit decoder DLL (static C/C++ runtime, OS DLLs only) |
 | `build/win64/libunarc.dll.a` | 5.2 KiB (`5,298 B`) | MinGW-w64 import library for `unarc.dll` |
@@ -124,7 +124,7 @@ Binaries are stripped production builds organized cleanly by target platform (`v
 | `build/linux-riscv64/unarc` | 824 KiB (`843,304 B`) | Standalone unpacker, lister, and integrity tester for Linux RISC-V 64 |
 | `build/linux-riscv64/arc.sfx` | 824 KiB (`843,304 B`) | Standalone Linux RISC-V 64 ELF stub for `.sfx` / `.run` self-extractors |
 | `build/linux-riscv64/libunarc.so` | 801 KiB (`820,296 B`) | Shared C/C++ decoder library for Linux RISC-V 64 |
-| `build/linux-riscv64/libunarc.a` | 1.98 MiB (`2,080,044 B`) | Static C/C++ decoder archive for Linux RISC-V 64 |
+| `build/linux-riscv64/libunarc.a` | 1.99 MiB (`2,082,860 B`) | Static C/C++ decoder archive for Linux RISC-V 64 |
 | `build/linux-riscv64/unarc.h` | 6.1 KiB (`6,211 B`) | Public C header |
 
 ---
@@ -340,15 +340,16 @@ In other words, the encoder is free to evolve, but the format and its legacy dec
 
 Measured on an **11th Gen Intel® Core™ i3-1115G4 @ 3.00GHz** (2 cores / 4 threads, AVX2/AVX-512, NVMe SSD):
 
-| Compressor / Profile | Archive Size | vs Bit-Exact (`-m5` / `-m9`) | vs 7-Zip Ultra | Encoding Time | Decoding Time (`unarc x` / native) | Legacy `unarc 0.67` (Wine) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **FreeArc 0.67 Bit-Exact** (`-m5`) | 3,961,251,304 B (3.689 GiB) | −0.57 MiB vs `-m5` | +294.28 MiB | ~85 min | — | All OK |
-| **FreeArc-c Bit-Exact** (`-m5`) | 3,961,852,890 B (3.690 GiB) | Reference `-m5` | +294.85 MiB | 22.22 min (`1,333.2 s`) | 63.9 s (`1.06 min`) | All OK |
-| **Zstandard 1.5.4** (`--ultra -22 -T4`) | 3,816,208,568 B (3.554 GiB) | −138.90 MiB vs `-m5` | +155.96 MiB | 118.38 min (`7,102.8 s`) | 27.7 s | N/A (`.tar.zst`) |
-| **7-Zip 26.02 Ultra** (`-mx=9 -ms=on`) | 3,652,676,518 B (3.402 GiB) | −294.85 MiB vs `-m5` | Reference (`0`) | 82.19 min (`4,931.5 s`) | 76.3 s | N/A (`.7z`) |
-| **FreeArc-c `-nobitexact`** (`-m5`) | 3,350,993,828 B (3.121 GiB) | −582.56 MiB vs `-m5` | −287.71 MiB | ~16.8 min | ~353 s | All OK |
-| **FreeArc 0.67 Bit-Exact** (`-m9`) | 2,945,941,964 B (2.744 GiB) | Reference `-m9` | −674.00 MiB | — | — | All OK |
-| **FreeArc-c `-nobitexact`** (`-m9` / `-mx`) | **2,926,616,302 B (2.726 GiB)** | **−18.43 MiB (−19.33 MB) vs `-m9`** | **−692.43 MiB** | `8,319.95 s` | `327.24 s` (`t`) / `334.59 s` (`x`) | **All OK (`452.91 s`)** |
+| Compressor / Profile | Archive Size | Encoding Time | Decoding Time |
+| :--- | :--- | :--- | :--- |
+| **FreeArc 0.67 legacy (`-m5`)** | — | — | — |
+| **FreeArc-c Bit-Exact (`-m5`)** | — | — | — |
+| **FreeArc-c `-nobitexact` (`-m5`)** | 3,350,993,828 B (3.121 GiB) | ~16.8 min | ~353 s |
+| **FreeArc 0.67 legacy (`-m9`)** | 2,945,941,964 B (2.744 GiB) | — | — |
+| **FreeArc-c Bit-Exact (`-m9`/`-mx`)** | — | — | — |
+| **FreeArc-c `-nobitexact` (`-m9`/`-mx`)** | **2,926,616,302 B (2.726 GiB)** | `138.67 min` (`8,319.95 s`) | `327.24 s` (`t`) / `334.59 s` (`x`) |
+| **7-Zip 26.02 Ultra (`-mx=9 -ms=on`)** | 3,652,676,518 B (3.402 GiB) | `82.19 min` (`4,931.5 s`) | `76.3 s` |
+| **Zstandard 1.5.4 (`--ultra -22 -T4`)** | 3,816,208,568 B (3.554 GiB) | `118.38 min` (`7,102.8 s`) | `27.7 s` |
 
 * **Per-Level Scaling (`1.300 GiB` Mixed Corpus Subset — `23,610` files, `1,395,675,499 B`)**:
   `-m1..-m5` prioritize fast everyday throughput (`-m5`: `535,937,911 B`), while `-m6..-m9` scale independently in ratio, encode speed, and decode speed against `Bit-Exact` (`-m6..-m9`), with full `unarc.exe 0.67` compatibility:
@@ -360,7 +361,7 @@ Measured on an **11th Gen Intel® Core™ i3-1115G4 @ 3.00GHz** (2 cores / 4 thr
   | **`-m8`** | `528,493,074 B` | **`523,559,290 B`** | **−4.93 MB** | `601.54 s` -> **`430.25 s` (`1.40×`)** | `92.40 s / 92.58 s` -> **`76.21 s / 75.34 s`** | **All OK** |
   | **`-m9`** | `528,437,734 B` | **`523,167,755 B`** | **−5.27 MB** | `645.75 s` -> **`556.19 s` (`1.16×`)** | `102.41 s / 104.34 s` -> **`72.07 s / 79.52 s`** | **All OK** |
 
-* **vs 7-Zip Ultra & Zstandard (`-m9`)**: On the Matt Mahoney 10 GB corpus (`83,437` files, `10,000,000,000 B`), `-nobitexact -m9` achieves **`2,926,616,302 B` (`29.27%`)**, saving **692.43 MiB** over 7-Zip 26.02 (`-mx=9 -ms=on`) and **18.43 MiB (`19.33 MB`)** over legacy FreeArc `0.67 -m9`.
+* **vs 7-Zip Ultra & Zstandard (`-m9`)**: On the Matt Mahoney 10 GB corpus (`83,437` files, `10,000,000,000 B`), `-nobitexact -m9` achieves **`2,926,616,302 B` (`29.27%`)**, saving **692.43 MiB** over 7-Zip 26.02 (`-mx=9 -ms=on`) and **18.43 MiB (`19.33 MB`)** over FreeArc 0.67 legacy (`-m9`).
 * **100% Backward Compatible**: All `-nobitexact` archives (`-m1..-m9` and `-m1x..-m9x` / `-mx`) pass full integrity verification (`unarc.exe t`, `All OK`, `rc=0`) under Wine using the historical 32-bit FreeArc 0.67 unpacker (`452.91 s` for the `10 GB` `-m9` archive).
 
 ### Architecture in `-nobitexact` Mode
@@ -451,7 +452,7 @@ x86_64-w64-mingw32-gcc app.c -Ibuild/win64 build/win64/libunarc.dll.a -o app.exe
 │   ├── run_tests_lib.sh    # Decoder library/DLL test runner (Linux, Win64, ARM64, RISC-V 64)
 │   ├── test_lib_host.c     # C host test harness (FreeArcExtract, unarc_run, static & dlopen/LoadLibrary)
 │   ├── test_bitexact.sh    # Bit-exact parity (20) & crypto roundtrip (7) checker
-│   ├── test_parity_067.sh  # Direct 0.67 Wine parity across -m1..-m9, -mx, -m1x..-m9x & sort orders (28 checks)
+│   ├── test_parity_067.sh  # Direct 0.67 Wine parity across -m1..-m9, -mx, -m1x..-m9x, multi-chunk dict, MT 4x4:lzma & sort orders (30 checks)
 │   ├── test_arc_ini.sh     # arc.ini configuration parity suite (9 checks)
 │   └── test_compat_modes.sh # Compatibility modes & legacy 0.67 Wine parity suite (24 checks)
 └── tests_files/         # Test artifacts

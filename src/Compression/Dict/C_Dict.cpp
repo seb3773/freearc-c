@@ -113,7 +113,7 @@ int dict_compress (MemSize BlockSize, int MinCompression, int MinWeakChars, int 
     {
         unsigned InSize, OutSize;     // ���������� ���� �� ������� � �������� ������, ��������������
         InSize=x;                     // impossible: In = (BYTE*) realloc(In,InSize=x);
-        if (InSize >= 64 * 1024 && !dict_can_compress(In, InSize)) {
+        if (nobitexact_speed_mode && InSize >= 64 * 1024 && !dict_can_compress(In, InSize)) {
             int WrSize = -(int)InSize;
             checked_write (&WrSize, sizeof(WrSize));
             checked_write (In, InSize);

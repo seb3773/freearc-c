@@ -258,12 +258,13 @@ struct DictEncTls {
         hashbits = NULL;
         words_text = NULL;
         memset(first2_filter, 0, sizeof(first2_filter));
-        memset(char_counts, 0, sizeof(char_counts));
+        memset(this->char_counts, 0, sizeof(this->char_counts));
         hashsize = hashmask = 0;
         PREFIX_FOR_WEAK_CHARS = 0;
     }
 };
 static thread_local DictEncTls dict_enc_tls;
+static count_t bitexact_char_counts[UCHAR_MAX+1];
 
 #define FirstWord               (dict_enc_tls.FirstWord)
 #define NextWord                (dict_enc_tls.NextWord)
@@ -273,7 +274,7 @@ static thread_local DictEncTls dict_enc_tls;
 #define hashbits                (dict_enc_tls.hashbits)
 #define words_text              (dict_enc_tls.words_text)
 #define first2_filter           (dict_enc_tls.first2_filter)
-#define char_counts             (dict_enc_tls.char_counts)
+#define char_counts             (nobitexact_speed_mode ? dict_enc_tls.char_counts : bitexact_char_counts)
 #define hashsize                (dict_enc_tls.hashsize)
 #define hashmask                (dict_enc_tls.hashmask)
 #define PREFIX_FOR_WEAK_CHARS   (dict_enc_tls.PREFIX_FOR_WEAK_CHARS)   // —чЄтчики встречаемости отдельных сисмволов в исходном тексте

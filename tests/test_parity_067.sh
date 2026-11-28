@@ -132,13 +132,17 @@ for line in sys.stdin:
 
 check_mode_parity() {
     local flags="$1"
-    local strict_bytes="$2"  # "exact" or "mt4x4"
+    shift
+    local targets=("$@")
+    if [ ${#targets[@]} -eq 0 ]; then
+        targets=(d2 d1)
+    fi
     local c_arc="$TMP_ROOT/c_test.arc"
     local e_arc="$TMP_ROOT/e_test.arc"
     rm -f "$c_arc" "$e_arc"
 
-    (cd "$CORPUS" && "$ARC" a -q $flags "$c_arc" d2 d1) || { fail "$flags: arc compression failed"; return; }
-    (cd "$CORPUS" && WINEDEBUG=-all wine "$ARC067" a -cfg- $flags "$e_arc" d2 d1 >/dev/null 2>&1) || {
+    (cd "$CORPUS" && "$ARC" a -q $flags "$c_arc" "${targets[@]}") || { fail "$flags: arc compression failed"; return; }
+    (cd "$CORPUS" && WINEDEBUG=-all wine "$ARC067" a -cfg- $flags "$e_arc" "${targets[@]}" >/dev/null 2>&1) || {
         fail "$flags: Arc.exe 0.67 compression failed"; return;
     }
 
@@ -154,9 +158,9 @@ check_mode_parity() {
     e_blocks="$(lt_blocks "$e_arc")"
 
     local cmp_res
-    cmp_res="$(python3 - "$strict_bytes" "$c_blocks" "$e_blocks" << 'PY'
+    cmp_res="$(python3 - "$c_blocks" "$e_blocks" << 'PY'
 import sys
-mode, cb_s, eb_s = sys.argv[1], sys.argv[2].strip().splitlines(), sys.argv[3].strip().splitlines()
+cb_s, eb_s = sys.argv[1].strip().splitlines(), sys.argv[2].strip().splitlines()
 if len(cb_s) != len(eb_s):
     print(f"block count {len(cb_s)} != {len(eb_s)}")
     sys.exit(1)
@@ -167,9 +171,8 @@ for idx, (cl, el) in enumerate(zip(cb_s, eb_s)):
         print(f"block {idx}: ({co},{cn},{cm}) != ({eo},{en},{em})")
         sys.exit(1)
     diff = abs(int(cc) - int(ec))
-    max_diff = 0 if mode == "exact" else 32
-    if diff > max_diff:
-        print(f"block {idx} ({cm}): comp {cc} != {ec} (diff={diff} > {max_diff})")
+    if diff != 0:
+        print(f"block {idx} ({cm}): comp {cc} != {ec} (diff={diff})")
         sys.exit(1)
 print("OK")
 PY
@@ -191,27 +194,30 @@ PY
     pass "$flags parity + cross-decompression OK ($cmp_res)"
 }
 
-# Test exact parity across all auto modes (-m1..-m9, -mx, -m4x..-m9x)
-check_mode_parity "-mt1 -m1"  exact
-check_mode_parity "-mt1 -m2"  exact
-check_mode_parity "-mt4 -m2"  mt4x4
-check_mode_parity "-mt1 -m3"  exact
-check_mode_parity "-mt4 -m3"  mt4x4
-check_mode_parity "-mt1 -m4"  exact
-check_mode_parity "-mt4 -m4"  mt4x4
-check_mode_parity "-mt1 -m5"  exact
-check_mode_parity "-mt4 -m5"  mt4x4
-check_mode_parity "-mt4 -m6"  exact
-check_mode_parity "-mt4 -m7"  exact
-check_mode_parity "-mt4 -m8"  exact
-check_mode_parity "-mt4 -m9"  exact
-check_mode_parity "-mt4 -mx"  exact
-check_mode_parity "-mt4 -m4x" mt4x4
-check_mode_parity "-mt4 -m5x" mt4x4
-check_mode_parity "-mt4 -m6x" exact
-check_mode_parity "-mt4 -m7x" exact
-check_mode_parity "-mt4 -m8x" exact
-check_mode_parity "-mt4 -m9x" exact
+# Test strict 0-byte parity across all auto modes (-m1..-m9, -mx, -m4x..-m9x),
+# multi-chunk DICT (char_counts accumulation), and MT 4x4:lzma
+check_mode_parity "-mt1 -m1"
+check_mode_parity "-mt1 -m2"
+check_mode_parity "-mt4 -m2"
+check_mode_parity "-mt1 -m3"
+check_mode_parity "-mt4 -m3"
+check_mode_parity "-mt1 -m4"
+check_mode_parity "-mt4 -m4"
+check_mode_parity "-mt1 -m5"
+check_mode_parity "-mt4 -m5"
+check_mode_parity "-mt4 -m6"
+check_mode_parity "-mt4 -m7"
+check_mode_parity "-mt4 -m8"
+check_mode_parity "-mt4 -m9"
+check_mode_parity "-mt4 -mx"
+check_mode_parity "-mt4 -m4x"
+check_mode_parity "-mt4 -m5x"
+check_mode_parity "-mt4 -m6x"
+check_mode_parity "-mt4 -m7x"
+check_mode_parity "-mt4 -m8x"
+check_mode_parity "-mt4 -m9x"
+check_mode_parity "-mt1 -mdict:128kb:75%" d1/hello.txt d1/c.obj d2/b.bin d2/d.bmp
+check_mode_parity "-mt4 -m4x4:lzma:256kb:normal:32:mc32" d1/hello.txt d1/c.obj d1/e.wav d2/b.bin d2/d.bmp
 
 # Verify -mx equals -m9 identically
 C_M9="$TMP_ROOT/c_m9.arc"

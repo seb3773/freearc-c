@@ -4242,12 +4242,12 @@ static std::string nbx_balance_4x4_lzma(const std::string &chain, uint64 insize,
  *  - a memory budget (3/4 of physical RAM) caps the sum of the estimated
  * compression memory of the running blocks (a block that alone exceeds the
  * budget still runs, but alone);
- *  - codecs that keep process-global state (MM/TTA) never run in two blocks at
- * once (DICT state is now thread-local via dict_enc_tls and can run
- * concurrently).
+ *  - codecs that keep process-global state (MM/TTA, and bit-exact DICT
+ *    char_counts accumulation) never run in two blocks at once.
  */
 enum {
-  CB_TAG_MM = 1 // MM / TTA keep per-stream state in globals
+  CB_TAG_MM = 1,   // MM / TTA keep per-stream state in globals
+  CB_TAG_DICT = 2  // Bit-exact DICT accumulates char_counts across chunks/blocks
 };
 
 static unsigned concurrent_block_tags(const std::string &chain) {
@@ -4258,6 +4258,8 @@ static unsigned concurrent_block_tags(const std::string &chain) {
     if (c == '+' || c == ':') {
       if (tok == "mm" || tok == "tta")
         tags |= CB_TAG_MM;
+      else if (!g_opt_nobitexact && tok == "dict")
+        tags |= CB_TAG_DICT;
       tok.clear();
     } else {
       tok += c;
