@@ -50,7 +50,7 @@ case "$TARGET" in
 import ctypes, sys
 lib = ctypes.CDLL(sys.argv[1])
 lib.unarc_version.restype = ctypes.c_char_p
-assert lib.unarc_version() == b"1.4.5"
+assert lib.unarc_version() == b"1.4.6"
 CB = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_int64, ctypes.c_int64, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p)
 seen = []
 def cb(what, p1, p2, s, cap, ud):

@@ -86,7 +86,7 @@ This project fills this 15-year gap by providing a **100% native C/C++ suite** t
 
 ## Generated Binaries
 
-Binaries are stripped production builds organized cleanly by target platform (`v1.4.5`):
+Binaries are stripped production builds organized cleanly by target platform (`v1.4.6`):
 
 ### Linux (x86_64) — `./build/linux/`
 | Binary | Size | Description |
@@ -113,7 +113,7 @@ Binaries are stripped production builds organized cleanly by target platform (`v
 |---|---|---|
 | `build/win64/arc.exe` | 1.70 MiB (`1,778,176 B`) | Standalone Windows 64-bit archiver (static MinGW-w64, zero runtime DLL dependencies) |
 | `build/win64/unarc.exe` | 1.05 MiB (`1,096,704 B`) | Standalone Windows 64-bit unpacker and integrity tester |
-| `build/win64/unarc.dll` | 1.06 MiB (`1,110,528 B`) | Windows 64-bit decoder DLL (static C/C++ runtime, OS DLLs only) |
+| `build/win64/unarc.dll` | 1.06 MiB (`1,111,552 B`) | Windows 64-bit decoder DLL (static C/C++ runtime, OS DLLs only) |
 | `build/win64/libunarc.dll.a` | 5.2 KiB (`5,298 B`) | MinGW-w64 import library for `unarc.dll` |
 | `build/win64/unarc.h` | 6.1 KiB (`6,211 B`) | Public C header |
 
@@ -360,7 +360,7 @@ Measured on an **11th Gen Intel® Core™ i3-1115G4 @ 3.00GHz** (2 cores / 4 thr
   | **`-m8`** | `528,493,074 B` | **`523,559,290 B`** | **−4.93 MB** | `601.54 s` -> **`430.25 s` (`1.40×`)** | `92.40 s / 92.58 s` -> **`76.21 s / 75.34 s`** | **All OK** |
   | **`-m9`** | `528,437,734 B` | **`523,167,755 B`** | **−5.27 MB** | `645.75 s` -> **`556.19 s` (`1.16×`)** | `102.41 s / 104.34 s` -> **`72.07 s / 79.52 s`** | **All OK** |
 
-* **vs 7-Zip Ultra & Zstandard (`-m9`)**: On the Matt Mahoney 10 GB corpus (`83,437` files, `10,000,000,000 B`), `-nobitexact -m9` achieves **`2,926,616,302 B` (`29.27%`)**, saving **692.43 MiB** over 7-Zip `-mx=9` and **18.43 MiB (`19.33 MB`)** over legacy FreeArc `0.67 -m9`.
+* **vs 7-Zip Ultra & Zstandard (`-m9`)**: On the Matt Mahoney 10 GB corpus (`83,437` files, `10,000,000,000 B`), `-nobitexact -m9` achieves **`2,926,616,302 B` (`29.27%`)**, saving **692.43 MiB** over 7-Zip 26.02 (`-mx=9 -ms=on`) and **18.43 MiB (`19.33 MB`)** over legacy FreeArc `0.67 -m9`.
 * **100% Backward Compatible**: All `-nobitexact` archives (`-m1..-m9` and `-m1x..-m9x` / `-mx`) pass full integrity verification (`unarc.exe t`, `All OK`, `rc=0`) under Wine using the historical 32-bit FreeArc 0.67 unpacker (`452.91 s` for the `10 GB` `-m9` archive).
 
 ### Architecture in `-nobitexact` Mode
@@ -467,11 +467,11 @@ Build a standard `.deb` package with a single command:
 ```bash
 ./build_deb.sh
 ```
-This automatically compiles the Linux x86_64 suite, runs the test suite, and packages stripped binaries, manpages, and documentation into a standalone Debian package (`freearc_1.4.5_amd64.deb`).
+This automatically compiles the Linux x86_64 suite, runs the test suite, and packages stripped binaries, manpages, and documentation into a standalone Debian package (`freearc_1.4.6_amd64.deb`).
 
 To install the generated package:
 ```bash
-sudo dpkg -i freearc_1.4.5_amd64.deb
+sudo dpkg -i freearc_1.4.6_amd64.deb
 ```
 
 ---

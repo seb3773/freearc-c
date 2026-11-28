@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
   const char *secret      = argv[7];
 
   CHECK_TEST(load_api(lib_path), "load library exports");
-  CHECK_TEST(fn_unarc_version() && strcmp(fn_unarc_version(), "1.4.5") == 0, "unarc_version == 1.4.5");
+  CHECK_TEST(fn_unarc_version() && strcmp(fn_unarc_version(), "1.4.6") == 0, "unarc_version == 1.4.6");
 
   char out_leg[512], out_mod[512], out_pw[512], out_hp[512], out_abort[512], out_t1[512], out_t2[512];
   char dp_leg[540], dp_mod[540], dp_pw[540], dp_hp[540], dp_abort[540];

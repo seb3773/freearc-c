@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="${SCRIPT_DIR}/pkg_root"
-VERSION="1.4.5"
+VERSION="1.4.6"
 ARCH="amd64"
 DEB_NAME="freearc_${VERSION}_${ARCH}.deb"
 

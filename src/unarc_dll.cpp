@@ -985,7 +985,7 @@ UNARC_API int UNARC_CALL unarc_run(
 }
 
 UNARC_API const char * UNARC_CALL unarc_version(void) {
-  return "1.4.5";
+  return "1.4.6";
 }
 
 UNARC_API const char * UNARC_CALL unarc_last_error(void) {
